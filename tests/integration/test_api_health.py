@@ -3,7 +3,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from flowmate.api.app import create_app
-from flowmate.config import Settings
+from flowmate.core.config import Settings
 from tests.conftest import started_app
 
 

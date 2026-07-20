@@ -15,16 +15,16 @@ scope.
 
 ```bash
 cp .env.example .env
-uv sync --group dev
+make sync
 docker compose up -d db
-uv run alembic upgrade head
-uv run uvicorn flowmate.api.app:create_app --factory --reload
+make migrate
+make api
 ```
 
 Run the Telegram bot in a second terminal:
 
 ```bash
-uv run python -m flowmate.bot
+make bot
 ```
 
 The API exposes:
@@ -51,10 +51,7 @@ multiple consumers for the same token.
 ## Quality checks
 
 ```bash
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy src tests
-uv run pytest
+make check
 ```
 
 Integration tests require PostgreSQL. By default they use
@@ -62,7 +59,8 @@ Integration tests require PostgreSQL. By default they use
 isolated, ephemeral test database or override `FLOWMATE_TEST_DATABASE_URL`:
 
 ```bash
-docker compose --profile test up -d db-test
+make test-db-up
+make test
 ```
 
 ## Migrations
@@ -74,14 +72,18 @@ uv run alembic revision --autogenerate -m "description"
 uv run alembic upgrade head
 ```
 
-The initial migration is deliberately empty because Stage 0 has no domain
-tables.
+The initial migration is deliberately empty. Stage 0 adds only a minimal
+`users` table in the next migration; Telegram access still comes from the
+environment allowlist rather than this table.
 
 ## Configuration
 
 Application variables use the `FLOWMATE_` prefix. See `.env.example` for the
 complete list. The API and bot validate their own required secrets at startup,
 so either process can be operated independently.
+
+`POSTGRES_PORT` and `API_PORT` control host port bindings when their defaults
+conflict with other local services.
 
 Production deployments should use strong unique secrets, disable API docs,
 terminate TLS in a reverse proxy, and back up the PostgreSQL volume. Compose
@@ -94,6 +96,7 @@ Telegram -> aiogram bot -> shared application services -> PostgreSQL
 Future PWA -> FastAPI   -> shared application services -> PostgreSQL
 ```
 
-`flowmate.application` is currently an empty boundary for future shared use
-cases. Stage 0 deliberately avoids repositories, generic service abstractions,
-queues, caches, and domain models.
+The repository remains named FlowMate and uses `flowmate` as its technical
+Python package name. `flowmate.application` is currently an empty boundary for
+future shared use cases. Stage 0 deliberately avoids repositories, generic
+service abstractions, queues, caches, and task-management domain models.

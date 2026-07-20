@@ -11,7 +11,7 @@ def create_router(allowed_user_ids: tuple[int, ...]) -> Router:
 
     @router.message(Command("start"))
     async def start(message: Message) -> None:
-        await message.answer("FlowMate is online.")
+        await message.answer("FlowMate работает.")
 
     @router.message(Command("health"))
     async def health(message: Message) -> None:

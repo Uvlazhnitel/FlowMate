@@ -3,17 +3,13 @@ from __future__ import annotations
 import secrets
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from flowmate.config import Settings
+from flowmate.api.dependencies import get_request_settings
+from flowmate.core.config import Settings
 
 bearer_scheme = HTTPBearer(auto_error=False)
-
-
-def get_request_settings(request: Request) -> Settings:
-    settings: Settings = request.app.state.settings
-    return settings
 
 
 def require_bearer_token(

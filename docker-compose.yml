@@ -6,7 +6,13 @@ x-app: &app
     - path: .env
       required: false
   environment:
+    FLOWMATE_ENVIRONMENT: ${FLOWMATE_ENVIRONMENT:-development}
+    FLOWMATE_LOG_LEVEL: ${FLOWMATE_LOG_LEVEL:-INFO}
     FLOWMATE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flowmate}:${POSTGRES_PASSWORD:-flowmate}@db:5432/${POSTGRES_DB:-flowmate}
+    FLOWMATE_API_BEARER_TOKEN: ${FLOWMATE_API_BEARER_TOKEN:-}
+    FLOWMATE_TELEGRAM_BOT_TOKEN: ${FLOWMATE_TELEGRAM_BOT_TOKEN:-}
+    FLOWMATE_TELEGRAM_ALLOWED_USER_IDS: ${FLOWMATE_TELEGRAM_ALLOWED_USER_IDS:-}
+    FLOWMATE_API_DOCS_ENABLED: ${FLOWMATE_API_DOCS_ENABLED:-true}
   restart: unless-stopped
 
 services:
@@ -25,24 +31,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
-
-  db-test:
-    image: postgres:16-bookworm
-    profiles: ["test"]
-    environment:
-      POSTGRES_DB: flowmate_test
-      POSTGRES_USER: flowmate
-      POSTGRES_PASSWORD: flowmate
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U flowmate -d flowmate_test"]
-      interval: 2s
-      timeout: 5s
-      retries: 10
-    tmpfs:
-      - /var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5433:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
 
   migrate:
     <<: *app
@@ -59,7 +48,7 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
 
   bot:
     <<: *app

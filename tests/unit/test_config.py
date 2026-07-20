@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from flowmate.config import Settings
+from flowmate.core.config import Settings
 
 
 def test_parses_telegram_allowlist() -> None:

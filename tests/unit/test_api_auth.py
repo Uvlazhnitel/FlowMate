@@ -1,36 +1,50 @@
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient, Response
 
 from flowmate.api.app import create_app
-from flowmate.config import Settings
+from flowmate.core.config import Settings
+from tests.conftest import started_app
 
 
-def create_test_client() -> TestClient:
+async def request(
+    path: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> Response:
     settings = Settings(_env_file=None, api_bearer_token="test-secret")
-    return TestClient(create_app(settings=settings))
+    app = create_app(settings=settings)
+    async with started_app(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get(path, headers=headers)
 
 
-def test_status_rejects_missing_token() -> None:
-    with create_test_client() as client:
-        response = client.get("/api/v1/status")
+async def test_status_rejects_missing_token() -> None:
+    response = await request("/api/v1/status")
 
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
 
 
-def test_status_rejects_invalid_token() -> None:
-    with create_test_client() as client:
-        response = client.get(
-            "/api/v1/status", headers={"Authorization": "Bearer wrong-secret"}
-        )
+async def test_status_rejects_invalid_token() -> None:
+    response = await request(
+        "/api/v1/status", headers={"Authorization": "Bearer wrong-secret"}
+    )
 
     assert response.status_code == 401
 
 
-def test_status_accepts_valid_token() -> None:
-    with create_test_client() as client:
-        response = client.get(
-            "/api/v1/status", headers={"Authorization": "Bearer test-secret"}
-        )
+async def test_status_accepts_valid_token() -> None:
+    response = await request(
+        "/api/v1/status", headers={"Authorization": "Bearer test-secret"}
+    )
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "flowmate"}
+
+
+async def test_middleware_adds_request_id() -> None:
+    response = await request(
+        "/health/live", headers={"X-Request-ID": "test-request-id"}
+    )
+
+    assert response.headers["X-Request-ID"] == "test-request-id"

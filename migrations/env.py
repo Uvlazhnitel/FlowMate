@@ -7,8 +7,11 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from flowmate.config import get_settings
+from flowmate.core.config import get_settings
 from flowmate.db.base import Base
+from flowmate.db.models import User
+
+_ = User
 
 config = context.config
 if config.config_file_name is not None:

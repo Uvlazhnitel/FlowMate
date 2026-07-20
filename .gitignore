@@ -7,7 +7,17 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+.coverage.*
+coverage.xml
 dist/
 build/
 *.egg-info/
 .DS_Store
+.idea/
+.vscode/
+*.iml
+*.sqlite
+*.sqlite3
+*.db
+docker-compose.override.yml
+docker-compose.local.yml
