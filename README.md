@@ -84,14 +84,27 @@ so the generated revision is written to the repository. Downgrading `0003` to
 ## Start the Bot
 
 The bot is disabled by default, so `make up` does not require a Telegram token.
-After configuring `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_IDS`, start all
-services with:
+Create a bot through BotFather using `/newbot`, then place the issued token only
+in the local `.env` file as `TELEGRAM_BOT_TOKEN`. Set
+`TELEGRAM_ALLOWED_USER_IDS` to a comma-separated list of positive numeric
+Telegram user IDs, for example `123456789,987654321`. Never commit either the
+real token or local `.env` file.
+
+Start PostgreSQL and the API without the bot:
+
+```bash
+make up
+```
+
+After configuring the bot variables, start PostgreSQL, API, and bot:
 
 ```bash
 make up-all
 ```
 
-Only one bot replica may run for a Telegram long-polling token.
+The Stage 0 bot supports `/start`, `/help`, and `/status`. Other content receives
+a short explanation that only these basic commands are available. Only one bot
+replica may run for a Telegram long-polling token.
 
 ## Operations
 
