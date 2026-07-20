@@ -4,12 +4,15 @@
 
 FlowMate is a Python 3.12 application with two independent entrypoints: a
 FastAPI HTTP API and an aiogram Telegram bot. Both use shared configuration and
-async SQLAlchemy infrastructure backed by PostgreSQL. Stage 0 does not contain
-task-management domain logic or placeholder domain packages.
+async SQLAlchemy infrastructure backed by PostgreSQL. Voice messages use a
+small speech provider boundary and permission-restricted temporary files; audio
+and transcriptions are not persisted. The project does not yet contain
+task-management domain logic.
 
 Configuration and logging live in `flowmate.core`. API authentication lives in
 `flowmate.auth`. Database models live in `flowmate.db.models`, while schema
-history is managed exclusively through Alembic migrations.
+history is managed exclusively through Alembic migrations. Speech provider,
+transcription, and temporary-file code lives in `flowmate.speech`.
 
 Runtime code uses the `src/flowmate` package. Fast unit tests live in
 `tests/unit`; PostgreSQL-backed tests live in `tests/integration` and use only
@@ -24,7 +27,8 @@ the isolated database configured by `TEST_DATABASE_URL`.
 - Never commit secrets, real tokens, passwords, or local `.env` files.
 - Every database schema change requires an Alembic migration.
 - Runtime and test code must never call `metadata.create_all`.
-- Tests must not call external Telegram or AI APIs.
+- Tests must not call external Telegram, speech, or AI APIs.
+- Never log or persist voice audio, API keys, or full transcriptions.
 - Do not add infrastructure or dependencies outside the current stage scope.
 
 ## Commands

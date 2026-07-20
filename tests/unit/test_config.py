@@ -28,6 +28,55 @@ def test_loads_development_defaults_without_environment() -> None:
     assert settings.app_host == "0.0.0.0"
     assert settings.app_port == 8000
     assert settings.telegram_allowed_user_ids == frozenset()
+    assert settings.speech_provider is None
+    assert settings.speech_language == "ru"
+    assert settings.speech_timeout_seconds == 60
+    assert settings.speech_max_file_size_bytes == 20_000_000
+
+
+def test_parses_speech_configuration() -> None:
+    settings = Settings(
+        _env_file=None,
+        speech_provider="OPENAI",
+        openai_api_key="private-openai-key",
+        speech_model=" configured-model ",
+        speech_language="EN",
+        speech_timeout_seconds=45,
+        speech_max_file_size_bytes=1_000_000,
+    )
+
+    assert settings.speech_provider == "openai"
+    assert settings.speech_model == "configured-model"
+    assert settings.speech_language == "en"
+    assert settings.speech_timeout_seconds == 45
+    assert settings.speech_max_file_size_bytes == 1_000_000
+
+
+def test_empty_speech_configuration_is_disabled() -> None:
+    settings = Settings(
+        _env_file=None,
+        speech_provider=" ",
+        openai_api_key="",
+        speech_model=" ",
+    )
+
+    assert settings.speech_provider is None
+    assert settings.openai_api_key is None
+    assert settings.speech_model is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("speech_language", "russian"),
+        ("speech_language", "1x"),
+        ("speech_timeout_seconds", 0),
+        ("speech_max_file_size_bytes", 0),
+    ],
+)
+def test_rejects_invalid_speech_configuration(field: str, value: object) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **cast(Any, {field: value}))
 
 
 @pytest.mark.parametrize(
@@ -137,6 +186,7 @@ def test_rejects_invalid_application_port(value: int) -> None:
         ),
         ({"cors_origins": "*"}, "wildcard CORS"),
         ({"telegram_bot_token": "123456:replace-me"}, "TELEGRAM_BOT_TOKEN"),
+        ({"openai_api_key": "replace-me"}, "OPENAI_API_KEY"),
     ],
 )
 def test_rejects_insecure_production_configuration(
@@ -160,6 +210,7 @@ def test_settings_repr_masks_secrets() -> None:
         _env_file=None,
         app_api_key="private-api-key",
         telegram_bot_token="123456:private-token",
+        openai_api_key="private-openai-key",
         database_url=(
             "postgresql+asyncpg://flowmate:private-password@localhost:5432/flowmate"
         ),
@@ -168,6 +219,7 @@ def test_settings_repr_masks_secrets() -> None:
     representation = repr(settings)
     assert "private-api-key" not in representation
     assert "private-token" not in representation
+    assert "private-openai-key" not in representation
     assert "private-password" not in representation
 
 

@@ -1,8 +1,9 @@
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from flowmate.bot.handlers.voice import voice_message
 from flowmate.bot.middleware import AllowedUserMiddleware, DatabaseSessionMiddleware
 from flowmate.db.health import database_is_ready
 from flowmate.db.users import get_or_create_telegram_user
@@ -25,7 +26,10 @@ async def start_command(message: Message, db_session: AsyncSession) -> None:
 
 
 async def help_command(message: Message) -> None:
-    await message.answer("Доступные команды: /start, /help, /status.")
+    await message.answer(
+        "Доступные команды: /start, /help, /status. "
+        "Также можно отправить голосовое сообщение."
+    )
 
 
 async def status_command(message: Message, db_engine: AsyncEngine) -> None:
@@ -50,5 +54,6 @@ def create_router(
     router.message.register(start_command, Command("start"))
     router.message.register(help_command, Command("help"))
     router.message.register(status_command, Command("status"))
+    router.message.register(voice_message, F.voice)
     router.message.register(unsupported_message)
     return router

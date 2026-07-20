@@ -62,6 +62,29 @@ class Settings(BaseSettings):
             "TELEGRAM_ALLOWED_USER_IDS", "FLOWMATE_TELEGRAM_ALLOWED_USER_IDS"
         ),
     )
+    speech_provider: Literal["openai"] | None = Field(
+        default=None,
+        validation_alias="SPEECH_PROVIDER",
+    )
+    openai_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="OPENAI_API_KEY",
+    )
+    speech_model: str | None = Field(
+        default=None,
+        validation_alias="SPEECH_MODEL",
+    )
+    speech_language: str = Field(default="ru", validation_alias="SPEECH_LANGUAGE")
+    speech_timeout_seconds: int = Field(
+        default=60,
+        gt=0,
+        validation_alias="SPEECH_TIMEOUT_SECONDS",
+    )
+    speech_max_file_size_bytes: int = Field(
+        default=20_000_000,
+        gt=0,
+        validation_alias="SPEECH_MAX_FILE_SIZE_BYTES",
+    )
     cors_origins: Annotated[frozenset[str], NoDecode] = Field(
         default_factory=frozenset,
         validation_alias="CORS_ORIGINS",
@@ -71,12 +94,41 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("LOG_LEVEL", "FLOWMATE_LOG_LEVEL"),
     )
 
-    @field_validator("app_api_key", "telegram_bot_token", mode="before")
+    @field_validator(
+        "app_api_key",
+        "telegram_bot_token",
+        "openai_api_key",
+        mode="before",
+    )
     @classmethod
     def normalize_empty_secret(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("speech_provider", mode="before")
+    @classmethod
+    def normalize_empty_speech_provider(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            return normalized or None
+        return value
+
+    @field_validator("speech_model", mode="before")
+    @classmethod
+    def normalize_empty_speech_model(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
+    @field_validator("speech_language")
+    @classmethod
+    def validate_speech_language(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if len(normalized) != 2 or not normalized.isalpha():
+            raise ValueError("speech language must be an ISO-639-1 code")
+        return normalized
 
     @field_validator("app_port")
     @classmethod
@@ -165,6 +217,10 @@ class Settings(BaseSettings):
             self.telegram_bot_token.get_secret_value()
         ):
             raise ValueError("TELEGRAM_BOT_TOKEN is insecure for production")
+        if self.openai_api_key is not None and is_placeholder(
+            self.openai_api_key.get_secret_value()
+        ):
+            raise ValueError("OPENAI_API_KEY is insecure for production")
         return self
 
     def require_api(self) -> Self:

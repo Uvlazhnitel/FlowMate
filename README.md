@@ -1,9 +1,9 @@
 # FlowMate
 
-FlowMate is the technical foundation for Voice PM Assistant, a Telegram-first
-personal assistant. Stage 0 provides a FastAPI API, an optional aiogram bot,
-PostgreSQL, Alembic migrations, tests, and CI. Task management, transcription,
-AI, and the PWA are intentionally out of scope.
+FlowMate is a Telegram-first personal assistant. Its foundation provides a
+FastAPI API, an optional aiogram bot, PostgreSQL, Alembic migrations, tests, and
+CI. Stage 1 adds voice transcription without task extraction, transcript
+persistence, or other product-domain logic.
 
 The repository and Python package retain the technical name `flowmate`.
 
@@ -102,9 +102,37 @@ After configuring the bot variables, start PostgreSQL, API, and bot:
 make up-all
 ```
 
-The Stage 0 bot supports `/start`, `/help`, and `/status`. Other content receives
-a short explanation that only these basic commands are available. Only one bot
-replica may run for a Telegram long-polling token.
+The bot supports `/start`, `/help`, and `/status`. Other unsupported content
+receives a short explanation. Only one bot replica may run for a Telegram
+long-polling token.
+
+### Voice transcription
+
+Voice transcription is optional. To enable the OpenAI provider, configure all
+of these values in `.env`:
+
+```dotenv
+SPEECH_PROVIDER=openai
+OPENAI_API_KEY=replace-with-your-api-key
+SPEECH_MODEL=replace-with-a-supported-transcription-model
+SPEECH_LANGUAGE=ru
+SPEECH_TIMEOUT_SECONDS=60
+SPEECH_MAX_FILE_SIZE_BYTES=20000000
+```
+
+Choose `SPEECH_MODEL` from the current
+[OpenAI transcription documentation](https://platform.openai.com/docs/guides/speech-to-text)
+instead of relying on an application default. If speech configuration is
+missing, commands remain available and voice messages receive a safe
+configuration response.
+
+For an accepted voice message, the bot immediately reports that processing has
+started, downloads Telegram OGG/Opus audio into a unique temporary `.ogg` file,
+and returns the transcription as plain text. The default limit is 20 MB and the
+download plus transcription deadline is 60 seconds. Audio is not converted or
+stored permanently, and both audio and transcript are never written to
+PostgreSQL. The temporary file is removed before the transcription is sent,
+including every failure path.
 
 ## Operations
 
@@ -141,8 +169,8 @@ strict mypy, unit tests, and integration tests. The default test URL is
 custom test database names must end in `_test`.
 
 Tests apply Alembic migrations and never call `metadata.create_all`. Database
-tests use transactions for cleanup and never access development data. Telegram
-and other external APIs are not contacted.
+tests use transactions for cleanup and never access development data. Telegram,
+OpenAI, and other external APIs are not contacted.
 
 ## Architecture
 
@@ -150,8 +178,12 @@ and other external APIs are not contacted.
 host -> api (FastAPI/Uvicorn) -> postgres
                     |
 Telegram -> bot ----+  [optional Compose profile: bot]
+              |
+              +-> temporary OGG -> speech provider -> plain-text reply
 ```
 
 Both application processes use the same non-root runtime image and shared async
 SQLAlchemy infrastructure. The environment allowlist remains the source of
 Telegram authorization; the minimal `users` table is reserved for future use.
+Voice audio exists only in a permission-restricted temporary file while one
+update is processed. Transcriptions are not persisted at this stage.
