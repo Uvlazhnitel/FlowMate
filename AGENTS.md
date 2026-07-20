@@ -3,10 +3,9 @@
 ## Architecture
 
 FlowMate is a Python 3.12 application with two independent entrypoints: a
-FastAPI HTTP API and an aiogram Telegram bot. Both use shared application
-services and async SQLAlchemy infrastructure backed by PostgreSQL. The
-`flowmate.application` package is reserved for future use cases; Stage 0 does
-not contain task-management domain logic.
+FastAPI HTTP API and an aiogram Telegram bot. Both use shared configuration and
+async SQLAlchemy infrastructure backed by PostgreSQL. Stage 0 does not contain
+task-management domain logic or placeholder domain packages.
 
 Configuration and logging live in `flowmate.core`. API authentication lives in
 `flowmate.auth`. Database models live in `flowmate.db.models`, while schema

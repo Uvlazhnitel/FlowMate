@@ -1,5 +1,6 @@
 from typing import cast
 
+import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,12 +18,12 @@ class FakeConnection:
 
 
 class FakeConnectionContext:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.fail = fail
+    def __init__(self, failure: Exception | None = None) -> None:
+        self.failure = failure
 
     async def __aenter__(self) -> FakeConnection:
-        if self.fail:
-            raise SQLAlchemyError("database unavailable")
+        if self.failure is not None:
+            raise self.failure
         return FakeConnection()
 
     async def __aexit__(
@@ -35,11 +36,11 @@ class FakeConnectionContext:
 
 
 class FakeEngine:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.fail = fail
+    def __init__(self, failure: Exception | None = None) -> None:
+        self.failure = failure
 
     def connect(self) -> FakeConnectionContext:
-        return FakeConnectionContext(fail=self.fail)
+        return FakeConnectionContext(self.failure)
 
 
 def create_health_app(engine: FakeEngine) -> FastAPI:
@@ -80,9 +81,15 @@ async def test_readiness_reports_healthy_database() -> None:
     assert body == {"status": "ok"}
 
 
-async def test_readiness_reports_failed_database_without_details() -> None:
+@pytest.mark.parametrize(
+    "failure",
+    [SQLAlchemyError("database unavailable"), OSError("connection failed")],
+)
+async def test_readiness_reports_failed_database_without_details(
+    failure: Exception,
+) -> None:
     status_code, body = await get(
-        create_health_app(FakeEngine(fail=True)), "/health/ready"
+        create_health_app(FakeEngine(failure)), "/health/ready"
     )
 
     assert status_code == 503

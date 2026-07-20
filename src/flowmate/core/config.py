@@ -71,6 +71,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("LOG_LEVEL", "FLOWMATE_LOG_LEVEL"),
     )
 
+    @field_validator("app_api_key", "telegram_bot_token", mode="before")
+    @classmethod
+    def normalize_empty_secret(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("app_port")
     @classmethod
     def validate_app_port(cls, value: int) -> int:

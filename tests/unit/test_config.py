@@ -88,6 +88,20 @@ def test_process_specific_requirements() -> None:
         settings.require_bot()
 
 
+def test_empty_process_secrets_are_treated_as_missing() -> None:
+    settings = Settings(
+        _env_file=None,
+        app_api_key=" ",
+        telegram_bot_token="",
+        telegram_allowed_user_ids="123",
+    )
+
+    with pytest.raises(ValueError, match="APP_API_KEY"):
+        settings.require_api()
+    with pytest.raises(ValueError, match="TELEGRAM_BOT_TOKEN"):
+        settings.require_bot()
+
+
 def test_accepts_legacy_environment_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FLOWMATE_ENVIRONMENT", "test")
     monkeypatch.setenv("FLOWMATE_API_BEARER_TOKEN", "legacy-secret")
