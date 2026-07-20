@@ -14,9 +14,10 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
 async def run_bot(settings: Settings | None = None) -> None:
     app_settings = (settings or get_settings()).require_bot()
     configure_logging(app_settings.log_level)
-    bot_token = app_settings.telegram_bot_token
-    if bot_token is None:  # Kept explicit for static type narrowing.
+    bot_token_secret = app_settings.telegram_bot_token
+    if bot_token_secret is None:  # Kept explicit for static type narrowing.
         raise RuntimeError("Telegram bot token validation failed")
+    bot_token = bot_token_secret.get_secret_value()
 
     dispatcher = create_dispatcher(app_settings)
     async with Bot(token=bot_token) as bot:

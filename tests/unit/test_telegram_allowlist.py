@@ -17,13 +17,13 @@ def make_message(user_id: int) -> Message:
 
 @pytest.mark.asyncio
 async def test_allows_configured_user() -> None:
-    user_filter = AllowedUserFilter((123,))
+    user_filter = AllowedUserFilter(frozenset({123}))
 
     assert await user_filter(make_message(123)) is True
 
 
 @pytest.mark.asyncio
 async def test_rejects_unknown_user() -> None:
-    user_filter = AllowedUserFilter((123,))
+    user_filter = AllowedUserFilter(frozenset({123}))
 
     assert await user_filter(make_message(456)) is False

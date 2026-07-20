@@ -5,7 +5,7 @@ from aiogram.types import Message
 from flowmate.bot.filters import AllowedUserFilter
 
 
-def create_router(allowed_user_ids: tuple[int, ...]) -> Router:
+def create_router(allowed_user_ids: frozenset[int]) -> Router:
     router = Router(name="flowmate")
     router.message.filter(AllowedUserFilter(allowed_user_ids))
 

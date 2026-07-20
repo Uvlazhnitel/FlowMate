@@ -4,11 +4,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from flowmate.api.app import create_app
 from flowmate.core.config import Settings
+from flowmate.db.health import database_is_ready
 from tests.conftest import started_app
 
 
 @pytest.mark.integration
 async def test_health_endpoints(database_engine: AsyncEngine) -> None:
+    assert await database_is_ready(database_engine) is True
     settings = Settings(_env_file=None, app_api_key="test-secret")
     app = create_app(settings=settings, engine=database_engine)
 

@@ -37,6 +37,11 @@ The API startup applies Alembic migrations before starting Uvicorn. PostgreSQL
 is available only on the internal Compose network and is not published to the
 host.
 
+Configuration is loaded from environment variables through Pydantic Settings.
+`APP_ENV` supports `development`, `test`, and `production`. Production rejects
+debug mode, placeholder credentials, short API keys, and wildcard CORS origins.
+Leave `CORS_ORIGINS` empty to disable CORS, or provide comma-separated origins.
+
 Verify the API:
 
 ```bash
@@ -44,11 +49,37 @@ set -a; . ./.env; set +a
 curl http://localhost:8000/health/live
 curl http://localhost:8000/health/ready
 curl -H "Authorization: Bearer $APP_API_KEY" \
+  http://localhost:8000/api/v1/me
+curl -H "Authorization: Bearer $APP_API_KEY" \
   http://localhost:8000/api/v1/status
 ```
 
 Use the value configured by `APP_PORT` instead of `8000` when it is changed.
 OpenAPI documentation is available at `/docs` only when `APP_DEBUG=true`.
+It is always disabled in production because production configuration rejects
+debug mode.
+
+`/health/live` only checks the API process. `/health/ready` additionally checks
+PostgreSQL and returns HTTP `503` without database details when unavailable.
+
+## Database and Migrations
+
+All schema changes are managed through Alembic. Runtime code never calls
+`metadata.create_all`.
+
+```bash
+make migrate
+make migration name="add example field"
+make migration-current
+make migration-history
+make downgrade
+make downgrade revision=base
+```
+
+`make migration` rebuilds the application image and bind-mounts `migrations/`
+so the generated revision is written to the repository. Downgrading `0003` to
+`0002` requires every user to have a Telegram ID because the old schema used a
+`NOT NULL` constraint; Alembic does not delete incompatible rows automatically.
 
 ## Start the Bot
 

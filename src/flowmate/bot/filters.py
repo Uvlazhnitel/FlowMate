@@ -3,7 +3,7 @@ from aiogram.types import Message
 
 
 class AllowedUserFilter(Filter):
-    def __init__(self, allowed_user_ids: tuple[int, ...]) -> None:
+    def __init__(self, allowed_user_ids: frozenset[int]) -> None:
         self.allowed_user_ids = frozenset(allowed_user_ids)
 
     async def __call__(self, message: Message) -> bool:

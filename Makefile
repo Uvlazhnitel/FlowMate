@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
+revision ?= -1
 
-.PHONY: help setup sync format lint typecheck test check migrate api bot up up-all down logs ps test-db-up test-db-down clean
+.PHONY: help setup sync format lint typecheck test check migrate migration downgrade migration-current migration-history api bot up up-all down logs ps test-db-up test-db-down clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "FlowMate commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -28,7 +29,24 @@ check: ## Run formatting, linting, type checking, and tests
 	sh scripts/run_checks.sh
 
 migrate: ## Apply Alembic migrations using the application image
+	docker compose build api
 	docker compose run --rm api alembic upgrade head
+
+migration: ## Create an Alembic migration: make migration name="description"
+	@test -n "$(name)" || (echo 'Usage: make migration name="description"' >&2; exit 2)
+	docker compose build api
+	docker compose run --rm --volume "$(CURDIR)/migrations:/app/migrations" api alembic revision --autogenerate -m "$(name)"
+
+downgrade: ## Downgrade Alembic by one revision or pass revision=base
+	docker compose build api
+	docker compose run --rm api alembic downgrade "$(revision)"
+
+migration-current: ## Show the current database migration revision
+	docker compose build api
+	docker compose run --rm api alembic current
+
+migration-history: ## Show the complete Alembic migration history
+	uv run alembic history --verbose
 
 api: ## Run the API locally with reload enabled
 	uv run uvicorn flowmate.api.app:create_app --factory --reload

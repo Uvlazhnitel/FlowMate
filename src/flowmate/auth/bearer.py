@@ -6,22 +6,23 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from flowmate.api.dependencies import get_request_settings
-from flowmate.core.config import Settings
+from flowmate.core.config import Settings, get_settings
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def require_bearer_token(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
-    settings: Annotated[Settings, Depends(get_request_settings)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> None:
     expected = settings.app_api_key
     if (
         credentials is None
         or credentials.scheme.lower() != "bearer"
         or expected is None
-        or not secrets.compare_digest(credentials.credentials, expected)
+        or not secrets.compare_digest(
+            credentials.credentials, expected.get_secret_value()
+        )
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
