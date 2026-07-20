@@ -3,6 +3,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from flowmate.bot.handlers.notes import notes_command, text_note
 from flowmate.bot.handlers.voice import voice_message
 from flowmate.bot.middleware import AllowedUserMiddleware, DatabaseSessionMiddleware
 from flowmate.db.health import database_is_ready
@@ -27,8 +28,8 @@ async def start_command(message: Message, db_session: AsyncSession) -> None:
 
 async def help_command(message: Message) -> None:
     await message.answer(
-        "Доступные команды: /start, /help, /status. "
-        "Также можно отправить голосовое сообщение."
+        "Доступные команды: /start, /help, /status, /notes. "
+        "Отправьте текст или голосовое сообщение, чтобы сохранить заметку."
     )
 
 
@@ -40,7 +41,7 @@ async def status_command(message: Message, db_engine: AsyncEngine) -> None:
 
 
 async def unsupported_message(message: Message) -> None:
-    await message.answer("Пока доступны только команды /start, /help и /status.")
+    await message.answer("Отправьте текст, голосовое сообщение или используйте /help.")
 
 
 def create_router(
@@ -54,6 +55,8 @@ def create_router(
     router.message.register(start_command, Command("start"))
     router.message.register(help_command, Command("help"))
     router.message.register(status_command, Command("status"))
+    router.message.register(notes_command, Command("notes"))
     router.message.register(voice_message, F.voice)
+    router.message.register(text_note, F.text & ~F.text.startswith("/"))
     router.message.register(unsupported_message)
     return router

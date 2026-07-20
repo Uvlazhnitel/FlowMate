@@ -106,8 +106,10 @@ def migrated_database() -> Iterator[None]:
     try:
         command.downgrade(alembic_config, "base")
         assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "users"))
+        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
         command.upgrade(alembic_config, "head")
         assert asyncio.run(database_has_table(TEST_DATABASE_URL, "users"))
+        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
     except (OSError, SQLAlchemyError) as error:
         handle_database_unavailable(error)
     try:
@@ -115,6 +117,7 @@ def migrated_database() -> Iterator[None]:
     finally:
         command.downgrade(alembic_config, "base")
         assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "users"))
+        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
         command.upgrade(alembic_config, "head")
         if previous_url is None:
             environ.pop("DATABASE_URL", None)
@@ -147,7 +150,11 @@ async def database_session(
 ) -> AsyncIterator[AsyncSession]:
     async with database_engine.connect() as connection:
         transaction = await connection.begin()
-        session = AsyncSession(bind=connection, expire_on_commit=False)
+        session = AsyncSession(
+            bind=connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
         try:
             yield session
         finally:

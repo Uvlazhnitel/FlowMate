@@ -2,8 +2,8 @@
 
 FlowMate is a Telegram-first personal assistant. Its foundation provides a
 FastAPI API, an optional aiogram bot, PostgreSQL, Alembic migrations, tests, and
-CI. Stage 1 adds voice transcription without task extraction, transcript
-persistence, or other product-domain logic.
+CI. Stage 1 adds text and voice notes without task extraction or other
+product-domain logic.
 
 The repository and Python package retain the technical name `flowmate`.
 
@@ -80,6 +80,8 @@ make downgrade revision=base
 so the generated revision is written to the repository. Downgrading `0003` to
 `0002` requires every user to have a Telegram ID because the old schema used a
 `NOT NULL` constraint; Alembic does not delete incompatible rows automatically.
+Migration `0004` creates immutable notes and can be downgraded to the Stage 0
+revision `0003` by dropping only the `notes` table.
 
 ## Start the Bot
 
@@ -102,9 +104,11 @@ After configuring the bot variables, start PostgreSQL, API, and bot:
 make up-all
 ```
 
-The bot supports `/start`, `/help`, and `/status`. Other unsupported content
-receives a short explanation. Only one bot replica may run for a Telegram
-long-polling token.
+The bot supports `/start`, `/help`, `/status`, and `/notes`. Any non-empty text
+that does not begin with `/` is stored as a note. `/notes` returns previews of
+the 10 most recent notes belonging to the current Telegram user. Telegram
+update IDs make repeated delivery idempotent, so one update creates at most one
+note. Only one bot replica may run for a Telegram long-polling token.
 
 ### Voice transcription
 
@@ -128,11 +132,11 @@ configuration response.
 
 For an accepted voice message, the bot immediately reports that processing has
 started, downloads Telegram OGG/Opus audio into a unique temporary `.ogg` file,
-and returns the transcription as plain text. The default limit is 20 MB and the
-download plus transcription deadline is 60 seconds. Audio is not converted or
-stored permanently, and both audio and transcript are never written to
-PostgreSQL. The temporary file is removed before the transcription is sent,
-including every failure path.
+transcribes it, stores the transcript as a voice note, and returns it as plain
+text. The default limit is 20 MB and the download plus transcription deadline
+is 60 seconds. Audio is not converted or stored permanently. The temporary file
+is removed before the transcript is written to PostgreSQL or returned to the
+user, including every failure path.
 
 ## Operations
 
@@ -179,11 +183,12 @@ host -> api (FastAPI/Uvicorn) -> postgres
                     |
 Telegram -> bot ----+  [optional Compose profile: bot]
               |
-              +-> temporary OGG -> speech provider -> plain-text reply
+              +-> temporary OGG -> speech provider -> note -> plain-text reply
 ```
 
 Both application processes use the same non-root runtime image and shared async
 SQLAlchemy infrastructure. The environment allowlist remains the source of
-Telegram authorization; the minimal `users` table is reserved for future use.
-Voice audio exists only in a permission-restricted temporary file while one
-update is processed. Transcriptions are not persisted at this stage.
+Telegram authorization; the `users` table owns each immutable note. Voice audio
+exists only in a permission-restricted temporary file while one update is
+processed. Text and transcribed voice content are stored as notes owned by that
+user; original audio is never persisted.

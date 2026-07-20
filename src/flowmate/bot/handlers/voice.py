@@ -4,8 +4,17 @@ from pathlib import Path
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import Message
+from aiogram.types import Message, Update
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from flowmate.bot.handlers.notes import (
+    NOTE_ALREADY_SAVED_MESSAGE,
+    NOTE_SAVE_FAILED_MESSAGE,
+    NOTE_SAVED_MESSAGE,
+    save_note_for_message,
+)
+from flowmate.db.notes import get_note_by_telegram_update_id
 from flowmate.speech.errors import AudioTooLargeError, SpeechError, SpeechTimeoutError
 from flowmate.speech.service import TranscriptionService
 
@@ -40,6 +49,8 @@ def split_transcription(text: str, max_length: int = TELEGRAM_TEXT_LIMIT) -> lis
 async def voice_message(
     message: Message,
     bot: Bot,
+    event_update: Update,
+    db_session: AsyncSession,
     transcription_service: TranscriptionService | None,
 ) -> None:
     voice = message.voice
@@ -52,6 +63,24 @@ async def voice_message(
         return
     if transcription_service.is_too_large(voice.file_size):
         await message.answer(OVERSIZED_MESSAGE)
+        return
+
+    try:
+        existing_note = await get_note_by_telegram_update_id(
+            db_session,
+            event_update.update_id,
+        )
+        await db_session.rollback()
+    except SQLAlchemyError:
+        await db_session.rollback()
+        logger.error(
+            "telegram_note_database_failed user_id=%s operation=duplicate_check",
+            telegram_user.id,
+        )
+        await message.answer(NOTE_SAVE_FAILED_MESSAGE)
+        return
+    if existing_note is not None:
+        await message.answer(NOTE_ALREADY_SAVED_MESSAGE)
         return
 
     await message.answer(PROCESSING_MESSAGE)
@@ -93,5 +122,20 @@ async def voice_message(
         await message.answer(TRANSCRIPTION_FAILED_MESSAGE)
         return
 
+    save_result = await save_note_for_message(
+        message,
+        event_update,
+        db_session,
+        content=transcription,
+        source="voice",
+    )
+    if save_result == "failed":
+        await message.answer(NOTE_SAVE_FAILED_MESSAGE)
+        return
+    if save_result == "duplicate":
+        await message.answer(NOTE_ALREADY_SAVED_MESSAGE)
+        return
+
     for chunk in split_transcription(transcription):
-        await message.answer(chunk)
+        await message.answer(chunk, parse_mode=None)
+    await message.answer(NOTE_SAVED_MESSAGE)

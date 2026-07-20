@@ -32,3 +32,6 @@ def configure_logging(level: str, *, structured: bool = False) -> None:
     root_logger.handlers.clear()
     root_logger.addHandler(handler)
     root_logger.setLevel(level)
+
+    for logger_name in ("httpcore", "httpx", "openai"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)

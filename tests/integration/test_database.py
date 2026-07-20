@@ -1,11 +1,28 @@
+import asyncio
 from typing import Any, cast
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import String, inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from flowmate.db.health import database_is_ready
-from tests.conftest import get_table_names
+from tests.conftest import TEST_DATABASE_URL, database_has_table, get_table_names
+
+
+def test_migrations_upgrade_from_stage_zero_revision(
+    migrated_database: None,
+) -> None:
+    alembic_config = Config("alembic.ini")
+    try:
+        command.downgrade(alembic_config, "0003_expand_users")
+        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "users"))
+        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
+        command.upgrade(alembic_config, "head")
+        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
+    finally:
+        command.upgrade(alembic_config, "head")
 
 
 @pytest.mark.integration
@@ -18,11 +35,14 @@ async def test_database_connection(database_engine: AsyncEngine) -> None:
 
 
 @pytest.mark.integration
-async def test_migrations_create_users_table(database_engine: AsyncEngine) -> None:
+async def test_migrations_create_stage_one_tables(
+    database_engine: AsyncEngine,
+) -> None:
     table_names = await get_table_names(database_engine)
 
     assert "alembic_version" in table_names
     assert "users" in table_names
+    assert "notes" in table_names
 
 
 @pytest.mark.integration
@@ -59,4 +79,49 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
     assert {constraint["name"] for constraint in check_constraints} >= {
         "ck_users_telegram_user_id_positive"
     }
-    assert revision == "0003_expand_users"
+    assert revision == "0004_create_notes"
+
+
+@pytest.mark.integration
+async def test_notes_schema_matches_metadata(database_engine: AsyncEngine) -> None:
+    async with database_engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"]: column
+                for column in inspect(sync_connection).get_columns("notes")
+            }
+        )
+        unique_constraints = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_unique_constraints(
+                "notes"
+            )
+        )
+        check_constraints = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_check_constraints(
+                "notes"
+            )
+        )
+        foreign_keys = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_foreign_keys("notes")
+        )
+        indexes = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_indexes("notes")
+        )
+
+    assert columns["user_id"]["nullable"] is False
+    assert columns["content"]["nullable"] is False
+    assert columns["source"]["nullable"] is False
+    assert columns["telegram_update_id"]["nullable"] is False
+    assert columns["created_at"]["nullable"] is False
+    assert {constraint["name"] for constraint in unique_constraints} >= {
+        "notes_telegram_update_id_key"
+    }
+    assert {constraint["name"] for constraint in check_constraints} >= {
+        "ck_notes_content_not_blank",
+        "ck_notes_source",
+        "ck_notes_telegram_update_id_positive",
+    }
+    assert {foreign_key["name"] for foreign_key in foreign_keys} >= {
+        "fk_notes_user_id_users"
+    }
+    assert {index["name"] for index in indexes} >= {"ix_notes_user_id_created_at"}

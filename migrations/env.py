@@ -9,9 +9,10 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from flowmate.core.config import get_settings
 from flowmate.db.base import Base
-from flowmate.db.models import User
+from flowmate.db.models import Note, User
 
 _ = User
+_ = Note
 
 config = context.config
 if config.config_file_name is not None:

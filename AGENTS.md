@@ -6,8 +6,8 @@ FlowMate is a Python 3.12 application with two independent entrypoints: a
 FastAPI HTTP API and an aiogram Telegram bot. Both use shared configuration and
 async SQLAlchemy infrastructure backed by PostgreSQL. Voice messages use a
 small speech provider boundary and permission-restricted temporary files; audio
-and transcriptions are not persisted. The project does not yet contain
-task-management domain logic.
+is never persisted, while text and transcriptions are stored as immutable notes.
+The project does not yet contain task-management domain logic.
 
 Configuration and logging live in `flowmate.core`. API authentication lives in
 `flowmate.auth`. Database models live in `flowmate.db.models`, while schema
@@ -28,7 +28,8 @@ the isolated database configured by `TEST_DATABASE_URL`.
 - Every database schema change requires an Alembic migration.
 - Runtime and test code must never call `metadata.create_all`.
 - Tests must not call external Telegram, speech, or AI APIs.
-- Never log or persist voice audio, API keys, or full transcriptions.
+- Never log or persist voice audio, API keys, or full note/transcription text.
+- Note creation must remain idempotent by Telegram update ID.
 - Do not add infrastructure or dependencies outside the current stage scope.
 
 ## Commands

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram import Bot
-from aiogram.types import Chat, Message, TelegramObject, User, Voice
+from aiogram.types import Chat, Message, TelegramObject, Update, User, Voice
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from flowmate.bot.app import create_dispatcher, run_bot
@@ -17,6 +17,11 @@ from flowmate.bot.handlers.commands import (
     help_command,
     status_command,
     unsupported_message,
+)
+from flowmate.bot.handlers.notes import (
+    NOTE_ALREADY_SAVED_MESSAGE,
+    NOTE_SAVE_FAILED_MESSAGE,
+    NOTE_SAVED_MESSAGE,
 )
 from flowmate.bot.handlers.voice import (
     OVERSIZED_MESSAGE,
@@ -61,6 +66,17 @@ def make_voice_message(user_id: int, *, file_size: int | None = 5) -> Message:
             file_size=file_size,
         ),
     )
+
+
+def make_update(message: Message, update_id: int = 1001) -> Update:
+    return Update(update_id=update_id, message=message)
+
+
+def make_mock_session() -> AsyncSession:
+    session = MagicMock(spec=AsyncSession)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    return cast(AsyncSession, session)
 
 
 class FakeSpeechProvider:
@@ -115,6 +131,38 @@ def make_mock_bot(audio: bytes = b"audio") -> Bot:
     return cast(Bot, bot)
 
 
+async def invoke_voice(
+    message: Message,
+    bot: Bot,
+    service: TranscriptionService | None,
+    *,
+    existing_note: object | None = None,
+    save_result: str = "created",
+    session: AsyncSession | None = None,
+) -> tuple[AsyncMock, AsyncMock]:
+    db_session = session or make_mock_session()
+    get_note = AsyncMock(return_value=existing_note)
+    save_note = AsyncMock(return_value=save_result)
+    with (
+        patch(
+            "flowmate.bot.handlers.voice.get_note_by_telegram_update_id",
+            new=get_note,
+        ),
+        patch(
+            "flowmate.bot.handlers.voice.save_note_for_message",
+            new=save_note,
+        ),
+    ):
+        await voice_message(
+            message,
+            bot,
+            make_update(message),
+            db_session,
+            service,
+        )
+    return get_note, save_note
+
+
 @pytest.mark.asyncio
 async def test_allowed_user_reaches_handler() -> None:
     middleware = AllowedUserMiddleware(frozenset({123}))
@@ -153,8 +201,8 @@ async def test_help_response() -> None:
         await help_command(make_message(123, text="/help"))
 
     answer.assert_awaited_once_with(
-        "Доступные команды: /start, /help, /status. "
-        "Также можно отправить голосовое сообщение."
+        "Доступные команды: /start, /help, /status, /notes. "
+        "Отправьте текст или голосовое сообщение, чтобы сохранить заметку."
     )
 
 
@@ -187,26 +235,33 @@ async def test_unsupported_message_response() -> None:
         await unsupported_message(make_message(123, text="hello"))
 
     answer.assert_awaited_once_with(
-        "Пока доступны только команды /start, /help и /status."
+        "Отправьте текст, голосовое сообщение или используйте /help."
     )
 
 
 @pytest.mark.asyncio
-async def test_voice_message_is_downloaded_transcribed_and_deleted() -> None:
+async def test_voice_message_is_downloaded_transcribed_and_deleted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     provider = FakeSpeechProvider()
     service = make_transcription_service(provider)
     bot = make_mock_bot()
+    message = make_voice_message(123)
 
     with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
-        await voice_message(make_voice_message(123), bot, service)
+        _, save_note = await invoke_voice(message, bot, service)
 
     assert [call.args[0] for call in answer.await_args_list] == [
         PROCESSING_MESSAGE,
         "Распознанный текст",
+        NOTE_SAVED_MESSAGE,
     ]
+    assert answer.await_args_list[1].kwargs == {"parse_mode": None}
     assert provider.audio_path is not None
     assert not provider.audio_path.exists()
     cast(AsyncMock, bot.download).assert_awaited_once()
+    save_note.assert_awaited_once()
+    assert "Распознанный текст" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -220,11 +275,13 @@ async def test_voice_message_is_downloaded_transcribed_and_deleted() -> None:
 )
 async def test_voice_provider_failure_is_safe_and_deletes_file(
     provider: FakeSpeechProvider,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     service = make_transcription_service(provider)
+    message = make_voice_message(123)
 
     with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
-        await voice_message(make_voice_message(123), make_mock_bot(), service)
+        _, save_note = await invoke_voice(message, make_mock_bot(), service)
 
     assert [call.args[0] for call in answer.await_args_list] == [
         PROCESSING_MESSAGE,
@@ -232,51 +289,44 @@ async def test_voice_provider_failure_is_safe_and_deletes_file(
     ]
     assert provider.audio_path is not None
     assert not provider.audio_path.exists()
+    save_note.assert_not_awaited()
+    assert "private response" not in caplog.text
+    assert "private timeout" not in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_temporary_file_is_deleted_before_database_commit_failure() -> None:
+async def test_temporary_file_is_deleted_before_database_save_failure() -> None:
     provider = FakeSpeechProvider()
     service = make_transcription_service(provider)
-    bot = make_mock_bot()
-    session_factory = cast(
-        async_sessionmaker[AsyncSession], MagicMock(spec=async_sessionmaker)
-    )
-    engine = cast(AsyncEngine, MagicMock())
-    session = cast(AsyncSession, MagicMock())
-    middleware = DatabaseSessionMiddleware(session_factory, engine)
-
-    @asynccontextmanager
-    async def failing_session_scope(
-        actual_factory: async_sessionmaker[AsyncSession],
-    ) -> AsyncIterator[AsyncSession]:
-        assert actual_factory is session_factory
-        yield session
-        raise RuntimeError("database commit failed")
-
-    async def handler(event: TelegramObject, data: dict[str, Any]) -> None:
-        assert isinstance(event, Message)
-        await voice_message(event, bot, service)
+    message = make_voice_message(123)
 
     with (
-        patch("flowmate.bot.middleware.session_scope", new=failing_session_scope),
-        patch.object(Message, "answer", new_callable=AsyncMock),
-        pytest.raises(RuntimeError, match="database commit failed"),
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
     ):
-        await middleware(handler, make_voice_message(123), {})
+        await invoke_voice(
+            message,
+            make_mock_bot(),
+            service,
+            save_result="failed",
+        )
 
     assert provider.audio_path is not None
     assert not provider.audio_path.exists()
+    assert [call.args[0] for call in answer.await_args_list] == [
+        PROCESSING_MESSAGE,
+        NOTE_SAVE_FAILED_MESSAGE,
+    ]
 
 
 @pytest.mark.asyncio
 async def test_voice_post_download_size_check_rejects_audio() -> None:
     provider = FakeSpeechProvider()
     service = make_transcription_service(provider, max_file_size_bytes=5)
+    message = make_voice_message(123, file_size=None)
 
     with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
-        await voice_message(
-            make_voice_message(123, file_size=None),
+        _, save_note = await invoke_voice(
+            message,
             make_mock_bot(b"oversized"),
             service,
         )
@@ -286,6 +336,7 @@ async def test_voice_post_download_size_check_rejects_audio() -> None:
         OVERSIZED_MESSAGE,
     ]
     assert provider.calls == 0
+    save_note.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -293,55 +344,84 @@ async def test_reported_oversized_voice_is_rejected_without_download() -> None:
     provider = FakeSpeechProvider()
     service = make_transcription_service(provider, max_file_size_bytes=5)
     bot = make_mock_bot()
+    message = make_voice_message(123, file_size=6)
 
     with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
-        await voice_message(make_voice_message(123, file_size=6), bot, service)
+        _, save_note = await invoke_voice(message, bot, service)
 
     answer.assert_awaited_once_with(OVERSIZED_MESSAGE)
     cast(AsyncMock, bot.download).assert_not_awaited()
     assert provider.calls == 0
+    save_note.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_voice_without_speech_configuration_gets_safe_response() -> None:
     bot = make_mock_bot()
+    message = make_voice_message(123)
 
     with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
-        await voice_message(make_voice_message(123), bot, None)
+        _, save_note = await invoke_voice(message, bot, None)
 
     answer.assert_awaited_once_with(SPEECH_UNAVAILABLE_MESSAGE)
     cast(AsyncMock, bot.download).assert_not_awaited()
+    save_note.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_voice_skips_download_and_transcription() -> None:
+    provider = FakeSpeechProvider()
+    bot = make_mock_bot()
+    message = make_voice_message(123)
+
+    with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
+        _, save_note = await invoke_voice(
+            message,
+            bot,
+            make_transcription_service(provider),
+            existing_note=object(),
+        )
+
+    answer.assert_awaited_once_with(NOTE_ALREADY_SAVED_MESSAGE)
+    cast(AsyncMock, bot.download).assert_not_awaited()
+    assert provider.calls == 0
+    save_note.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_long_transcription_is_returned_completely_in_plain_chunks() -> None:
     transcription = "word " * 1800
     provider = FakeSpeechProvider(transcription)
+    message = make_voice_message(123)
 
     with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
-        await voice_message(
-            make_voice_message(123),
+        await invoke_voice(
+            message,
             make_mock_bot(),
             make_transcription_service(provider),
         )
 
-    chunks = [call.args[0] for call in answer.await_args_list[1:]]
+    chunks = [call.args[0] for call in answer.await_args_list[1:-1]]
     assert all(len(chunk) <= 4000 for chunk in chunks)
     assert "".join(chunks) == transcription.strip()
-    assert all("parse_mode" not in call.kwargs for call in answer.await_args_list)
+    assert all(
+        call.kwargs == {"parse_mode": None} for call in answer.await_args_list[1:-1]
+    )
+    assert answer.await_args_list[-1].args[0] == NOTE_SAVED_MESSAGE
 
 
 @pytest.mark.asyncio
 async def test_temporary_file_is_deleted_before_result_delivery_failure() -> None:
     provider = FakeSpeechProvider()
     answer = AsyncMock(side_effect=[None, RuntimeError("send failed")])
+    message = make_voice_message(123)
 
     with (
         patch.object(Message, "answer", new=answer),
         pytest.raises(RuntimeError, match="send failed"),
     ):
-        await voice_message(
-            make_voice_message(123),
+        await invoke_voice(
+            message,
             make_mock_bot(),
             make_transcription_service(provider),
         )
