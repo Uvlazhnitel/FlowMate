@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_DB: flowmate_test
+          POSTGRES_USER: flowmate
+          POSTGRES_PASSWORD: flowmate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flowmate -d flowmate_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FLOWMATE_ENVIRONMENT: test
+      FLOWMATE_DATABASE_URL: postgresql+asyncpg://flowmate:flowmate@localhost:5432/flowmate_test
+      FLOWMATE_TEST_DATABASE_URL: postgresql+asyncpg://flowmate:flowmate@localhost:5432/flowmate_test
+      FLOWMATE_API_BEARER_TOKEN: ci-test-secret
+      FLOWMATE_TELEGRAM_BOT_TOKEN: 123456:ci-test-token
+      FLOWMATE_TELEGRAM_ALLOWED_USER_IDS: 123456789
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.26"
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - run: uv sync --frozen --group dev
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run mypy src tests
+      - run: uv run alembic upgrade head
+      - run: uv run pytest

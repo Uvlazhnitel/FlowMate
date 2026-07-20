@@ -1,0 +1,72 @@
+name: flowmate
+
+x-app: &app
+  build: .
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    FLOWMATE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flowmate}:${POSTGRES_PASSWORD:-flowmate}@db:5432/${POSTGRES_DB:-flowmate}
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-flowmate}
+      POSTGRES_USER: ${POSTGRES_USER:-flowmate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flowmate}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  db-test:
+    image: postgres:16-bookworm
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: flowmate_test
+      POSTGRES_USER: flowmate
+      POSTGRES_PASSWORD: flowmate
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowmate -d flowmate_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: ["uvicorn", "flowmate.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+
+  bot:
+    <<: *app
+    command: ["python", "-m", "flowmate.bot"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:
