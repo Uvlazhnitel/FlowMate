@@ -12,6 +12,10 @@ Configuration and logging live in `flowmate.core`. API authentication lives in
 `flowmate.auth`. Database models live in `flowmate.db.models`, while schema
 history is managed exclusively through Alembic migrations.
 
+Runtime code uses the `src/flowmate` package. Fast unit tests live in
+`tests/unit`; PostgreSQL-backed tests live in `tests/integration` and use only
+the isolated database configured by `TEST_DATABASE_URL`.
+
 ## Conventions
 
 - Use English for identifiers, comments, and docstrings.
@@ -28,6 +32,8 @@ history is managed exclusively through Alembic migrations.
 
 ```bash
 make sync
+make test-unit
+make test-integration
 make check
 make test-db-up
 make migrate
@@ -35,6 +41,7 @@ make api
 make bot
 ```
 
-Run `make check` before completing every task. Integration tests use the test
-database from `docker-compose.test.yml`; set `TEST_DATABASE_URL` when
-using a different PostgreSQL instance.
+Run `make check` before completing every task. It checks formatting, Ruff,
+strict mypy, unit tests, and integration tests in that order. Integration tests
+use the test database from `docker-compose.test.yml`; any custom
+`TEST_DATABASE_URL` must name a database ending in `_test`.

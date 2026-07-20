@@ -2,11 +2,13 @@ import asyncio
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from os import environ, getenv
+from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -20,6 +22,54 @@ TEST_DATABASE_URL = getenv(
         "postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test",
     ),
 )
+
+UNIT_ENVIRONMENT_VARIABLES = (
+    "APP_ENV",
+    "APP_DEBUG",
+    "APP_HOST",
+    "APP_PORT",
+    "APP_API_KEY",
+    "DATABASE_URL",
+    "CORS_ORIGINS",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_ALLOWED_USER_IDS",
+    "LOG_LEVEL",
+    "FLOWMATE_ENVIRONMENT",
+    "FLOWMATE_API_DOCS_ENABLED",
+    "FLOWMATE_API_BEARER_TOKEN",
+    "FLOWMATE_DATABASE_URL",
+    "FLOWMATE_TELEGRAM_BOT_TOKEN",
+    "FLOWMATE_TELEGRAM_ALLOWED_USER_IDS",
+    "FLOWMATE_LOG_LEVEL",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_test_environment(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    if "unit" in Path(str(request.node.path)).parts:
+        for variable in UNIT_ENVIRONMENT_VARIABLES:
+            monkeypatch.delenv(variable, raising=False)
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        get_settings.cache_clear()
+
+
+def validate_test_database_url(database_url: str) -> None:
+    url = make_url(database_url)
+    if (
+        url.drivername != "postgresql+asyncpg"
+        or url.database is None
+        or not url.database.endswith("_test")
+    ):
+        raise ValueError(
+            "TEST_DATABASE_URL must use postgresql+asyncpg and a database "
+            "name ending in '_test'"
+        )
 
 
 def handle_database_unavailable(error: Exception) -> None:
@@ -42,6 +92,7 @@ async def database_has_table(database_url: str, table_name: str) -> bool:
 
 @pytest.fixture(scope="session")
 def migrated_database() -> Iterator[None]:
+    validate_test_database_url(TEST_DATABASE_URL)
     previous_url = environ.get("DATABASE_URL")
     environ["DATABASE_URL"] = TEST_DATABASE_URL
     get_settings.cache_clear()

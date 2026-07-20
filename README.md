@@ -119,16 +119,30 @@ volumes, so it permanently deletes local database data.
 
 ## Tests and Quality
 
-Start the isolated test database and run all checks:
+Unit tests require neither Docker nor external network access:
+
+```bash
+make test-unit
+```
+
+Start the isolated PostgreSQL database before integration tests:
 
 ```bash
 make test-db-up
-TEST_DATABASE_URL=postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test make check
+make test-integration
+make test
+make check
 make test-db-down
 ```
 
-Tests apply Alembic migrations and never call `metadata.create_all`. They do not
-contact Telegram or AI APIs.
+`make check` is the mandatory validation command. It checks formatting, Ruff,
+strict mypy, unit tests, and integration tests. The default test URL is
+`postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test`;
+custom test database names must end in `_test`.
+
+Tests apply Alembic migrations and never call `metadata.create_all`. Database
+tests use transactions for cleanup and never access development data. Telegram
+and other external APIs are not contacted.
 
 ## Architecture
 

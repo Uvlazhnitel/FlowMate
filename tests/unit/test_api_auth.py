@@ -1,3 +1,5 @@
+import io
+import logging
 from typing import Any, cast
 from uuid import UUID
 
@@ -34,8 +36,8 @@ async def request(
             return await client.request(method, path, headers=headers)
 
 
-async def test_status_rejects_missing_token_with_error_envelope() -> None:
-    response = await request("/api/v1/status", headers={"X-Request-ID": "auth-request"})
+async def test_me_rejects_missing_token_with_error_envelope() -> None:
+    response = await request("/api/v1/me", headers={"X-Request-ID": "auth-request"})
 
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
@@ -48,9 +50,9 @@ async def test_status_rejects_missing_token_with_error_envelope() -> None:
     }
 
 
-async def test_status_rejects_invalid_token() -> None:
+async def test_me_rejects_invalid_token() -> None:
     response = await request(
-        "/api/v1/status", headers={"Authorization": "Bearer wrong-secret"}
+        "/api/v1/me", headers={"Authorization": "Bearer wrong-secret"}
     )
 
     assert response.status_code == 401
@@ -75,6 +77,26 @@ async def test_me_describes_single_user_session() -> None:
         "id": "single-user",
         "authentication": "api-key",
     }
+
+
+async def test_request_logs_do_not_expose_api_key() -> None:
+    api_key = "private-request-api-key"
+    app = create_test_app(app_api_key=api_key)
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    request_logger = logging.getLogger("flowmate.api.middleware")
+    request_logger.addHandler(handler)
+    try:
+        response = await request(
+            "/api/v1/me",
+            app=app,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    finally:
+        request_logger.removeHandler(handler)
+
+    assert response.status_code == 200
+    assert api_key not in stream.getvalue()
 
 
 async def test_middleware_adds_request_id_and_security_headers() -> None:

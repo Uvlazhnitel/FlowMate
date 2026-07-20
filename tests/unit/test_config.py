@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from flowmate.core.config import Settings, get_settings
+from tests.conftest import validate_test_database_url
 
 
 def production_settings(**overrides: object) -> dict[str, object]:
@@ -17,6 +18,28 @@ def production_settings(**overrides: object) -> dict[str, object]:
     }
     values.update(overrides)
     return values
+
+
+def test_loads_development_defaults_without_environment() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.app_env == "development"
+    assert settings.app_debug is False
+    assert settings.app_host == "0.0.0.0"
+    assert settings.app_port == 8000
+    assert settings.telegram_allowed_user_ids == frozenset()
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql+asyncpg://flowmate:password@localhost:5432/flowmate",
+        "postgresql://flowmate:password@localhost:5432/flowmate_test",
+    ],
+)
+def test_rejects_unsafe_test_database_url(database_url: str) -> None:
+    with pytest.raises(ValueError, match="TEST_DATABASE_URL"):
+        validate_test_database_url(database_url)
 
 
 def test_parses_telegram_allowlist_as_frozenset() -> None:

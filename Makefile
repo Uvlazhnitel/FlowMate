@@ -1,7 +1,9 @@
 .DEFAULT_GOAL := help
 revision ?= -1
+TEST_DATABASE_URL ?= postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test
+export TEST_DATABASE_URL
 
-.PHONY: help setup sync format lint typecheck test check migrate migration downgrade migration-current migration-history api bot up up-all down logs ps test-db-up test-db-down clean
+.PHONY: help setup sync format format-check lint typecheck test test-unit test-integration check migrate migration downgrade migration-current migration-history api bot up up-all down logs ps test-db-up test-db-down clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "FlowMate commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -16,16 +18,26 @@ sync: ## Install locked development dependencies
 format: ## Format Python code with Ruff
 	uv run ruff format .
 
+format-check: ## Check Python formatting without changing files
+	uv run ruff format --check .
+
 lint: ## Run Ruff lint checks
 	uv run ruff check .
 
 typecheck: ## Run strict mypy checks
 	uv run mypy src tests
 
-test: ## Run the complete pytest suite
-	uv run pytest
+test: ## Run unit and PostgreSQL integration tests
+	uv run pytest tests/unit
+	uv run pytest tests/integration
 
-check: ## Run formatting, linting, type checking, and tests
+test-unit: ## Run network-independent unit tests
+	uv run pytest tests/unit
+
+test-integration: ## Run tests against the dedicated PostgreSQL test database
+	uv run pytest tests/integration
+
+check: ## Run the complete mandatory validation suite
 	sh scripts/run_checks.sh
 
 migrate: ## Apply Alembic migrations using the application image

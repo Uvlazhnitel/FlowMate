@@ -16,12 +16,12 @@ jobs:
         image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55
         env:
           POSTGRES_DB: flowmate_test
-          POSTGRES_USER: flowmate
-          POSTGRES_PASSWORD: flowmate
+          POSTGRES_USER: flowmate_test
+          POSTGRES_PASSWORD: flowmate_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U flowmate -d flowmate_test"
+          --health-cmd "pg_isready -U flowmate_test -d flowmate_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -29,10 +29,8 @@ jobs:
       APP_ENV: test
       APP_DEBUG: false
       APP_API_KEY: ci-test-secret
-      DATABASE_URL: postgresql+asyncpg://flowmate:flowmate@localhost:5432/flowmate_test
-      TEST_DATABASE_URL: postgresql+asyncpg://flowmate:flowmate@localhost:5432/flowmate_test
-      TELEGRAM_BOT_TOKEN: 123456:ci-test-token
-      TELEGRAM_ALLOWED_USER_IDS: 123456789
+      DATABASE_URL: postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5432/flowmate_test
+      TEST_DATABASE_URL: postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5432/flowmate_test
       LOG_LEVEL: INFO
     steps:
       - uses: actions/checkout@v4
@@ -44,8 +42,5 @@ jobs:
         with:
           python-version-file: .python-version
       - run: uv sync --frozen --group dev
-      - run: uv run ruff format --check .
-      - run: uv run ruff check .
-      - run: uv run mypy src tests
       - run: uv run alembic upgrade head
-      - run: uv run pytest
+      - run: make check
