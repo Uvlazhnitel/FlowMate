@@ -1,102 +1,99 @@
 # FlowMate
 
-Technical foundation for Voice PM Assistant, a Telegram-first personal assistant.
-Stage 0 provides the API, Telegram bot, PostgreSQL integration, migrations, tests,
-and CI. Task management, transcription, AI, and the PWA are intentionally out of
-scope.
+FlowMate is the technical foundation for Voice PM Assistant, a Telegram-first
+personal assistant. Stage 0 provides a FastAPI API, an optional aiogram bot,
+PostgreSQL, Alembic migrations, tests, and CI. Task management, transcription,
+AI, and the PWA are intentionally out of scope.
+
+The repository and Python package retain the technical name `flowmate`.
 
 ## Requirements
 
-- Python 3.12
-- [uv](https://docs.astral.sh/uv/)
 - Docker with Docker Compose
+- Python 3.12 and [uv](https://docs.astral.sh/uv/) for local development
 
-## Local setup
+## Setup
 
-```bash
-cp .env.example .env
-make sync
-docker compose up -d db
-make migrate
-make api
-```
-
-Run the Telegram bot in a second terminal:
+Create the local environment file and install locked development dependencies:
 
 ```bash
-make bot
+make setup
 ```
 
-The API exposes:
+Replace the placeholder values in `.env` before starting services. In
+particular, set a strong `APP_API_KEY` and `POSTGRES_PASSWORD`; keep the
+credentials embedded in `DATABASE_URL` consistent with PostgreSQL settings.
 
-- `GET /health/live` for process liveness;
-- `GET /health/ready` for database readiness;
-- `GET /api/v1/status` protected by `Authorization: Bearer <token>`.
+## Start the API
 
-OpenAPI documentation is available at `/docs` when
-`FLOWMATE_API_DOCS_ENABLED=true`.
-
-## Docker Compose
-
-Set real secrets in `.env`, then start the complete stack:
+Build and start PostgreSQL and the API:
 
 ```bash
-docker compose up --build
+make up
+make ps
 ```
 
-Compose starts PostgreSQL, applies migrations once, and then starts the API and
-bot. Only one bot replica may run because Telegram long polling does not support
-multiple consumers for the same token.
+The API startup applies Alembic migrations before starting Uvicorn. PostgreSQL
+is available only on the internal Compose network and is not published to the
+host.
 
-## Quality checks
+Verify the API:
 
 ```bash
-make check
+set -a; . ./.env; set +a
+curl http://localhost:8000/health/live
+curl http://localhost:8000/health/ready
+curl -H "Authorization: Bearer $APP_API_KEY" \
+  http://localhost:8000/api/v1/status
 ```
 
-Integration tests require PostgreSQL. By default they use
-`postgresql+asyncpg://flowmate:flowmate@localhost:5433/flowmate_test`. Start the
-isolated, ephemeral test database or override `FLOWMATE_TEST_DATABASE_URL`:
+Use the value configured by `APP_PORT` instead of `8000` when it is changed.
+OpenAPI documentation is available at `/docs` only when `APP_DEBUG=true`.
+
+## Start the Bot
+
+The bot is disabled by default, so `make up` does not require a Telegram token.
+After configuring `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_IDS`, start all
+services with:
+
+```bash
+make up-all
+```
+
+Only one bot replica may run for a Telegram long-polling token.
+
+## Operations
+
+```bash
+make logs
+make ps
+make down
+```
+
+`make down` preserves PostgreSQL data. `make clean` removes application and test
+volumes, so it permanently deletes local database data.
+
+## Tests and Quality
+
+Start the isolated test database and run all checks:
 
 ```bash
 make test-db-up
-make test
+TEST_DATABASE_URL=postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test make check
+make test-db-down
 ```
 
-## Migrations
-
-Create and apply migrations with:
-
-```bash
-uv run alembic revision --autogenerate -m "description"
-uv run alembic upgrade head
-```
-
-The initial migration is deliberately empty. Stage 0 adds only a minimal
-`users` table in the next migration; Telegram access still comes from the
-environment allowlist rather than this table.
-
-## Configuration
-
-Application variables use the `FLOWMATE_` prefix. See `.env.example` for the
-complete list. The API and bot validate their own required secrets at startup,
-so either process can be operated independently.
-
-`POSTGRES_PORT` and `API_PORT` control host port bindings when their defaults
-conflict with other local services.
-
-Production deployments should use strong unique secrets, disable API docs,
-terminate TLS in a reverse proxy, and back up the PostgreSQL volume. Compose
-does not provide secret management or backups.
+Tests apply Alembic migrations and never call `metadata.create_all`. They do not
+contact Telegram or AI APIs.
 
 ## Architecture
 
 ```text
-Telegram -> aiogram bot -> shared application services -> PostgreSQL
-Future PWA -> FastAPI   -> shared application services -> PostgreSQL
+host -> api (FastAPI/Uvicorn) -> postgres
+                    |
+Telegram -> bot ----+  [optional Compose profile: bot]
 ```
 
-The repository remains named FlowMate and uses `flowmate` as its technical
-Python package name. `flowmate.application` is currently an empty boundary for
-future shared use cases. Stage 0 deliberately avoids repositories, generic
-service abstractions, queues, caches, and task-management domain models.
+Both application processes use the same non-root runtime image and shared async
+SQLAlchemy infrastructure. The environment allowlist remains the source of
+Telegram authorization; the minimal `users` table is reserved for future use.

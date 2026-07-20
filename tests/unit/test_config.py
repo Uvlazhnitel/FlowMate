@@ -25,7 +25,25 @@ def test_rejects_invalid_telegram_allowlist(value: str) -> None:
 def test_process_specific_requirements() -> None:
     settings = Settings(_env_file=None)
 
-    with pytest.raises(ValueError, match="API_BEARER_TOKEN"):
+    with pytest.raises(ValueError, match="APP_API_KEY"):
         settings.require_api()
     with pytest.raises(ValueError, match="TELEGRAM_BOT_TOKEN"):
         settings.require_bot()
+
+
+def test_accepts_legacy_environment_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOWMATE_ENVIRONMENT", "test")
+    monkeypatch.setenv("FLOWMATE_API_BEARER_TOKEN", "legacy-secret")
+    monkeypatch.setenv("FLOWMATE_LOG_LEVEL", "WARNING")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.app_env == "test"
+    assert settings.app_api_key == "legacy-secret"
+    assert settings.log_level == "WARNING"
+
+
+@pytest.mark.parametrize("value", [0, 65536])
+def test_rejects_invalid_application_port(value: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, app_port=value)

@@ -9,7 +9,7 @@ from tests.conftest import started_app
 
 @pytest.mark.integration
 async def test_health_endpoints(database_engine: AsyncEngine) -> None:
-    settings = Settings(_env_file=None, api_bearer_token="test-secret")
+    settings = Settings(_env_file=None, app_api_key="test-secret")
     app = create_app(settings=settings, engine=database_engine)
 
     async with started_app(app):

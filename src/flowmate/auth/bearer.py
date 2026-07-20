@@ -16,7 +16,7 @@ def require_bearer_token(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     settings: Annotated[Settings, Depends(get_request_settings)],
 ) -> None:
-    expected = settings.api_bearer_token
+    expected = settings.app_api_key
     if (
         credentials is None
         or credentials.scheme.lower() != "bearer"

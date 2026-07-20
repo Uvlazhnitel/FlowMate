@@ -10,7 +10,7 @@ async def request(
     *,
     headers: dict[str, str] | None = None,
 ) -> Response:
-    settings = Settings(_env_file=None, api_bearer_token="test-secret")
+    settings = Settings(_env_file=None, app_api_key="test-secret")
     app = create_app(settings=settings)
     async with started_app(app):
         transport = ASGITransport(app=app)
@@ -48,3 +48,15 @@ async def test_middleware_adds_request_id() -> None:
     )
 
     assert response.headers["X-Request-ID"] == "test-request-id"
+
+
+def test_openapi_follows_debug_setting() -> None:
+    disabled_app = create_app(
+        settings=Settings(_env_file=None, app_api_key="secret", app_debug=False)
+    )
+    enabled_app = create_app(
+        settings=Settings(_env_file=None, app_api_key="secret", app_debug=True)
+    )
+
+    assert disabled_app.openapi_url is None
+    assert enabled_app.openapi_url == "/openapi.json"

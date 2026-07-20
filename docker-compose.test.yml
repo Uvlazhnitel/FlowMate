@@ -1,18 +1,22 @@
 name: flowmate-test
 
 services:
-  db-test:
-    image: postgres:16-bookworm
+  postgres-test:
+    image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55
     environment:
       POSTGRES_DB: flowmate_test
-      POSTGRES_USER: flowmate
-      POSTGRES_PASSWORD: flowmate
+      POSTGRES_USER: flowmate_test
+      POSTGRES_PASSWORD: flowmate_test
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U flowmate -d flowmate_test"]
+      test: ["CMD-SHELL", "pg_isready -U flowmate_test -d flowmate_test"]
       interval: 2s
       timeout: 5s
       retries: 10
-    tmpfs:
-      - /var/lib/postgresql/data
+      start_period: 2s
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5433:5432"
+      - "127.0.0.1:${TEST_POSTGRES_PORT:-5433}:5432"
+
+volumes:
+  postgres_test_data:

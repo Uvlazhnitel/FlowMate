@@ -13,21 +13,24 @@ from flowmate.core.config import get_settings
 from flowmate.db.session import create_engine
 
 TEST_DATABASE_URL = getenv(
-    "FLOWMATE_TEST_DATABASE_URL",
-    "postgresql+asyncpg://flowmate:flowmate@localhost:5433/flowmate_test",
+    "TEST_DATABASE_URL",
+    getenv(
+        "FLOWMATE_TEST_DATABASE_URL",
+        "postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test",
+    ),
 )
 
 
 def handle_database_unavailable(error: Exception) -> None:
-    if "FLOWMATE_TEST_DATABASE_URL" in environ:
+    if "TEST_DATABASE_URL" in environ or "FLOWMATE_TEST_DATABASE_URL" in environ:
         raise error
     pytest.skip(f"PostgreSQL test database is unavailable: {error}")
 
 
 @pytest.fixture(scope="session")
 def migrated_database() -> Iterator[None]:
-    previous_url = environ.get("FLOWMATE_DATABASE_URL")
-    environ["FLOWMATE_DATABASE_URL"] = TEST_DATABASE_URL
+    previous_url = environ.get("DATABASE_URL")
+    environ["DATABASE_URL"] = TEST_DATABASE_URL
     get_settings.cache_clear()
     try:
         command.upgrade(Config("alembic.ini"), "head")
@@ -37,9 +40,9 @@ def migrated_database() -> Iterator[None]:
         yield
     finally:
         if previous_url is None:
-            environ.pop("FLOWMATE_DATABASE_URL", None)
+            environ.pop("DATABASE_URL", None)
         else:
-            environ["FLOWMATE_DATABASE_URL"] = previous_url
+            environ["DATABASE_URL"] = previous_url
         get_settings.cache_clear()
 
 

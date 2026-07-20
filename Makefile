@@ -1,40 +1,64 @@
-.PHONY: sync format lint typecheck test check migrate api bot compose-up compose-down test-db-up test-db-down
+.DEFAULT_GOAL := help
 
-sync:
+.PHONY: help setup sync format lint typecheck test check migrate api bot up up-all down logs ps test-db-up test-db-down clean
+
+help: ## Show available commands
+	@awk 'BEGIN {FS = ":.*## "; printf "FlowMate commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+setup: ## Create .env if needed and install development dependencies
+	@test -f .env || cp .env.example .env
 	uv sync --frozen --group dev
 
-format:
+sync: ## Install locked development dependencies
+	uv sync --frozen --group dev
+
+format: ## Format Python code with Ruff
 	uv run ruff format .
 
-lint:
+lint: ## Run Ruff lint checks
 	uv run ruff check .
 
-typecheck:
+typecheck: ## Run strict mypy checks
 	uv run mypy src tests
 
-test:
+test: ## Run the complete pytest suite
 	uv run pytest
 
-check:
+check: ## Run formatting, linting, type checking, and tests
 	sh scripts/run_checks.sh
 
-migrate:
-	uv run alembic upgrade head
+migrate: ## Apply Alembic migrations using the application image
+	docker compose run --rm api alembic upgrade head
 
-api:
+api: ## Run the API locally with reload enabled
 	uv run uvicorn flowmate.api.app:create_app --factory --reload
 
-bot:
+bot: ## Run the Telegram bot locally
 	uv run python -m flowmate.bot
 
-compose-up:
-	docker compose up --build
+up: ## Build and start PostgreSQL and API
+	docker compose up -d --build postgres api
 
-compose-down:
-	docker compose down
+up-all: ## Build and start PostgreSQL, API, and the bot profile
+	docker compose --profile bot up -d --build
 
-test-db-up:
+down: ## Stop application containers without deleting database data
+	docker compose --profile bot down
+
+logs: ## Follow logs from all application services
+	docker compose --profile bot logs -f
+
+ps: ## Show application container status
+	docker compose --profile bot ps
+
+test-db-up: ## Start the isolated integration-test PostgreSQL database
 	docker compose -f docker-compose.test.yml up -d --wait
 
-test-db-down:
-	docker compose -f docker-compose.test.yml down
+test-db-down: ## Stop test PostgreSQL and delete its isolated data volume
+	docker compose -f docker-compose.test.yml down --volumes
+
+clean: ## Remove project containers, volumes, and local test caches
+	docker compose --profile bot down --volumes --remove-orphans
+	docker compose -f docker-compose.test.yml down --volumes --remove-orphans
+	rm -rf .pytest_cache .mypy_cache .ruff_cache htmlcov
+	rm -f .coverage coverage.xml

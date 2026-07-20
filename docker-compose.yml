@@ -1,61 +1,65 @@
 name: flowmate
 
 x-app: &app
-  build: .
+  image: flowmate-app:local
+  build:
+    context: .
+    dockerfile: Dockerfile
   env_file:
     - path: .env
       required: false
   environment:
-    FLOWMATE_ENVIRONMENT: ${FLOWMATE_ENVIRONMENT:-development}
-    FLOWMATE_LOG_LEVEL: ${FLOWMATE_LOG_LEVEL:-INFO}
-    FLOWMATE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flowmate}:${POSTGRES_PASSWORD:-flowmate}@db:5432/${POSTGRES_DB:-flowmate}
-    FLOWMATE_API_BEARER_TOKEN: ${FLOWMATE_API_BEARER_TOKEN:-}
-    FLOWMATE_TELEGRAM_BOT_TOKEN: ${FLOWMATE_TELEGRAM_BOT_TOKEN:-}
-    FLOWMATE_TELEGRAM_ALLOWED_USER_IDS: ${FLOWMATE_TELEGRAM_ALLOWED_USER_IDS:-}
-    FLOWMATE_API_DOCS_ENABLED: ${FLOWMATE_API_DOCS_ENABLED:-true}
+    APP_HOST: ${APP_HOST:-0.0.0.0}
+    APP_PORT: ${APP_PORT:-8000}
   restart: unless-stopped
 
 services:
-  db:
-    image: postgres:16-bookworm
+  postgres:
+    image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-flowmate}
       POSTGRES_USER: ${POSTGRES_USER:-flowmate}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flowmate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 5s
     restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
-
-  migrate:
-    <<: *app
-    command: ["alembic", "upgrade", "head"]
-    restart: "no"
-    depends_on:
-      db:
-        condition: service_healthy
+    networks:
+      default:
+        aliases: ["db"]
 
   api:
     <<: *app
-    command: ["uvicorn", "flowmate.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import os, urllib.request; urllib.request.urlopen(f"http://127.0.0.1:{os.environ['APP_PORT']}/health/live", timeout=2)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "${APP_PORT:-8000}:${APP_PORT:-8000}"
 
   bot:
     <<: *app
+    profiles: ["bot"]
     command: ["python", "-m", "flowmate.bot"]
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:

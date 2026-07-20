@@ -36,5 +36,5 @@ make bot
 ```
 
 Run `make check` before completing every task. Integration tests use the test
-database from `docker-compose.test.yml`; set `FLOWMATE_TEST_DATABASE_URL` when
+database from `docker-compose.test.yml`; set `TEST_DATABASE_URL` when
 using a different PostgreSQL instance.

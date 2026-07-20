@@ -3,25 +3,59 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated, Literal, Self
 
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="FLOWMATE_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
-    environment: Literal["development", "test", "production"] = "development"
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    database_url: str = "postgresql+asyncpg://flowmate:flowmate@localhost:5432/flowmate"
-    api_bearer_token: str | None = None
-    telegram_bot_token: str | None = None
-    telegram_allowed_user_ids: Annotated[tuple[int, ...], NoDecode] = ()
-    api_docs_enabled: bool = True
+    app_env: Literal["development", "test", "production"] = Field(
+        default="development",
+        validation_alias=AliasChoices("APP_ENV", "FLOWMATE_ENVIRONMENT"),
+    )
+    app_debug: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("APP_DEBUG", "FLOWMATE_API_DOCS_ENABLED"),
+    )
+    app_host: str = Field(default="0.0.0.0", validation_alias="APP_HOST")
+    app_port: int = Field(default=8000, validation_alias="APP_PORT")
+    app_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APP_API_KEY", "FLOWMATE_API_BEARER_TOKEN"),
+    )
+    database_url: str = Field(
+        default="postgresql+asyncpg://flowmate:flowmate@localhost:5432/flowmate",
+        validation_alias=AliasChoices("DATABASE_URL", "FLOWMATE_DATABASE_URL"),
+    )
+    telegram_bot_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "TELEGRAM_BOT_TOKEN", "FLOWMATE_TELEGRAM_BOT_TOKEN"
+        ),
+    )
+    telegram_allowed_user_ids: Annotated[tuple[int, ...], NoDecode] = Field(
+        default=(),
+        validation_alias=AliasChoices(
+            "TELEGRAM_ALLOWED_USER_IDS", "FLOWMATE_TELEGRAM_ALLOWED_USER_IDS"
+        ),
+    )
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
+        default="INFO",
+        validation_alias=AliasChoices("LOG_LEVEL", "FLOWMATE_LOG_LEVEL"),
+    )
+
+    @field_validator("app_port")
+    @classmethod
+    def validate_app_port(cls, value: int) -> int:
+        if not 1 <= value <= 65535:
+            raise ValueError("application port must be between 1 and 65535")
+        return value
 
     @field_validator("database_url")
     @classmethod
@@ -54,16 +88,15 @@ class Settings(BaseSettings):
         return value
 
     def require_api(self) -> Self:
-        if not self.api_bearer_token:
-            raise ValueError("FLOWMATE_API_BEARER_TOKEN is required for the API")
+        if not self.app_api_key:
+            raise ValueError("APP_API_KEY is required for the API")
         return self
 
     def require_bot(self) -> Self:
         if not self.telegram_bot_token:
-            raise ValueError("FLOWMATE_TELEGRAM_BOT_TOKEN is required for the bot")
+            raise ValueError("TELEGRAM_BOT_TOKEN is required for the bot")
         if not self.telegram_allowed_user_ids:
-            message = "FLOWMATE_TELEGRAM_ALLOWED_USER_IDS is required for the bot"
-            raise ValueError(message)
+            raise ValueError("TELEGRAM_ALLOWED_USER_IDS is required for the bot")
         return self
 
 

@@ -29,8 +29,8 @@ def create_app(
         finally:
             await app.state.engine.dispose()
 
-    docs_url = "/docs" if app_settings.api_docs_enabled else None
-    openapi_url = "/openapi.json" if app_settings.api_docs_enabled else None
+    docs_url = "/docs" if app_settings.app_debug else None
+    openapi_url = "/openapi.json" if app_settings.app_debug else None
     app = FastAPI(
         title="FlowMate API",
         version="0.1.0",
