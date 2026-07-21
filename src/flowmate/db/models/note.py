@@ -25,12 +25,17 @@ class Note(Base):
             "telegram_update_id",
             name="notes_telegram_update_id_key",
         ),
-        CheckConstraint(
-            "telegram_update_id > 0",
-            name="ck_notes_telegram_update_id_positive",
+        UniqueConstraint(
+            "source_draft_item_id",
+            name="uq_notes_source_draft_item_id",
         ),
         CheckConstraint(
-            "source IN ('text', 'voice')",
+            "(source IN ('text', 'voice') AND telegram_update_id > 0) OR "
+            "(source = 'manual' AND telegram_update_id IS NULL)",
+            name="ck_notes_source_update_consistency",
+        ),
+        CheckConstraint(
+            "source IN ('text', 'voice', 'manual')",
             name="ck_notes_source",
         ),
         CheckConstraint(
@@ -50,7 +55,17 @@ class Note(Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
-    telegram_update_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    telegram_update_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source_draft_item_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "draft_items.id",
+            name="fk_notes_source_draft_item_id_draft_items",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

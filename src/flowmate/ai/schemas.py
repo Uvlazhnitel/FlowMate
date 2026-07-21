@@ -39,6 +39,8 @@ class TemporalStatus(StrEnum):
 class DependencyRelation(StrEnum):
     BEFORE = "before"
     AFTER = "after"
+    BLOCKED_BY = "blocked_by"
+    WAITING_FOR = "waiting_for"
     CONDITIONAL = "conditional"
 
 
@@ -90,9 +92,14 @@ class DependencyCandidate(StrictDraftModel):
 
     @model_validator(mode="after")
     def validate_relation_fields(self) -> Self:
-        if self.relation in {DependencyRelation.BEFORE, DependencyRelation.AFTER}:
+        if self.relation in {
+            DependencyRelation.BEFORE,
+            DependencyRelation.AFTER,
+            DependencyRelation.BLOCKED_BY,
+            DependencyRelation.WAITING_FOR,
+        }:
             if self.target_item_number is None:
-                raise ValueError("sequential dependency requires a target item")
+                raise ValueError("work item dependency requires a target item")
         elif self.condition is None:
             raise ValueError("conditional dependency requires a condition")
         return self

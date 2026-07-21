@@ -2,8 +2,9 @@
 
 FlowMate is a Telegram-first personal assistant. Its foundation provides a
 FastAPI API, an optional aiogram bot, PostgreSQL, Alembic migrations, tests, and
-CI. Stage 1 adds text and voice notes. Stage 2 begins with optional structured
-AI drafts, without creating tasks or other product-domain records.
+CI. Stage 1 adds text and voice notes, Stage 2 adds structured AI drafts and
+clarification dialogs, and Stage 3 converts confirmed drafts into Task Engine
+records.
 
 The repository and Python package retain the technical name `flowmate`.
 
@@ -84,7 +85,11 @@ so the generated revision is written to the repository. Downgrading `0003` to
 `NOT NULL` constraint; Alembic does not delete incompatible rows automatically.
 Migration `0004` creates immutable notes. Migration `0005` adds persistent AI
 draft sessions and draft items; it can be downgraded to `0004` without removing
-source notes.
+source notes. Migration `0006` adds Task Engine records and allows immutable
+manual notes without Telegram update IDs. Downgrading `0006` requires removing
+manual notes first because the Stage 2 schema requires every Note to have a
+Telegram update ID. Migration `0007` adds unique draft-item provenance to final
+Notes so draft conversion remains idempotent.
 
 ## Start the Bot
 
@@ -191,12 +196,33 @@ date refine the same session. Accepted answers refresh the default 24-hour TTL.
 Expired drafts reject further answers. New ordinary messages are not saved as
 unrelated notes while a draft dialog is active.
 
-Draft sessions and their validated items are persisted, but confirmation only
-changes the session status to `confirmed`. No Task, Person, Topic, or follow-up
-record is created yet. Cancelling a draft never deletes its source Note. Audio
-is never sent to the AI flow or persisted. If parsing or refinement fails, the
-saved Note remains available and the bot returns a short safe error. Repeated
-Telegram updates do not invoke AI again.
+Draft sessions and their validated items are persisted. Confirmation converts
+all actionable items into WorkItems and `note` items into immutable manual
+Notes in one transaction, then marks the draft `confirmed`. Cancelling a draft
+never deletes its source Note. Audio is never sent to the AI flow or persisted.
+If parsing, refinement, or conversion fails, the saved Note and draft remain
+available and the bot returns a short safe error. Repeated Telegram updates and
+repeated confirmation do not create duplicate records.
+
+### Task Engine data model
+
+The Python service layer in `flowmate.task_engine` supports user-owned work
+items, topics, people, directed work-item relations, people associations,
+linked notes, and basic work-item events. Work items use validated types,
+statuses, priorities, and timezone-aware scheduling candidates. Topic names are
+unique per user without regard to case; people may share a display name.
+
+Notes remain separate immutable records. Existing Telegram notes can be linked
+to any number of work items, people, or topics. A domain service can also create
+a `manual` Note and its link in the caller's transaction. Source Note and source
+draft item fields preserve provenance. People and topics are matched
+case-insensitively by name or alias; clear new candidates are created, while
+vague or ambiguous candidates are skipped. Draft dependencies become directed
+WorkItem relations when both referenced items are actionable.
+
+This stage exposes no new HTTP endpoints or Telegram commands. It does not run
+a scheduler or send reminders; resolved reminder candidates are stored only as
+timezone-aware `next_follow_up_at` values.
 
 ## Operations
 
@@ -246,6 +272,9 @@ Telegram -> bot ----+  [optional Compose profile: bot]
               +-> temporary OGG -> speech provider -> note
                                                  |
                          persistent AI draft <-+-> clarification dialog
+                                      |
+                                      +-> atomic confirmed records
+                                          (Task Engine services)
 ```
 
 Both application processes use the same non-root runtime image and shared async

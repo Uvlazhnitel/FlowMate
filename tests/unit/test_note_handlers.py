@@ -406,6 +406,18 @@ def test_note_preview_is_plain_compact_and_bounded() -> None:
     assert preview.endswith("...")
 
 
+def test_manual_note_preview_has_distinct_source_label() -> None:
+    note = Note(
+        user_id=uuid4(),
+        content="Manual context",
+        source="manual",
+        telegram_update_id=None,
+        created_at=datetime(2026, 7, 20, 12, 30, tzinfo=UTC),
+    )
+
+    assert format_note_preview(note, 1).startswith("1. [вручную] 2026-07-20 12:30 UTC")
+
+
 @pytest.mark.asyncio
 async def test_notes_command_lists_only_requested_users_notes_as_plain_text() -> None:
     message = make_message(text="/notes")

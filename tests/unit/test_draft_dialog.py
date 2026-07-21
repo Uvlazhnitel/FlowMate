@@ -18,7 +18,7 @@ from flowmate.ai.service import DraftParsingService
 from flowmate.bot.filters import ActiveDraftFilter
 from flowmate.bot.handlers.clarification import active_draft_message
 from flowmate.bot.handlers.drafts import (
-    DRAFT_CONFIRMED_MESSAGE,
+    DRAFT_CONVERSION_FAILED_MESSAGE,
     DRAFT_EXPIRED_MESSAGE,
     DRAFT_FAILED_MESSAGE,
     DRAFT_NOT_FOUND_MESSAGE,
@@ -30,6 +30,11 @@ from flowmate.bot.handlers.drafts import (
 from flowmate.db.models import DraftSession
 from flowmate.drafts.questions import next_clarification_question
 from flowmate.speech.service import TranscriptionService
+from flowmate.task_engine.conversion import (
+    DraftConversionResult,
+    DraftConversionService,
+    conversion_summary,
+)
 from tests.ai_factories import make_analysis_result, make_draft_item, make_parse_result
 
 
@@ -90,6 +95,23 @@ def make_service(result: object | None = None) -> DraftParsingService:
         or make_analysis_result(make_parse_result([make_draft_item()]))
     )
     return cast(DraftParsingService, service)
+
+
+def make_conversion_service(draft: DraftSession) -> DraftConversionService:
+    service = MagicMock(spec=DraftConversionService)
+    result = DraftConversionResult(
+        draft_id=draft.id,
+        work_items=(),
+        notes=(),
+        counts={},
+    )
+
+    async def convert(*_: object, **__: object) -> DraftConversionResult:
+        draft.status = "confirmed"
+        return result
+
+    service.convert = AsyncMock(side_effect=convert)
+    return cast(DraftConversionService, service)
 
 
 def make_callback(draft_id: UUID, action: str) -> tuple[CallbackQuery, Update]:
@@ -347,7 +369,18 @@ async def test_voice_answer_refines_existing_draft() -> None:
 @pytest.mark.parametrize(
     ("phrase", "status", "response"),
     [
-        ("сохрани как есть", "confirmed", DRAFT_CONFIRMED_MESSAGE),
+        (
+            "сохрани как есть",
+            "confirmed",
+            conversion_summary(
+                DraftConversionResult(
+                    draft_id=UUID(int=0),
+                    work_items=(),
+                    notes=(),
+                    counts={},
+                )
+            ),
+        ),
         (
             "отмена",
             "cancelled",
@@ -362,6 +395,7 @@ async def test_control_phrase_closes_same_draft_idempotently(
 ) -> None:
     draft = make_draft()
     message = make_message(text=phrase)
+    conversion_service = make_conversion_service(draft)
     with (
         patch(
             "flowmate.bot.handlers.clarification.claim_update",
@@ -376,6 +410,7 @@ async def test_control_phrase_closes_same_draft_idempotently(
             cast(Bot, MagicMock()),
             draft.user_id,
             active_draft=draft,
+            draft_conversion_service=conversion_service,
         )
 
     assert draft.status == status
@@ -387,7 +422,18 @@ async def test_control_phrase_closes_same_draft_idempotently(
 @pytest.mark.parametrize(
     ("action", "expected_status", "expected_message"),
     [
-        ("confirm", "confirmed", DRAFT_CONFIRMED_MESSAGE),
+        (
+            "confirm",
+            "confirmed",
+            conversion_summary(
+                DraftConversionResult(
+                    draft_id=UUID(int=0),
+                    work_items=(),
+                    notes=(),
+                    counts={},
+                )
+            ),
+        ),
         ("cancel", "cancelled", "Черновик отменён. Исходная заметка сохранена."),
     ],
 )
@@ -399,6 +445,7 @@ async def test_draft_callbacks_transition_owned_session(
     draft = make_draft(status="ready")
     callback, update = make_callback(draft.id, action)
     session = make_session()
+    conversion_service = make_conversion_service(draft)
     with (
         patch(
             "flowmate.bot.handlers.drafts.get_user_by_telegram_id",
@@ -411,7 +458,12 @@ async def test_draft_callbacks_transition_owned_session(
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
         patch.object(Message, "edit_text", new_callable=AsyncMock) as edit_text,
     ):
-        await draft_callback(callback, update, session)
+        await draft_callback(
+            callback,
+            update,
+            session,
+            draft_conversion_service=conversion_service,
+        )
 
     assert draft.status == expected_status
     edit_text.assert_awaited_once_with(expected_message)
@@ -469,6 +521,6 @@ async def test_callback_database_failure_returns_safe_error() -> None:
 
     cast(AsyncMock, session.rollback).assert_awaited_once()
     answer.assert_awaited_once_with(
-        "Не удалось подготовить структурированный черновик.",
+        DRAFT_CONVERSION_FAILED_MESSAGE,
         show_alert=True,
     )

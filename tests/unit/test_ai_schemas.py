@@ -144,6 +144,18 @@ def test_rejects_resolved_reminder_without_explicit_time() -> None:
             "condition": None,
         },
         {
+            "relation": DependencyRelation.BLOCKED_BY,
+            "original_phrase": "заблокировано до ответа",
+            "target_item_number": None,
+            "condition": None,
+        },
+        {
+            "relation": DependencyRelation.WAITING_FOR,
+            "original_phrase": "ждёт результата",
+            "target_item_number": None,
+            "condition": None,
+        },
+        {
             "relation": DependencyRelation.CONDITIONAL,
             "original_phrase": "если согласуют",
             "target_item_number": None,

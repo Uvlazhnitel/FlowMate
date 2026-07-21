@@ -12,7 +12,7 @@ from flowmate.ai.schemas import DraftSource
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.handlers.drafts import (
     DRAFT_BUSY_MESSAGE,
-    DRAFT_CONFIRMED_MESSAGE,
+    DRAFT_CONVERSION_FAILED_MESSAGE,
     DRAFT_EXPIRED_MESSAGE,
     DRAFT_FAILED_MESSAGE,
     DRAFT_REPLY_REQUIRED_MESSAGE,
@@ -32,6 +32,11 @@ from flowmate.db.drafts import (
 from flowmate.db.models import DraftSession
 from flowmate.speech.errors import AudioTooLargeError, SpeechError, SpeechTimeoutError
 from flowmate.speech.service import TranscriptionService
+from flowmate.task_engine.conversion import (
+    DraftConversionError,
+    DraftConversionService,
+    conversion_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +58,7 @@ async def handle_control_phrase(
     update_id: int,
     user_id: UUID,
     draft_ttl_hours: int,
+    draft_conversion_service: DraftConversionService,
 ) -> bool:
     normalized = " ".join((message.text or "").split()).casefold()
     if normalized not in {"отмена", "сохрани как есть"}:
@@ -75,14 +81,30 @@ async def handle_control_phrase(
         await db_session.rollback()
         await message.answer(DRAFT_EXPIRED_MESSAGE)
         return True
-    status: DraftStatus = "cancelled" if normalized == "отмена" else "confirmed"
-    await transition_draft(db_session, claimed, status)
-    await db_session.commit()
-    response = (
-        "Черновик отменён. Исходная заметка сохранена."
-        if status == "cancelled"
-        else DRAFT_CONFIRMED_MESSAGE
-    )
+    if normalized == "отмена":
+        status: DraftStatus = "cancelled"
+        await transition_draft(db_session, claimed, status)
+        await db_session.commit()
+        response = "Черновик отменён. Исходная заметка сохранена."
+    else:
+        try:
+            result = await draft_conversion_service.convert(
+                db_session,
+                draft_id=claimed.id,
+                user_id=user_id,
+                allow_incomplete=True,
+            )
+            await db_session.commit()
+            response = conversion_summary(result)
+        except (DraftConversionError, SQLAlchemyError) as error:
+            await db_session.rollback()
+            logger.error(
+                "telegram_draft_conversion_failed user_id=%s draft_id=%s category=%s",
+                message.from_user.id if message.from_user is not None else "unknown",
+                claimed.id,
+                type(error).__name__,
+            )
+            response = DRAFT_CONVERSION_FAILED_MESSAGE
     await message.answer(response)
     return True
 
@@ -133,6 +155,7 @@ async def active_draft_message(
     expired_draft: DraftSession | None = None,
     transcription_service: TranscriptionService | None = None,
     draft_parsing_service: DraftParsingService | None = None,
+    draft_conversion_service: DraftConversionService | None = None,
     draft_ttl_hours: int = 24,
     draft_database_failed: bool = False,
     processed_draft_update: bool = False,
@@ -162,6 +185,7 @@ async def active_draft_message(
         update_id=event_update.update_id,
         user_id=draft_user_id,
         draft_ttl_hours=draft_ttl_hours,
+        draft_conversion_service=(draft_conversion_service or DraftConversionService()),
     ):
         return
     if active_draft.status == "ready":

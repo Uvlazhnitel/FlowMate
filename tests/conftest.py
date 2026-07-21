@@ -23,6 +23,20 @@ TEST_DATABASE_URL = getenv(
     ),
 )
 
+APPLICATION_TABLES = (
+    "users",
+    "notes",
+    "draft_sessions",
+    "draft_items",
+    "topics",
+    "people",
+    "work_items",
+    "work_item_people",
+    "work_item_relations",
+    "note_links",
+    "work_item_events",
+)
+
 UNIT_ENVIRONMENT_VARIABLES = (
     "APP_ENV",
     "APP_DEBUG",
@@ -113,25 +127,19 @@ def migrated_database() -> Iterator[None]:
     alembic_config = Config("alembic.ini")
     try:
         command.downgrade(alembic_config, "base")
-        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "users"))
-        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
-        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_sessions"))
-        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_items"))
+        for table_name in APPLICATION_TABLES:
+            assert not asyncio.run(database_has_table(TEST_DATABASE_URL, table_name))
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "users"))
-        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
-        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_sessions"))
-        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_items"))
+        for table_name in APPLICATION_TABLES:
+            assert asyncio.run(database_has_table(TEST_DATABASE_URL, table_name))
     except (OSError, SQLAlchemyError) as error:
         handle_database_unavailable(error)
     try:
         yield
     finally:
         command.downgrade(alembic_config, "base")
-        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "users"))
-        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
-        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_sessions"))
-        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_items"))
+        for table_name in APPLICATION_TABLES:
+            assert not asyncio.run(database_has_table(TEST_DATABASE_URL, table_name))
         command.upgrade(alembic_config, "head")
         if previous_url is None:
             environ.pop("DATABASE_URL", None)

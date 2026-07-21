@@ -8,7 +8,12 @@ from sqlalchemy import String, inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from flowmate.db.health import database_is_ready
-from tests.conftest import TEST_DATABASE_URL, database_has_table, get_table_names
+from tests.conftest import (
+    APPLICATION_TABLES,
+    TEST_DATABASE_URL,
+    database_has_table,
+    get_table_names,
+)
 
 
 def test_migrations_upgrade_from_previous_stage_revision(
@@ -16,14 +21,14 @@ def test_migrations_upgrade_from_previous_stage_revision(
 ) -> None:
     alembic_config = Config("alembic.ini")
     try:
-        command.downgrade(alembic_config, "0004_create_notes")
-        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "users"))
-        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
-        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_sessions"))
-        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_items"))
-        command.upgrade(alembic_config, "head")
+        command.downgrade(alembic_config, "0006_create_task_engine")
         assert asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_sessions"))
         assert asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_items"))
+        for table_name in APPLICATION_TABLES:
+            assert asyncio.run(database_has_table(TEST_DATABASE_URL, table_name))
+        command.upgrade(alembic_config, "head")
+        for table_name in APPLICATION_TABLES:
+            assert asyncio.run(database_has_table(TEST_DATABASE_URL, table_name))
     finally:
         command.upgrade(alembic_config, "head")
 
@@ -38,16 +43,13 @@ async def test_database_connection(database_engine: AsyncEngine) -> None:
 
 
 @pytest.mark.integration
-async def test_migrations_create_stage_one_tables(
+async def test_migrations_create_application_tables(
     database_engine: AsyncEngine,
 ) -> None:
     table_names = await get_table_names(database_engine)
 
     assert "alembic_version" in table_names
-    assert "users" in table_names
-    assert "notes" in table_names
-    assert "draft_sessions" in table_names
-    assert "draft_items" in table_names
+    assert set(APPLICATION_TABLES) <= set(table_names)
 
 
 @pytest.mark.integration
@@ -84,7 +86,7 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
     assert {constraint["name"] for constraint in check_constraints} >= {
         "ck_users_telegram_user_id_positive"
     }
-    assert revision == "0005_create_drafts"
+    assert revision == "0007_draft_conversion"
 
 
 @pytest.mark.integration
@@ -116,18 +118,21 @@ async def test_notes_schema_matches_metadata(database_engine: AsyncEngine) -> No
     assert columns["user_id"]["nullable"] is False
     assert columns["content"]["nullable"] is False
     assert columns["source"]["nullable"] is False
-    assert columns["telegram_update_id"]["nullable"] is False
+    assert columns["telegram_update_id"]["nullable"] is True
+    assert columns["source_draft_item_id"]["nullable"] is True
     assert columns["created_at"]["nullable"] is False
     assert {constraint["name"] for constraint in unique_constraints} >= {
-        "notes_telegram_update_id_key"
+        "notes_telegram_update_id_key",
+        "uq_notes_source_draft_item_id",
     }
     assert {constraint["name"] for constraint in check_constraints} >= {
         "ck_notes_content_not_blank",
         "ck_notes_source",
-        "ck_notes_telegram_update_id_positive",
+        "ck_notes_source_update_consistency",
     }
     assert {foreign_key["name"] for foreign_key in foreign_keys} >= {
-        "fk_notes_user_id_users"
+        "fk_notes_source_draft_item_id_draft_items",
+        "fk_notes_user_id_users",
     }
     assert {index["name"] for index in indexes} >= {"ix_notes_user_id_created_at"}
 
@@ -176,4 +181,55 @@ async def test_draft_schema_has_state_and_ownership_constraints(
     }
     assert {foreign_key["name"] for foreign_key in item_foreign_keys} >= {
         "fk_draft_items_draft_session_id_draft_sessions"
+    }
+
+
+@pytest.mark.integration
+async def test_task_engine_schema_has_core_constraints(
+    database_engine: AsyncEngine,
+) -> None:
+    async with database_engine.connect() as connection:
+        work_item_checks = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_check_constraints(
+                "work_items"
+            )
+        )
+        work_item_uniques = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_unique_constraints(
+                "work_items"
+            )
+        )
+        topic_indexes = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_indexes("topics")
+        )
+        note_link_checks = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_check_constraints(
+                "note_links"
+            )
+        )
+        relation_checks = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_check_constraints(
+                "work_item_relations"
+            )
+        )
+
+    assert {constraint["name"] for constraint in work_item_checks} >= {
+        "ck_work_items_priority",
+        "ck_work_items_status",
+        "ck_work_items_title_not_blank",
+        "ck_work_items_type",
+    }
+    assert {constraint["name"] for constraint in work_item_uniques} >= {
+        "uq_work_items_source_draft_item_id"
+    }
+    assert {index["name"] for index in topic_indexes} >= {
+        "ix_topics_user_active",
+        "uq_topics_user_normalized_name",
+    }
+    assert {constraint["name"] for constraint in note_link_checks} >= {
+        "ck_note_links_one_target"
+    }
+    assert {constraint["name"] for constraint in relation_checks} >= {
+        "ck_work_item_relations_not_self",
+        "ck_work_item_relations_type",
     }

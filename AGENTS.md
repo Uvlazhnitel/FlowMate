@@ -7,7 +7,8 @@ FastAPI HTTP API and an aiogram Telegram bot. Both use shared configuration and
 async SQLAlchemy infrastructure backed by PostgreSQL. Voice messages use a
 small speech provider boundary and permission-restricted temporary files; audio
 is never persisted, while text and transcriptions are stored as immutable notes.
-The project does not yet contain task-management domain logic.
+The core Task Engine models and services are available, and confirmed drafts
+are converted atomically into final WorkItems or Notes.
 
 Configuration and logging live in `flowmate.core`. API authentication lives in
 `flowmate.auth`. Database models live in `flowmate.db.models`, while schema
@@ -15,7 +16,8 @@ history is managed exclusively through Alembic migrations. Speech provider,
 transcription, and temporary-file code lives in `flowmate.speech`. Structured
 draft schemas, provider boundaries, and parsing services live in `flowmate.ai`;
 draft state persistence lives in `flowmate.db.drafts`, and clarification policy
-lives in `flowmate.drafts`.
+lives in `flowmate.drafts`. Task Engine enums and ownership-safe services live
+in `flowmate.task_engine`.
 
 Runtime code uses the `src/flowmate` package. Fast unit tests live in
 `tests/unit`; PostgreSQL-backed tests live in `tests/integration` and use only
@@ -37,11 +39,16 @@ the isolated database configured by `TEST_DATABASE_URL`.
 - AI readiness is assigned by backend thresholds, never by the provider.
 - Temporal candidates must retain their original phrase and use aware datetimes.
 - Telegram draft cancellation must not delete the source Note.
-- Draft confirmation only changes draft status; it must not create final domain
-  records before Stage 3.
+- Draft conversion must remain atomic and idempotent by source draft item ID.
+- A confirmed draft must preserve its source Note and must not create partial
+  final records.
 - Clarification answers must update the existing draft and must not create Notes.
 - Expired drafts and drafts owned by another user must reject all mutations.
-- Note creation must remain idempotent by Telegram update ID.
+- Telegram Note creation must remain idempotent by Telegram update ID; manual
+  Notes must have a null Telegram update ID.
+- Task Engine services must require `user_id`, filter reads by ownership, and
+  validate ownership before creating cross-entity links.
+- Task Engine services flush changes but leave commit and rollback to callers.
 - Do not add infrastructure or dependencies outside the current stage scope.
 
 ## Commands

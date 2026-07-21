@@ -150,7 +150,7 @@ def format_note_preview(note: Note, position: int) -> str:
     normalized = " ".join(note.content.split())
     if len(normalized) > NOTE_PREVIEW_LENGTH:
         normalized = f"{normalized[: NOTE_PREVIEW_LENGTH - 3]}..."
-    source = "голос" if note.source == "voice" else "текст"
+    source = {"voice": "голос", "manual": "вручную"}.get(note.source, "текст")
     created_at = note.created_at.strftime("%Y-%m-%d %H:%M UTC")
     return f"{position}. [{source}] {created_at}\n{normalized}"
 

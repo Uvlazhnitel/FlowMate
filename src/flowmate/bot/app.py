@@ -17,6 +17,7 @@ from flowmate.speech.factory import create_speech_provider
 from flowmate.speech.provider import SpeechToTextProvider
 from flowmate.speech.service import TranscriptionService
 from flowmate.speech.temp_files import TemporaryAudioFileService
+from flowmate.task_engine.conversion import DraftConversionService
 
 
 def create_dispatcher(
@@ -29,6 +30,7 @@ def create_dispatcher(
     dispatcher = Dispatcher(
         transcription_service=transcription_service,
         draft_parsing_service=draft_parsing_service,
+        draft_conversion_service=DraftConversionService(),
         draft_ttl_hours=settings.draft_ttl_hours,
     )
     dispatcher.include_router(

@@ -33,11 +33,11 @@ def test_note_model_shape() -> None:
     assert table.c.user_id.nullable is False
     assert isinstance(table.c.content.type, Text)
     assert table.c.source.nullable is False
-    assert table.c.telegram_update_id.nullable is False
+    assert table.c.telegram_update_id.nullable is True
     assert table.c.created_at.nullable is False
     assert {
         "notes_telegram_update_id_key",
-        "ck_notes_telegram_update_id_positive",
+        "ck_notes_source_update_consistency",
         "ck_notes_source",
         "ck_notes_content_not_blank",
     } <= {constraint.name for constraint in table.constraints}

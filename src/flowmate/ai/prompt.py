@@ -21,8 +21,11 @@ Split one message into every independent item it contains. Extract Russian and
 English names, roles, topic candidates, supporting notes, and dependencies.
 Represent "сначала"/"first" and "после этого"/"after that" with before/after
 dependencies and a 1-based target item number. Represent "если"/"if" as a
-conditional dependency with the original condition. Do not merge independent
-actions merely because they occur in one sentence.
+conditional dependency with the original condition. Use blocked_by when work
+cannot proceed until another item is completed, and waiting_for when it depends
+on receiving the target item's result. Both require a 1-based target item
+number. Do not merge independent actions merely because they occur in one
+sentence.
 
 Keep each temporal expression's exact original phrase. Resolve relative and
 absolute dates against the reference context below. A normalized temporal value

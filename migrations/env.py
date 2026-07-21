@@ -9,12 +9,31 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from flowmate.core.config import get_settings
 from flowmate.db.base import Base
-from flowmate.db.models import DraftItemRecord, DraftSession, Note, User
+from flowmate.db.models import (
+    DraftItemRecord,
+    DraftSession,
+    Note,
+    NoteLink,
+    Person,
+    Topic,
+    User,
+    WorkItem,
+    WorkItemEvent,
+    WorkItemPerson,
+    WorkItemRelation,
+)
 
 _ = User
 _ = Note
 _ = DraftSession
 _ = DraftItemRecord
+_ = Topic
+_ = Person
+_ = WorkItem
+_ = WorkItemPerson
+_ = WorkItemRelation
+_ = NoteLink
+_ = WorkItemEvent
 
 config = context.config
 if config.config_file_name is not None:

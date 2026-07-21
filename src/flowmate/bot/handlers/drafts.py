@@ -40,12 +40,19 @@ from flowmate.db.drafts import (
 from flowmate.db.models import DraftSession
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.drafts.questions import ClarificationQuestion, next_clarification_question
+from flowmate.task_engine.conversion import (
+    DraftConversionError,
+    DraftConversionService,
+    conversion_summary,
+)
 
 DRAFT_ANALYZING_MESSAGE = "Заметка сохранена. Анализирую содержание."
 DRAFT_FAILED_MESSAGE = "Не удалось подготовить структурированный черновик."
 DRAFT_CONTROL_MESSAGE = "Проверьте черновик. Финальные записи ещё не созданы."
 DRAFT_CANCELLED_MESSAGE = "Черновик отменён. Исходная заметка сохранена."
-DRAFT_CONFIRMED_MESSAGE = "Черновик подтверждён. Финальные записи пока не созданы."
+DRAFT_CONVERSION_FAILED_MESSAGE = (
+    "Не удалось создать записи из черновика. Черновик сохранён."
+)
 DRAFT_EXPIRED_MESSAGE = "Срок действия черновика истёк."
 DRAFT_NOT_FOUND_MESSAGE = "Активный черновик не найден."
 DRAFT_BUSY_MESSAGE = "Предыдущий ответ ещё обрабатывается."
@@ -122,7 +129,13 @@ def format_dependency(dependency: DependencyCandidate) -> str:
     if dependency.relation is DependencyRelation.CONDITIONAL:
         condition = normalize_display_text(dependency.condition or "")
         return f'если "{condition}" ({phrase})'
-    relation = "до" if dependency.relation is DependencyRelation.BEFORE else "после"
+    relation_labels = {
+        DependencyRelation.BEFORE: "до",
+        DependencyRelation.AFTER: "после",
+        DependencyRelation.BLOCKED_BY: "заблокировано до",
+        DependencyRelation.WAITING_FOR: "ожидает",
+    }
+    relation = relation_labels[dependency.relation]
     return f'{relation} пункта {dependency.target_item_number} ("{phrase}")'
 
 
@@ -401,6 +414,7 @@ async def _draft_callback(
     event_update: Update,
     db_session: AsyncSession,
     draft_parsing_service: DraftParsingService | None = None,
+    draft_conversion_service: DraftConversionService | None = None,
     draft_ttl_hours: int = 24,
 ) -> None:
     parsed = parse_callback_data(callback_query.data)
@@ -448,11 +462,21 @@ async def _draft_callback(
         await callback_query.answer()
         await callback_query.message.edit_text(DRAFT_CANCELLED_MESSAGE)
         return
-    if action == "confirm" and draft.status in {"needs_clarification", "ready"}:
-        await transition_draft(db_session, draft, "confirmed")
+    if action == "confirm" and draft.status in {
+        "needs_clarification",
+        "ready",
+        "confirmed",
+    }:
+        converter = draft_conversion_service or DraftConversionService()
+        result = await converter.convert(
+            db_session,
+            draft_id=draft.id,
+            user_id=user.id,
+            allow_incomplete=draft.status == "needs_clarification",
+        )
         await db_session.commit()
         await callback_query.answer()
-        await callback_query.message.edit_text(DRAFT_CONFIRMED_MESSAGE)
+        await callback_query.message.edit_text(conversion_summary(result))
         return
     if action == "change" and draft.status in {"needs_clarification", "ready"}:
         draft.status = "needs_clarification"
@@ -484,9 +508,15 @@ async def _draft_callback(
             return
         await callback_query.answer()
         if option.get("action") == "confirm":
-            await transition_draft(db_session, draft, "confirmed")
+            converter = draft_conversion_service or DraftConversionService()
+            result = await converter.convert(
+                db_session,
+                draft_id=draft.id,
+                user_id=user.id,
+                allow_incomplete=True,
+            )
             await db_session.commit()
-            await callback_query.message.edit_text(DRAFT_CONFIRMED_MESSAGE)
+            await callback_query.message.edit_text(conversion_summary(result))
             return
         if option.get("action") == "change":
             draft.current_question = DRAFT_CHANGE_QUESTION
@@ -521,6 +551,7 @@ async def draft_callback(
     event_update: Update,
     db_session: AsyncSession,
     draft_parsing_service: DraftParsingService | None = None,
+    draft_conversion_service: DraftConversionService | None = None,
     draft_ttl_hours: int = 24,
 ) -> None:
     try:
@@ -529,12 +560,19 @@ async def draft_callback(
             event_update,
             db_session,
             draft_parsing_service,
+            draft_conversion_service,
             draft_ttl_hours,
         )
-    except SQLAlchemyError:
+    except (DraftConversionError, SQLAlchemyError) as error:
         await db_session.rollback()
+        parsed = parse_callback_data(callback_query.data)
         logger.error(
-            "telegram_draft_database_failed user_id=%s operation=callback",
+            "telegram_draft_conversion_failed user_id=%s draft_id=%s category=%s",
             callback_query.from_user.id,
+            parsed[1] if parsed is not None else "unknown",
+            type(error).__name__,
         )
-        await callback_query.answer(DRAFT_FAILED_MESSAGE, show_alert=True)
+        await callback_query.answer(
+            DRAFT_CONVERSION_FAILED_MESSAGE,
+            show_alert=True,
+        )
