@@ -76,6 +76,28 @@ TEMPORAL_STATUS_LABELS = {
 logger = logging.getLogger(__name__)
 
 
+async def mark_draft_failed_safely(
+    db_session: AsyncSession,
+    draft: DraftSession,
+) -> None:
+    try:
+        await transition_draft(db_session, draft, "failed")
+        await db_session.commit()
+    except SQLAlchemyError:
+        await db_session.rollback()
+
+
+async def release_processing_update_safely(
+    db_session: AsyncSession,
+    draft: DraftSession,
+) -> None:
+    try:
+        await clear_processing_update(db_session, draft)
+        await db_session.commit()
+    except SQLAlchemyError:
+        await db_session.rollback()
+
+
 def normalize_display_text(value: str) -> str:
     return " ".join(value.split())
 
@@ -260,8 +282,7 @@ async def analyze_note_content(
         )
         await db_session.commit()
     except AIError as error:
-        await transition_draft(db_session, draft, "failed")
-        await db_session.commit()
+        await mark_draft_failed_safely(db_session, draft)
         logger.warning(
             "telegram_draft_failed user_id=%s category=%s",
             telegram_user_id,
@@ -275,11 +296,7 @@ async def analyze_note_content(
             "telegram_draft_database_failed user_id=%s operation=save_analysis",
             telegram_user_id,
         )
-        try:
-            await transition_draft(db_session, draft, "failed")
-            await db_session.commit()
-        except SQLAlchemyError:
-            await db_session.rollback()
+        await mark_draft_failed_safely(db_session, draft)
         await message.answer(DRAFT_FAILED_MESSAGE)
         return
 
@@ -344,8 +361,7 @@ async def refine_draft(
         )
         await db_session.commit()
     except AIError as error:
-        await clear_processing_update(db_session, claimed_draft)
-        await db_session.commit()
+        await release_processing_update_safely(db_session, claimed_draft)
         logger.warning(
             "telegram_draft_refinement_failed user_id=%s category=%s",
             telegram_user_id,
@@ -355,6 +371,7 @@ async def refine_draft(
         return
     except SQLAlchemyError:
         await db_session.rollback()
+        await release_processing_update_safely(db_session, claimed_draft)
         logger.error(
             "telegram_draft_database_failed user_id=%s operation=refine",
             telegram_user_id,

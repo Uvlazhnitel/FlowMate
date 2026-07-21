@@ -1,7 +1,7 @@
 # ruff: noqa: RUF001
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -12,15 +12,20 @@ from aiogram.types import CallbackQuery, Chat, Message, Update, User, Voice
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from flowmate.ai.errors import AIProviderError
 from flowmate.ai.schemas import DraftSource
 from flowmate.ai.service import DraftParsingService
+from flowmate.bot.filters import ActiveDraftFilter
 from flowmate.bot.handlers.clarification import active_draft_message
 from flowmate.bot.handlers.drafts import (
     DRAFT_CONFIRMED_MESSAGE,
     DRAFT_EXPIRED_MESSAGE,
+    DRAFT_FAILED_MESSAGE,
     DRAFT_NOT_FOUND_MESSAGE,
     DRAFT_REPLY_REQUIRED_MESSAGE,
+    analyze_note_content,
     draft_callback,
+    refine_draft,
 )
 from flowmate.db.models import DraftSession
 from flowmate.drafts.questions import next_clarification_question
@@ -117,6 +122,31 @@ def test_question_planner_asks_one_critical_question() -> None:
 
 
 @pytest.mark.asyncio
+async def test_active_draft_filter_intercepts_ordinary_text() -> None:
+    message = make_message(text="обычная новая заметка")
+    draft = make_draft()
+    user_id = draft.user_id
+    with (
+        patch(
+            "flowmate.bot.filters.get_user_by_telegram_id",
+            new=AsyncMock(return_value=SimpleNamespace(id=user_id)),
+        ),
+        patch(
+            "flowmate.bot.filters.get_active_draft_for_user",
+            new=AsyncMock(return_value=draft),
+        ),
+    ):
+        result = await ActiveDraftFilter()(
+            message,
+            make_session(),
+            Update(update_id=499, message=message),
+        )
+
+    assert isinstance(result, dict)
+    assert result == {"active_draft": draft, "draft_user_id": user_id}
+
+
+@pytest.mark.asyncio
 async def test_refinement_sends_existing_draft_context_to_provider() -> None:
     provider = MagicMock()
     provider.parse = AsyncMock(return_value=make_parse_result([make_draft_item()]))
@@ -189,6 +219,79 @@ async def test_duplicate_clarification_update_does_not_call_ai() -> None:
         )
 
     cast(AsyncMock, service.refine).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_initial_ai_failure_stays_safe_when_failed_transition_fails() -> None:
+    message = make_message(text="private draft contents")
+    draft = make_draft(status="parsing")
+    service = make_service()
+    cast(AsyncMock, service.refine).reset_mock()
+    cast(Any, service).parse = AsyncMock(
+        side_effect=AIProviderError("private provider response")
+    )
+    session = make_session()
+    with (
+        patch(
+            "flowmate.bot.handlers.drafts.transition_draft",
+            new=AsyncMock(side_effect=SQLAlchemyError("private database detail")),
+        ),
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+    ):
+        await analyze_note_content(
+            message,
+            content=message.text or "",
+            telegram_user_id=123,
+            source=DraftSource.TEXT,
+            service=service,
+            db_session=session,
+            draft=draft,
+            draft_ttl_hours=24,
+        )
+
+    cast(AsyncMock, session.rollback).assert_awaited_once()
+    answer.assert_awaited_once_with(DRAFT_FAILED_MESSAGE)
+
+
+@pytest.mark.asyncio
+async def test_refinement_database_failure_releases_claimed_update() -> None:
+    message = make_message(text="не Антон, а Мария")
+    draft = make_draft()
+    session = make_session()
+    service = make_service()
+    clear_processing = AsyncMock()
+    with (
+        patch(
+            "flowmate.bot.handlers.drafts.claim_update",
+            new=AsyncMock(return_value=("claimed", draft)),
+        ),
+        patch(
+            "flowmate.bot.handlers.drafts.replace_draft_analysis",
+            new=AsyncMock(side_effect=SQLAlchemyError("private database detail")),
+        ),
+        patch(
+            "flowmate.bot.handlers.drafts.clear_processing_update",
+            new=clear_processing,
+        ),
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+    ):
+        await refine_draft(
+            message,
+            draft=draft,
+            answer=message.text or "",
+            answer_source=DraftSource.TEXT,
+            update_id=505,
+            user_id=draft.user_id,
+            telegram_user_id=123,
+            service=service,
+            db_session=session,
+            draft_ttl_hours=24,
+        )
+
+    clear_processing.assert_awaited_once_with(session, draft)
+    assert cast(AsyncMock, session.rollback).await_count == 1
+    assert cast(AsyncMock, session.commit).await_count == 2
+    answer.assert_awaited_once_with(DRAFT_FAILED_MESSAGE)
 
 
 @pytest.mark.asyncio

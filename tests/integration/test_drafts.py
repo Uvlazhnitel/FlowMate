@@ -1,10 +1,13 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from aiogram.types import Chat, Message, Update
+from aiogram.types import User as TelegramUser
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from flowmate.bot.handlers.notes import save_note_for_message
 from flowmate.db.drafts import (
     claim_update,
     create_parsing_draft,
@@ -37,6 +40,62 @@ async def make_source_note(
         telegram_update_id=update_id,
     )
     return user, note
+
+
+@pytest.mark.integration
+async def test_duplicate_telegram_update_creates_one_note_and_draft(
+    database_session: AsyncSession,
+) -> None:
+    message = Message(
+        message_id=1,
+        date=datetime.now(UTC),
+        chat=Chat(id=510_000, type="private"),
+        from_user=TelegramUser(
+            id=510_000,
+            is_bot=False,
+            first_name="Test",
+        ),
+        text="One source message",
+    )
+    update = Update(update_id=610_000, message=message)
+
+    first = await save_note_for_message(
+        message,
+        update,
+        database_session,
+        content=message.text or "",
+        source="text",
+        create_draft=True,
+    )
+    second = await save_note_for_message(
+        message,
+        update,
+        database_session,
+        content=message.text or "",
+        source="text",
+        create_draft=True,
+    )
+
+    assert first.status == "created"
+    assert second.status == "duplicate"
+    assert first.note is not None and second.note is not None
+    assert first.draft is not None and second.draft is not None
+    assert first.note.id == second.note.id
+    assert first.draft.id == second.draft.id
+    assert (
+        await database_session.scalar(
+            select(func.count(Note.id)).where(Note.telegram_update_id == 610_000)
+        )
+        == 1
+    )
+    assert (
+        await database_session.scalar(
+            select(func.count(DraftSession.id)).where(
+                DraftSession.source_note_id == first.note.id
+            )
+        )
+        == 1
+    )
 
 
 @pytest.mark.integration

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
@@ -85,6 +86,28 @@ async def test_openai_provider_maps_validation_and_sdk_errors() -> None:
     parse.side_effect = OpenAIError("private provider detail")
     with pytest.raises(AIProviderError, match="provider request failed"):
         await provider.parse(system_prompt="prompt", user_text="private note")
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_does_not_log_sensitive_request_or_response(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_prompt = "private system prompt"
+    private_text = "private user text"
+    private_response = "private model response"
+    private_key = "sk-private-api-key"
+    client, parse, _ = make_client(None)
+    provider = OpenAIAIProvider(client, model="model", timeout_seconds=10)
+    parse.side_effect = OpenAIError(private_response)
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        pytest.raises(AIProviderError),
+    ):
+        await provider.parse(system_prompt=private_prompt, user_text=private_text)
+
+    for secret in (private_prompt, private_text, private_response, private_key):
+        assert secret not in caplog.text
 
 
 class SlowProvider:
