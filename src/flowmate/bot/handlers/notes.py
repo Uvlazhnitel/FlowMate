@@ -1,12 +1,20 @@
 # ruff: noqa: RUF001
 import logging
+from dataclasses import dataclass
 from typing import Literal
 
 from aiogram.types import Message, Update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from flowmate.db.models import Note
+from flowmate.ai.schemas import DraftSource
+from flowmate.ai.service import DraftParsingService
+from flowmate.bot.handlers.drafts import (
+    DRAFT_ANALYZING_MESSAGE,
+    analyze_note_content,
+)
+from flowmate.db.drafts import create_parsing_draft, get_draft_by_source_note
+from flowmate.db.models import DraftSession, Note, User
 from flowmate.db.notes import (
     NoteSource,
     create_note_idempotently,
@@ -23,7 +31,16 @@ NO_NOTES_MESSAGE = "Заметок пока нет."
 NOTE_PREVIEW_LENGTH = 300
 NOTE_LIST_LIMIT = 10
 
-NoteSaveResult = Literal["created", "duplicate", "failed"]
+NoteSaveStatus = Literal["created", "duplicate", "failed"]
+
+
+@dataclass(frozen=True, slots=True)
+class NoteSaveOutcome:
+    status: NoteSaveStatus
+    note: Note | None = None
+    user: User | None = None
+    draft: DraftSession | None = None
+
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +52,12 @@ async def save_note_for_message(
     *,
     content: str,
     source: NoteSource,
-) -> NoteSaveResult:
+    create_draft: bool = False,
+    draft_ttl_hours: int = 24,
+) -> NoteSaveOutcome:
     telegram_user = message.from_user
     if telegram_user is None:
-        return "failed"
+        return NoteSaveOutcome("failed")
 
     try:
         user, _ = await get_or_create_telegram_user(
@@ -46,13 +65,25 @@ async def save_note_for_message(
             telegram_user.id,
             display_name=telegram_user.full_name[:255],
         )
-        _, created = await create_note_idempotently(
+        note, created = await create_note_idempotently(
             db_session,
             user_id=user.id,
             content=content,
             source=source,
             telegram_update_id=event_update.update_id,
         )
+        draft = (
+            await get_draft_by_source_note(db_session, note.id)
+            if create_draft
+            else None
+        )
+        if create_draft and created:
+            draft = await create_parsing_draft(
+                db_session,
+                user_id=user.id,
+                source_note_id=note.id,
+                ttl_hours=draft_ttl_hours,
+            )
         await db_session.commit()
     except SQLAlchemyError:
         await db_session.rollback()
@@ -60,15 +91,22 @@ async def save_note_for_message(
             "telegram_note_database_failed user_id=%s operation=create",
             telegram_user.id,
         )
-        return "failed"
+        return NoteSaveOutcome("failed")
 
-    return "created" if created else "duplicate"
+    return NoteSaveOutcome(
+        "created" if created else "duplicate",
+        note=note,
+        user=user,
+        draft=draft,
+    )
 
 
 async def text_note(
     message: Message,
     event_update: Update,
     db_session: AsyncSession,
+    draft_parsing_service: DraftParsingService | None = None,
+    draft_ttl_hours: int = 24,
 ) -> None:
     content = message.text.strip() if message.text is not None else ""
     if not content:
@@ -81,11 +119,29 @@ async def text_note(
         db_session,
         content=content,
         source="text",
+        create_draft=draft_parsing_service is not None,
+        draft_ttl_hours=draft_ttl_hours,
     )
-    if result == "failed":
+    if result.status == "failed":
         await message.answer(NOTE_SAVE_FAILED_MESSAGE)
-    elif result == "duplicate":
+    elif result.status == "duplicate":
         await message.answer(NOTE_ALREADY_SAVED_MESSAGE)
+    elif (
+        draft_parsing_service is not None
+        and message.from_user is not None
+        and result.draft is not None
+    ):
+        await message.answer(DRAFT_ANALYZING_MESSAGE)
+        await analyze_note_content(
+            message,
+            content=content,
+            telegram_user_id=message.from_user.id,
+            source=DraftSource.TEXT,
+            service=draft_parsing_service,
+            db_session=db_session,
+            draft=result.draft,
+            draft_ttl_hours=draft_ttl_hours,
+        )
     else:
         await message.answer(NOTE_SAVED_MESSAGE)
 

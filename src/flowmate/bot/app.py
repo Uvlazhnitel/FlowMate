@@ -1,8 +1,13 @@
 import logging
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from flowmate.ai.errors import AIConfigurationError
+from flowmate.ai.factory import create_ai_provider
+from flowmate.ai.provider import AIProvider
+from flowmate.ai.service import DraftParsingService
 from flowmate.bot.handlers import create_router
 from flowmate.core.config import Settings, get_settings
 from flowmate.core.logging import configure_logging
@@ -19,8 +24,13 @@ def create_dispatcher(
     session_factory: async_sessionmaker[AsyncSession],
     engine: AsyncEngine,
     transcription_service: TranscriptionService | None = None,
+    draft_parsing_service: DraftParsingService | None = None,
 ) -> Dispatcher:
-    dispatcher = Dispatcher(transcription_service=transcription_service)
+    dispatcher = Dispatcher(
+        transcription_service=transcription_service,
+        draft_parsing_service=draft_parsing_service,
+        draft_ttl_hours=settings.draft_ttl_hours,
+    )
     dispatcher.include_router(
         create_router(settings.telegram_allowed_user_ids, session_factory, engine)
     )
@@ -42,6 +52,7 @@ async def run_bot(settings: Settings | None = None) -> None:
     session_factory = create_session_factory(engine)
     logger = logging.getLogger(__name__)
     speech_provider: SpeechToTextProvider | None = None
+    ai_provider: AIProvider | None = None
     try:
         try:
             speech_provider = create_speech_provider(app_settings)
@@ -58,11 +69,31 @@ async def run_bot(settings: Settings | None = None) -> None:
             if speech_provider is not None
             else None
         )
+        try:
+            ai_provider = create_ai_provider(app_settings)
+        except AIConfigurationError:
+            logger.warning("ai_provider_disabled category=incomplete_configuration")
+
+        draft_parsing_service = (
+            DraftParsingService(
+                ai_provider,
+                timezone=ZoneInfo(app_settings.app_timezone),
+                active_workspace=app_settings.app_active_workspace,
+                timeout_seconds=app_settings.ai_timeout_seconds,
+                high_confidence_threshold=(app_settings.ai_high_confidence_threshold),
+                clarification_confidence_threshold=(
+                    app_settings.ai_clarification_confidence_threshold
+                ),
+            )
+            if ai_provider is not None
+            else None
+        )
         dispatcher = create_dispatcher(
             app_settings,
             session_factory,
             engine,
             transcription_service,
+            draft_parsing_service,
         )
         async with Bot(token=bot_token) as bot:
             logger.info("telegram_bot_started")
@@ -72,6 +103,8 @@ async def run_bot(settings: Settings | None = None) -> None:
                 close_bot_session=False,
             )
     finally:
+        if ai_provider is not None:
+            await ai_provider.close()
         if speech_provider is not None:
             await speech_provider.close()
         await engine.dispose()

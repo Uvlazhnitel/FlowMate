@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import Message, TelegramObject
+from aiogram.types import CallbackQuery, Message, TelegramObject
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from flowmate.db.session import session_scope
@@ -22,7 +22,7 @@ class AllowedUserMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if not isinstance(event, Message):
+        if not isinstance(event, (Message, CallbackQuery)):
             return await handler(event, data)
 
         user_id = event.from_user.id if event.from_user is not None else None
@@ -31,7 +31,13 @@ class AllowedUserMiddleware(BaseMiddleware):
 
         if user_id is not None:
             self.logger.warning("unauthorized_telegram_user user_id=%s", user_id)
-        await event.answer("У вас нет доступа к этому боту.")  # noqa: RUF001
+        if isinstance(event, CallbackQuery):
+            await event.answer(
+                "У вас нет доступа к этому действию.",  # noqa: RUF001
+                show_alert=True,
+            )
+        else:
+            await event.answer("У вас нет доступа к этому боту.")  # noqa: RUF001
         return None
 
 

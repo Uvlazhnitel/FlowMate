@@ -32,6 +32,14 @@ def test_loads_development_defaults_without_environment() -> None:
     assert settings.speech_language == "ru"
     assert settings.speech_timeout_seconds == 60
     assert settings.speech_max_file_size_bytes == 20_000_000
+    assert settings.ai_provider is None
+    assert settings.ai_model is None
+    assert settings.ai_timeout_seconds == 60
+    assert settings.app_timezone == "UTC"
+    assert settings.app_active_workspace == "personal"
+    assert settings.ai_high_confidence_threshold == 0.8
+    assert settings.ai_clarification_confidence_threshold == 0.5
+    assert settings.draft_ttl_hours == 24
 
 
 def test_parses_speech_configuration() -> None:
@@ -65,6 +73,34 @@ def test_empty_speech_configuration_is_disabled() -> None:
     assert settings.speech_model is None
 
 
+def test_parses_ai_configuration() -> None:
+    settings = Settings(
+        _env_file=None,
+        ai_provider="OPENAI",
+        ai_model=" configured-ai-model ",
+        ai_timeout_seconds=45,
+        app_timezone="Europe/Riga",
+        app_active_workspace=" client-alpha ",
+        ai_high_confidence_threshold=0.85,
+        ai_clarification_confidence_threshold=0.6,
+    )
+
+    assert settings.ai_provider == "openai"
+    assert settings.ai_model == "configured-ai-model"
+    assert settings.ai_timeout_seconds == 45
+    assert settings.app_timezone == "Europe/Riga"
+    assert settings.app_active_workspace == "client-alpha"
+    assert settings.ai_high_confidence_threshold == 0.85
+    assert settings.ai_clarification_confidence_threshold == 0.6
+
+
+def test_empty_ai_configuration_is_disabled() -> None:
+    settings = Settings(_env_file=None, ai_provider=" ", ai_model=" ")
+
+    assert settings.ai_provider is None
+    assert settings.ai_model is None
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -72,11 +108,28 @@ def test_empty_speech_configuration_is_disabled() -> None:
         ("speech_language", "1x"),
         ("speech_timeout_seconds", 0),
         ("speech_max_file_size_bytes", 0),
+        ("ai_timeout_seconds", 0),
+        ("app_timezone", "Not/A-Timezone"),
+        ("app_timezone", " "),
+        ("app_active_workspace", " "),
+        ("ai_high_confidence_threshold", 1.01),
+        ("ai_clarification_confidence_threshold", -0.01),
+        ("draft_ttl_hours", 0),
+        ("draft_ttl_hours", 721),
     ],
 )
 def test_rejects_invalid_speech_configuration(field: str, value: object) -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **cast(Any, {field: value}))
+
+
+def test_rejects_overlapping_confidence_thresholds() -> None:
+    with pytest.raises(ValidationError, match="clarification threshold"):
+        Settings(
+            _env_file=None,
+            ai_high_confidence_threshold=0.5,
+            ai_clarification_confidence_threshold=0.5,
+        )
 
 
 @pytest.mark.parametrize(

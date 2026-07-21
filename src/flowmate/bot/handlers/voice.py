@@ -8,6 +8,13 @@ from aiogram.types import Message, Update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from flowmate.ai.schemas import DraftSource
+from flowmate.ai.service import DraftParsingService
+from flowmate.bot.formatting import TELEGRAM_TEXT_LIMIT, split_plain_text
+from flowmate.bot.handlers.drafts import (
+    DRAFT_ANALYZING_MESSAGE,
+    analyze_note_content,
+)
 from flowmate.bot.handlers.notes import (
     NOTE_ALREADY_SAVED_MESSAGE,
     NOTE_SAVE_FAILED_MESSAGE,
@@ -26,24 +33,11 @@ OVERSIZED_MESSAGE = (
 TRANSCRIPTION_FAILED_MESSAGE = (
     "Не удалось распознать голосовое сообщение. Попробуйте позже."
 )
-TELEGRAM_TEXT_LIMIT = 4000
-
 logger = logging.getLogger(__name__)
 
 
 def split_transcription(text: str, max_length: int = TELEGRAM_TEXT_LIMIT) -> list[str]:
-    chunks: list[str] = []
-    remaining = text
-    while len(remaining) > max_length:
-        newline = remaining.rfind("\n", 0, max_length + 1)
-        space = remaining.rfind(" ", 0, max_length + 1)
-        boundary = max(newline, space)
-        split_at = boundary + 1 if boundary >= max_length // 2 else max_length
-        chunks.append(remaining[:split_at])
-        remaining = remaining[split_at:]
-    if remaining:
-        chunks.append(remaining)
-    return chunks
+    return split_plain_text(text, max_length)
 
 
 async def voice_message(
@@ -52,6 +46,8 @@ async def voice_message(
     event_update: Update,
     db_session: AsyncSession,
     transcription_service: TranscriptionService | None,
+    draft_parsing_service: DraftParsingService | None = None,
+    draft_ttl_hours: int = 24,
 ) -> None:
     voice = message.voice
     telegram_user = message.from_user
@@ -128,14 +124,30 @@ async def voice_message(
         db_session,
         content=transcription,
         source="voice",
+        create_draft=draft_parsing_service is not None,
+        draft_ttl_hours=draft_ttl_hours,
     )
-    if save_result == "failed":
+    if save_result.status == "failed":
         await message.answer(NOTE_SAVE_FAILED_MESSAGE)
         return
-    if save_result == "duplicate":
+    if save_result.status == "duplicate":
         await message.answer(NOTE_ALREADY_SAVED_MESSAGE)
         return
 
     for chunk in split_transcription(transcription):
         await message.answer(chunk, parse_mode=None)
-    await message.answer(NOTE_SAVED_MESSAGE)
+    if draft_parsing_service is None or save_result.draft is None:
+        await message.answer(NOTE_SAVED_MESSAGE)
+        return
+
+    await message.answer(DRAFT_ANALYZING_MESSAGE)
+    await analyze_note_content(
+        message,
+        content=transcription,
+        telegram_user_id=telegram_user.id,
+        source=DraftSource.VOICE,
+        service=draft_parsing_service,
+        db_session=db_session,
+        draft=save_result.draft,
+        draft_ttl_hours=draft_ttl_hours,
+    )

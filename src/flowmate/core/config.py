@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -85,6 +86,39 @@ class Settings(BaseSettings):
         gt=0,
         validation_alias="SPEECH_MAX_FILE_SIZE_BYTES",
     )
+    ai_provider: Literal["openai"] | None = Field(
+        default=None,
+        validation_alias="AI_PROVIDER",
+    )
+    ai_model: str | None = Field(default=None, validation_alias="AI_MODEL")
+    ai_timeout_seconds: int = Field(
+        default=60,
+        gt=0,
+        validation_alias="AI_TIMEOUT_SECONDS",
+    )
+    app_timezone: str = Field(default="UTC", validation_alias="APP_TIMEZONE")
+    app_active_workspace: str = Field(
+        default="personal",
+        validation_alias="APP_ACTIVE_WORKSPACE",
+    )
+    ai_high_confidence_threshold: float = Field(
+        default=0.80,
+        ge=0.0,
+        le=1.0,
+        validation_alias="AI_HIGH_CONFIDENCE_THRESHOLD",
+    )
+    ai_clarification_confidence_threshold: float = Field(
+        default=0.50,
+        ge=0.0,
+        le=1.0,
+        validation_alias="AI_CLARIFICATION_CONFIDENCE_THRESHOLD",
+    )
+    draft_ttl_hours: int = Field(
+        default=24,
+        gt=0,
+        le=720,
+        validation_alias="DRAFT_TTL_HOURS",
+    )
     cors_origins: Annotated[frozenset[str], NoDecode] = Field(
         default_factory=frozenset,
         validation_alias="CORS_ORIGINS",
@@ -106,17 +140,17 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("speech_provider", mode="before")
+    @field_validator("speech_provider", "ai_provider", mode="before")
     @classmethod
-    def normalize_empty_speech_provider(cls, value: object) -> object:
+    def normalize_empty_provider(cls, value: object) -> object:
         if isinstance(value, str):
             normalized = value.strip().lower()
             return normalized or None
         return value
 
-    @field_validator("speech_model", mode="before")
+    @field_validator("speech_model", "ai_model", mode="before")
     @classmethod
-    def normalize_empty_speech_model(cls, value: object) -> object:
+    def normalize_empty_model(cls, value: object) -> object:
         if isinstance(value, str):
             normalized = value.strip()
             return normalized or None
@@ -128,6 +162,28 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if len(normalized) != 2 or not normalized.isalpha():
             raise ValueError("speech language must be an ISO-639-1 code")
+        return normalized
+
+    @field_validator("app_timezone")
+    @classmethod
+    def validate_app_timezone(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("application timezone must not be empty")
+        try:
+            ZoneInfo(normalized)
+        except ZoneInfoNotFoundError as error:
+            raise ValueError(
+                "application timezone must be a valid IANA timezone"
+            ) from error
+        return normalized
+
+    @field_validator("app_active_workspace")
+    @classmethod
+    def validate_active_workspace(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("active workspace must not be empty")
         return normalized
 
     @field_validator("app_port")
@@ -199,6 +255,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> Self:
+        if (
+            self.ai_clarification_confidence_threshold
+            >= self.ai_high_confidence_threshold
+        ):
+            raise ValueError(
+                "AI clarification threshold must be lower than high threshold"
+            )
         if self.app_env != "production":
             return self
         if self.app_debug:

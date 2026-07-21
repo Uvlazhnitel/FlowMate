@@ -6,22 +6,40 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 from aiogram import Bot
-from aiogram.types import Chat, Message, TelegramObject, Update, User, Voice
+from aiogram.types import (
+    CallbackQuery,
+    Chat,
+    Message,
+    TelegramObject,
+    Update,
+    User,
+    Voice,
+)
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from flowmate.ai.schemas import DraftItemType, DraftSource
+from flowmate.ai.service import DraftParsingService
 from flowmate.bot.app import create_dispatcher, run_bot
 from flowmate.bot.handlers.commands import (
     help_command,
     status_command,
     unsupported_message,
 )
+from flowmate.bot.handlers.drafts import (
+    DRAFT_ANALYZING_MESSAGE,
+    DRAFT_CONTROL_MESSAGE,
+    parse_callback_data,
+)
 from flowmate.bot.handlers.notes import (
     NOTE_ALREADY_SAVED_MESSAGE,
     NOTE_SAVE_FAILED_MESSAGE,
     NOTE_SAVED_MESSAGE,
+    NoteSaveOutcome,
+    NoteSaveStatus,
 )
 from flowmate.bot.handlers.voice import (
     OVERSIZED_MESSAGE,
@@ -33,9 +51,11 @@ from flowmate.bot.handlers.voice import (
 )
 from flowmate.bot.middleware import AllowedUserMiddleware, DatabaseSessionMiddleware
 from flowmate.core.config import Settings
+from flowmate.db.models import DraftSession
 from flowmate.speech.errors import SpeechProviderError, SpeechTimeoutError
 from flowmate.speech.service import TranscriptionService
 from flowmate.speech.temp_files import TemporaryAudioFileService
+from tests.ai_factories import make_analysis_result, make_draft_item, make_parse_result
 
 
 def make_message(
@@ -70,6 +90,16 @@ def make_voice_message(user_id: int, *, file_size: int | None = 5) -> Message:
 
 def make_update(message: Message, update_id: int = 1001) -> Update:
     return Update(update_id=update_id, message=message)
+
+
+def make_callback(user_id: int, message: Message | None = None) -> CallbackQuery:
+    return CallbackQuery(
+        id="callback-id",
+        from_user=User(id=user_id, is_bot=False, first_name="Test"),
+        chat_instance="chat-instance",
+        message=message,
+        data="draft:cancel",
+    )
 
 
 def make_mock_session() -> AsyncSession:
@@ -137,12 +167,24 @@ async def invoke_voice(
     service: TranscriptionService | None,
     *,
     existing_note: object | None = None,
-    save_result: str = "created",
+    save_result: NoteSaveStatus = "created",
     session: AsyncSession | None = None,
+    draft_service: DraftParsingService | None = None,
 ) -> tuple[AsyncMock, AsyncMock]:
     db_session = session or make_mock_session()
     get_note = AsyncMock(return_value=existing_note)
-    save_note = AsyncMock(return_value=save_result)
+    draft = (
+        DraftSession(
+            id=uuid4(),
+            user_id=uuid4(),
+            source_note_id=uuid4(),
+            status="parsing",
+            expires_at=datetime.now(UTC),
+        )
+        if draft_service is not None and save_result == "created"
+        else None
+    )
+    save_note = AsyncMock(return_value=NoteSaveOutcome(save_result, draft=draft))
     with (
         patch(
             "flowmate.bot.handlers.voice.get_note_by_telegram_update_id",
@@ -159,6 +201,7 @@ async def invoke_voice(
             make_update(message),
             db_session,
             service,
+            draft_service,
         )
     return get_note, save_note
 
@@ -196,12 +239,46 @@ async def test_denied_user_gets_safe_response_and_numeric_log(
 
 
 @pytest.mark.asyncio
+async def test_callback_allowlist_allows_owner_and_rejects_unknown_user(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    middleware = AllowedUserMiddleware(frozenset({123}))
+    handler = AsyncMock(return_value="handled")
+
+    allowed = await middleware(handler, make_callback(123), {})
+
+    assert allowed == "handled"
+    handler.assert_awaited_once()
+
+    handler.reset_mock()
+    denied_callback = make_callback(456)
+    with (
+        patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
+        caplog.at_level(logging.WARNING, logger="flowmate.bot.middleware"),
+    ):
+        denied = await middleware(handler, denied_callback, {})
+
+    assert denied is None
+    handler.assert_not_awaited()
+    answer.assert_awaited_once_with(
+        "У вас нет доступа к этому действию.",
+        show_alert=True,
+    )
+    assert "unauthorized_telegram_user user_id=456" in caplog.text
+
+
+def test_stale_cancel_callback_is_rejected() -> None:
+    assert parse_callback_data("draft:cancel") is None
+
+
+@pytest.mark.asyncio
 async def test_help_response() -> None:
     with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
         await help_command(make_message(123, text="/help"))
 
     answer.assert_awaited_once_with(
         "Доступные команды: /start, /help, /status, /notes. "
+        "Черновики: /draft, /cancel. "
         "Отправьте текст или голосовое сообщение, чтобы сохранить заметку."
     )
 
@@ -389,6 +466,42 @@ async def test_duplicate_voice_skips_download_and_transcription() -> None:
 
 
 @pytest.mark.asyncio
+async def test_new_voice_note_is_parsed_after_transcription() -> None:
+    provider = FakeSpeechProvider()
+    message = make_voice_message(123)
+    result = make_analysis_result(
+        make_parse_result(
+            [make_draft_item(type=DraftItemType.NOTE, title="Voice note")],
+            overall_intent=DraftItemType.NOTE,
+            confidence=1.0,
+        )
+    )
+    draft_service = MagicMock(spec=DraftParsingService)
+    draft_service.parse = AsyncMock(return_value=result)
+
+    with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
+        await invoke_voice(
+            message,
+            make_mock_bot(),
+            make_transcription_service(provider),
+            draft_service=cast(DraftParsingService, draft_service),
+        )
+
+    cast(AsyncMock, draft_service.parse).assert_awaited_once_with(
+        "Распознанный текст",
+        source=DraftSource.VOICE,
+    )
+    assert [call.args[0] for call in answer.await_args_list[:3]] == [
+        PROCESSING_MESSAGE,
+        "Распознанный текст",
+        DRAFT_ANALYZING_MESSAGE,
+    ]
+    assert "[заметка] Voice note" in answer.await_args_list[3].args[0]
+    assert answer.await_args_list[3].kwargs == {"parse_mode": None}
+    assert answer.await_args_list[4].args[0] == DRAFT_CONTROL_MESSAGE
+
+
+@pytest.mark.asyncio
 async def test_long_transcription_is_returned_completely_in_plain_chunks() -> None:
     transcription = "word " * 1800
     provider = FakeSpeechProvider(transcription)
@@ -500,6 +613,9 @@ async def test_bot_polling_closes_engine_without_real_telegram_api() -> None:
         telegram_allowed_user_ids=frozenset({123}),
         telegram_bot_token="123456:test-token",
         speech_provider="openai",
+        ai_provider="openai",
+        openai_api_key="private-ai-key",
+        ai_model="configured-model",
     )
     engine = MagicMock()
     engine.dispose = AsyncMock()
@@ -511,11 +627,14 @@ async def test_bot_polling_closes_engine_without_real_telegram_api() -> None:
     bot_context = MagicMock()
     bot_context.__aenter__ = AsyncMock(return_value=bot)
     bot_context.__aexit__ = AsyncMock(return_value=None)
+    ai_provider = MagicMock()
+    ai_provider.close = AsyncMock()
 
     with (
         patch("flowmate.bot.app.create_engine", return_value=engine),
         patch("flowmate.bot.app.create_session_factory", return_value=session_factory),
         patch("flowmate.bot.app.create_dispatcher", return_value=dispatcher),
+        patch("flowmate.bot.app.create_ai_provider", return_value=ai_provider),
         patch("flowmate.bot.app.Bot", return_value=bot_context),
     ):
         await run_bot(settings)
@@ -526,9 +645,40 @@ async def test_bot_polling_closes_engine_without_real_telegram_api() -> None:
         close_bot_session=False,
     )
     engine.dispose.assert_awaited_once()
+    ai_provider.close.assert_awaited_once()
 
 
-def test_dispatcher_registers_only_message_updates() -> None:
+@pytest.mark.asyncio
+async def test_incomplete_ai_configuration_does_not_block_bot_polling() -> None:
+    settings = Settings(
+        _env_file=None,
+        telegram_allowed_user_ids=frozenset({123}),
+        telegram_bot_token="123456:test-token",
+        ai_provider="openai",
+    )
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
+    dispatcher = MagicMock()
+    dispatcher.resolve_used_update_types.return_value = ["message"]
+    dispatcher.start_polling = AsyncMock()
+    bot = MagicMock()
+    bot_context = MagicMock()
+    bot_context.__aenter__ = AsyncMock(return_value=bot)
+    bot_context.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch("flowmate.bot.app.create_engine", return_value=engine),
+        patch("flowmate.bot.app.create_session_factory", return_value=MagicMock()),
+        patch("flowmate.bot.app.create_dispatcher", return_value=dispatcher),
+        patch("flowmate.bot.app.Bot", return_value=bot_context),
+    ):
+        await run_bot(settings)
+
+    dispatcher.start_polling.assert_awaited_once()
+    engine.dispose.assert_awaited_once()
+
+
+def test_dispatcher_registers_message_and_callback_updates() -> None:
     settings = Settings(
         _env_file=None,
         telegram_allowed_user_ids=frozenset({123}),
@@ -541,4 +691,4 @@ def test_dispatcher_registers_only_message_updates() -> None:
 
     dispatcher = create_dispatcher(settings, session_factory, engine)
 
-    assert dispatcher.resolve_used_update_types() == ["message"]
+    assert dispatcher.resolve_used_update_types() == ["callback_query", "message"]

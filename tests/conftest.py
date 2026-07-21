@@ -39,6 +39,14 @@ UNIT_ENVIRONMENT_VARIABLES = (
     "SPEECH_LANGUAGE",
     "SPEECH_TIMEOUT_SECONDS",
     "SPEECH_MAX_FILE_SIZE_BYTES",
+    "AI_PROVIDER",
+    "AI_MODEL",
+    "AI_TIMEOUT_SECONDS",
+    "APP_TIMEZONE",
+    "APP_ACTIVE_WORKSPACE",
+    "AI_HIGH_CONFIDENCE_THRESHOLD",
+    "AI_CLARIFICATION_CONFIDENCE_THRESHOLD",
+    "DRAFT_TTL_HOURS",
     "LOG_LEVEL",
     "FLOWMATE_ENVIRONMENT",
     "FLOWMATE_API_DOCS_ENABLED",
@@ -107,9 +115,13 @@ def migrated_database() -> Iterator[None]:
         command.downgrade(alembic_config, "base")
         assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "users"))
         assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
+        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_sessions"))
+        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_items"))
         command.upgrade(alembic_config, "head")
         assert asyncio.run(database_has_table(TEST_DATABASE_URL, "users"))
         assert asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
+        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_sessions"))
+        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_items"))
     except (OSError, SQLAlchemyError) as error:
         handle_database_unavailable(error)
     try:
@@ -118,6 +130,8 @@ def migrated_database() -> Iterator[None]:
         command.downgrade(alembic_config, "base")
         assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "users"))
         assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "notes"))
+        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_sessions"))
+        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_items"))
         command.upgrade(alembic_config, "head")
         if previous_url is None:
             environ.pop("DATABASE_URL", None)
