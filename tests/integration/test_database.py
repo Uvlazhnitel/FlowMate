@@ -174,7 +174,20 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
     assert {constraint["name"] for constraint in check_constraints} >= {
         "ck_users_telegram_user_id_positive"
     }
-    assert revision == "0012_main_menu_navigation"
+    assert revision == "0013_pwa_auth"
+
+
+def test_pwa_auth_migration_from_0012(migrated_database: None) -> None:
+    alembic_config = Config("alembic.ini")
+    try:
+        command.downgrade(alembic_config, "0012_main_menu_navigation")
+        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "pwa_login_codes"))
+        assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "pwa_sessions"))
+        command.upgrade(alembic_config, "head")
+        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "pwa_login_codes"))
+        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "pwa_sessions"))
+    finally:
+        command.upgrade(alembic_config, "head")
 
 
 @pytest.mark.integration

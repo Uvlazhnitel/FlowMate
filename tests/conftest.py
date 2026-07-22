@@ -38,6 +38,8 @@ APPLICATION_TABLES = (
     "work_item_action_sessions",
     "reminders",
     "user_notification_preferences",
+    "pwa_login_codes",
+    "pwa_sessions",
 )
 
 UNIT_ENVIRONMENT_VARIABLES = (
@@ -46,6 +48,16 @@ UNIT_ENVIRONMENT_VARIABLES = (
     "APP_HOST",
     "APP_PORT",
     "APP_API_KEY",
+    "PWA_TELEGRAM_USER_ID",
+    "PWA_AUTH_SECRET",
+    "PWA_PUBLIC_ORIGIN",
+    "PWA_COOKIE_SECURE",
+    "PWA_LOGIN_CODE_TTL_SECONDS",
+    "PWA_LOGIN_MAX_ATTEMPTS",
+    "PWA_LOGIN_REQUEST_LIMIT",
+    "PWA_LOGIN_REQUEST_WINDOW_SECONDS",
+    "PWA_SESSION_TTL_DAYS",
+    "PWA_MAX_ACTIVE_SESSIONS",
     "DATABASE_URL",
     "CORS_ORIGINS",
     "TELEGRAM_BOT_TOKEN",

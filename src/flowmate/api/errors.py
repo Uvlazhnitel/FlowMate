@@ -7,6 +7,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
+from flowmate.auth.dependencies import PwaSessionExpired
+from flowmate.auth.pwa import CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
+from flowmate.core.config import Settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,13 +49,30 @@ async def handle_http_exception(request: Request, error: Exception) -> JSONRespo
     message = (
         exception.detail if isinstance(exception.detail, str) else "Request failed"
     )
-    return error_response(
+    response = error_response(
         request,
         status_code=exception.status_code,
         code=code,
         message=message,
         headers=exception.headers,
     )
+    if isinstance(exception, PwaSessionExpired):
+        settings = cast(Settings, request.app.state.settings)
+        response.delete_cookie(
+            SESSION_COOKIE_NAME,
+            path="/",
+            secure=settings.pwa_cookie_secure,
+            httponly=True,
+            samesite="lax",
+        )
+        response.delete_cookie(
+            CSRF_COOKIE_NAME,
+            path="/",
+            secure=settings.pwa_cookie_secure,
+            httponly=False,
+            samesite="lax",
+        )
+    return response
 
 
 async def handle_validation_error(request: Request, error: Exception) -> JSONResponse:

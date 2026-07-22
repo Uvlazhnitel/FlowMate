@@ -51,6 +51,18 @@ services:
     ports:
       - "${APP_PORT:-8000}:${APP_PORT:-8000}"
 
+  web:
+    image: flowmate-web:local
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    restart: unless-stopped
+
   bot:
     <<: *app
     profiles: ["bot"]

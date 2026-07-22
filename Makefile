@@ -3,7 +3,7 @@ revision ?= -1
 TEST_DATABASE_URL ?= postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test
 export TEST_DATABASE_URL
 
-.PHONY: help setup sync format format-check lint typecheck test test-unit test-integration check migrate migration downgrade migration-current migration-history api bot scheduler up up-all up-worker down logs ps test-db-up test-db-down clean
+.PHONY: help setup sync format format-check lint typecheck test test-unit test-integration check web-setup web-dev web-format web-format-check web-lint web-typecheck web-test web-build migrate migration downgrade migration-current migration-history api bot scheduler up up-all up-worker down logs ps test-db-up test-db-down clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "FlowMate commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -11,9 +11,11 @@ help: ## Show available commands
 setup: ## Create .env if needed and install development dependencies
 	@test -f .env || cp .env.example .env
 	uv sync --frozen --group dev
+	npm ci --prefix apps/web
 
 sync: ## Install locked development dependencies
 	uv sync --frozen --group dev
+	npm ci --prefix apps/web
 
 format: ## Format Python code with Ruff
 	uv run ruff format .
@@ -39,6 +41,30 @@ test-integration: ## Run tests against the dedicated PostgreSQL test database
 
 check: ## Run the complete mandatory validation suite
 	sh scripts/run_checks.sh
+
+web-setup: ## Install locked frontend dependencies
+	npm ci --prefix apps/web
+
+web-dev: ## Run the Vite development server
+	npm run dev --prefix apps/web
+
+web-format: ## Format frontend source files
+	npm run format --prefix apps/web
+
+web-format-check: ## Check frontend formatting
+	npm run format:check --prefix apps/web
+
+web-lint: ## Run frontend ESLint checks
+	npm run lint --prefix apps/web
+
+web-typecheck: ## Run strict frontend TypeScript checks
+	npm run typecheck --prefix apps/web
+
+web-test: ## Run frontend unit tests
+	npm test --prefix apps/web
+
+web-build: ## Build the production PWA bundle
+	npm run build --prefix apps/web
 
 migrate: ## Apply Alembic migrations using the application image
 	docker compose build api
@@ -69,8 +95,8 @@ bot: ## Run the Telegram bot locally
 scheduler: ## Run the reminder scheduler locally
 	uv run python -m flowmate.scheduler
 
-up: ## Build and start PostgreSQL and API
-	docker compose up -d --build postgres api
+up: ## Build and start PostgreSQL, API, and PWA
+	docker compose up -d --build postgres api web
 
 up-all: ## Build and start PostgreSQL, API, bot, and scheduler
 	docker compose --profile bot --profile scheduler up -d --build
@@ -97,4 +123,5 @@ clean: ## Remove project containers, volumes, and local test caches
 	docker compose --profile bot --profile scheduler down --volumes --remove-orphans
 	docker compose -f docker-compose.test.yml down --volumes --remove-orphans
 	rm -rf .pytest_cache .mypy_cache .ruff_cache htmlcov
+	rm -rf apps/web/coverage apps/web/dist
 	rm -f .coverage coverage.xml

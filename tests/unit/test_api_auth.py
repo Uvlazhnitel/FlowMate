@@ -199,7 +199,7 @@ async def test_cors_is_restricted_to_configured_origin() -> None:
     assert response.headers["Access-Control-Allow-Origin"] == (
         "https://app.example.com"
     )
-    assert "Access-Control-Allow-Credentials" not in response.headers
+    assert response.headers["Access-Control-Allow-Credentials"] == "true"
 
 
 def test_openapi_follows_debug_setting() -> None:

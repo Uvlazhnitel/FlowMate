@@ -14,6 +14,12 @@ management uses ownership-safe domain services and expiring action sessions.
 Persistent reminders are claimed by a separate APScheduler worker; PostgreSQL,
 not APScheduler, is their source of truth.
 
+The authenticated PWA lives in `apps/web` and uses React, TypeScript, Vite,
+TanStack Query, React Router, and Radix primitives. Its production Nginx
+container proxies `/api` to FastAPI so browser sessions remain same-origin.
+Stage 6.1 pages are shell placeholders and must not duplicate Task Engine
+business logic.
+
 Configuration and logging live in `flowmate.core`. API authentication lives in
 `flowmate.auth`. Database models live in `flowmate.db.models`, while schema
 history is managed exclusively through Alembic migrations. Speech provider,
@@ -99,6 +105,13 @@ the isolated database configured by `TEST_DATABASE_URL`.
 - Custom snooze voice replies may be transcribed only inside an active reminder
   action session and must never create a Note or AI draft.
 - Do not add infrastructure or dependencies outside the current stage scope.
+- PWA authentication must use server-side sessions and HttpOnly cookies; never
+  store session credentials or authentication secrets in localStorage.
+- Cookie-authenticated writes must validate both the CSRF token and exact
+  configured Origin.
+- The PWA service worker must never cache `/api`, authentication responses, or
+  user data.
+- Frontend API modules remain typed and must treat `401` as an expired session.
 
 ## Commands
 
@@ -113,9 +126,13 @@ make api
 make bot
 make scheduler
 make up-worker
+make web-dev
+make web-test
+make web-build
 ```
 
 Run `make check` before completing every task. It checks formatting, Ruff,
-strict mypy, unit tests, and integration tests in that order. Integration tests
+strict mypy, unit tests, integration tests, frontend formatting, ESLint, strict
+TypeScript, Vitest, and the production PWA build. Integration tests
 use the test database from `docker-compose.test.yml`; any custom
 `TEST_DATABASE_URL` must name a database ending in `_test`.

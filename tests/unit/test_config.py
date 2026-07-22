@@ -27,6 +27,15 @@ def test_loads_development_defaults_without_environment() -> None:
     assert settings.app_debug is False
     assert settings.app_host == "0.0.0.0"
     assert settings.app_port == 8000
+    assert settings.pwa_telegram_user_id is None
+    assert settings.pwa_public_origin == "http://localhost:8080"
+    assert settings.pwa_cookie_secure is False
+    assert settings.pwa_login_code_ttl_seconds == 600
+    assert settings.pwa_login_max_attempts == 5
+    assert settings.pwa_login_request_limit == 3
+    assert settings.pwa_login_request_window_seconds == 900
+    assert settings.pwa_session_ttl_days == 30
+    assert settings.pwa_max_active_sessions == 5
     assert settings.telegram_allowed_user_ids == frozenset()
     assert settings.speech_provider is None
     assert settings.speech_language == "ru"
@@ -50,6 +59,16 @@ def test_loads_development_defaults_without_environment() -> None:
     assert settings.default_morning_digest_time.strftime("%H:%M") == "09:00"
     assert settings.default_evening_digest_time.strftime("%H:%M") == "18:00"
     assert settings.default_snooze_minutes == 60
+
+
+def test_empty_pwa_owner_disables_pwa_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PWA_TELEGRAM_USER_ID", "")
+    monkeypatch.setenv("PWA_AUTH_SECRET", "")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.pwa_telegram_user_id is None
+    assert settings.pwa_auth_secret is None
 
 
 def test_notification_default_settings_parse_and_validate() -> None:
@@ -78,6 +97,45 @@ def test_processing_lease_must_exceed_delivery_timeout() -> None:
             reminder_processing_timeout_seconds=15,
             reminder_delivery_timeout_seconds=15,
         )
+
+
+def test_pwa_auth_configuration_requires_allowlisted_owner() -> None:
+    settings = Settings(
+        _env_file=None,
+        pwa_telegram_user_id=123456789,
+        pwa_auth_secret="private-pwa-auth-secret",
+        telegram_bot_token="123456:private-token",
+        telegram_allowed_user_ids="123456789",
+    )
+
+    assert settings.require_pwa_auth() is settings
+    assert "private-pwa-auth-secret" not in repr(settings)
+
+    with pytest.raises(ValidationError, match="Telegram allowlist"):
+        Settings(
+            _env_file=None,
+            pwa_telegram_user_id=123456789,
+            telegram_allowed_user_ids="987654321",
+        )
+
+
+def test_production_pwa_auth_requires_https_secure_cookie_and_strong_secret() -> None:
+    base = production_settings(
+        telegram_allowed_user_ids="123456789",
+        pwa_telegram_user_id=123456789,
+        pwa_auth_secret="a-strong-pwa-secret-with-32-characters",
+        pwa_public_origin="https://flowmate.example.com",
+        pwa_cookie_secure=True,
+    )
+    Settings(_env_file=None, **cast(Any, base))
+
+    for override, message in (
+        ({"pwa_cookie_secure": False}, "PWA_COOKIE_SECURE"),
+        ({"pwa_public_origin": "http://flowmate.example.com"}, "HTTPS"),
+        ({"pwa_auth_secret": "short"}, "PWA_AUTH_SECRET"),
+    ):
+        with pytest.raises(ValidationError, match=message):
+            Settings(_env_file=None, **cast(Any, base | override))
 
 
 def test_parses_speech_configuration() -> None:

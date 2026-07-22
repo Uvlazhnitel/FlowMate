@@ -21,3 +21,7 @@ build/
 *.db
 docker-compose.override.yml
 docker-compose.local.yml
+node_modules/
+apps/web/dist/
+apps/web/coverage/
+npm-debug.log*

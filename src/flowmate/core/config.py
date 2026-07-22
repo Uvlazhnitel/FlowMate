@@ -47,6 +47,59 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("APP_API_KEY", "FLOWMATE_API_BEARER_TOKEN"),
     )
+    pwa_telegram_user_id: int | None = Field(
+        default=None,
+        gt=0,
+        validation_alias="PWA_TELEGRAM_USER_ID",
+    )
+    pwa_auth_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias="PWA_AUTH_SECRET",
+    )
+    pwa_public_origin: str = Field(
+        default="http://localhost:8080",
+        validation_alias="PWA_PUBLIC_ORIGIN",
+    )
+    pwa_cookie_secure: bool = Field(
+        default=False,
+        validation_alias="PWA_COOKIE_SECURE",
+    )
+    pwa_login_code_ttl_seconds: int = Field(
+        default=600,
+        ge=60,
+        le=3600,
+        validation_alias="PWA_LOGIN_CODE_TTL_SECONDS",
+    )
+    pwa_login_max_attempts: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        validation_alias="PWA_LOGIN_MAX_ATTEMPTS",
+    )
+    pwa_login_request_limit: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        validation_alias="PWA_LOGIN_REQUEST_LIMIT",
+    )
+    pwa_login_request_window_seconds: int = Field(
+        default=900,
+        ge=60,
+        le=86400,
+        validation_alias="PWA_LOGIN_REQUEST_WINDOW_SECONDS",
+    )
+    pwa_session_ttl_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        validation_alias="PWA_SESSION_TTL_DAYS",
+    )
+    pwa_max_active_sessions: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        validation_alias="PWA_MAX_ACTIVE_SESSIONS",
+    )
     database_url: str = Field(
         default="postgresql+asyncpg://flowmate:flowmate@localhost:5432/flowmate",
         validation_alias=AliasChoices("DATABASE_URL", "FLOWMATE_DATABASE_URL"),
@@ -203,10 +256,18 @@ class Settings(BaseSettings):
         "app_api_key",
         "telegram_bot_token",
         "openai_api_key",
+        "pwa_auth_secret",
         mode="before",
     )
     @classmethod
     def normalize_empty_secret(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("pwa_telegram_user_id", mode="before")
+    @classmethod
+    def normalize_empty_pwa_user_id(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
         return value
@@ -275,6 +336,21 @@ class Settings(BaseSettings):
         if not 1 <= value <= 65535:
             raise ValueError("application port must be between 1 and 65535")
         return value
+
+    @field_validator("pwa_public_origin")
+    @classmethod
+    def validate_pwa_public_origin(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("PWA public origin must be an HTTP(S) origin")
+        return normalized
 
     @field_validator("database_url")
     @classmethod
@@ -352,6 +428,13 @@ class Settings(BaseSettings):
             <= self.reminder_delivery_timeout_seconds
         ):
             raise ValueError("reminder processing timeout must exceed delivery timeout")
+        if (
+            self.pwa_telegram_user_id is not None
+            and self.pwa_telegram_user_id not in self.telegram_allowed_user_ids
+        ):
+            raise ValueError("PWA Telegram user must be in the Telegram allowlist")
+        if "*" in self.cors_origins:
+            raise ValueError("wildcard CORS origins are not allowed")
         if self.app_env != "production":
             return self
         if self.app_debug:
@@ -364,8 +447,16 @@ class Settings(BaseSettings):
         database_password = make_url(self.database_url).password
         if not database_password or is_placeholder(database_password):
             raise ValueError("DATABASE_URL password is insecure for production")
-        if "*" in self.cors_origins:
-            raise ValueError("wildcard CORS origins are not allowed in production")
+        if self.pwa_telegram_user_id is not None or self.pwa_auth_secret is not None:
+            if self.pwa_telegram_user_id is None or self.pwa_auth_secret is None:
+                raise ValueError("PWA authentication configuration is incomplete")
+            pwa_secret = self.pwa_auth_secret.get_secret_value()
+            if len(pwa_secret) < 32 or is_placeholder(pwa_secret):
+                raise ValueError("PWA_AUTH_SECRET is insecure for production")
+            if not self.pwa_cookie_secure:
+                raise ValueError("PWA_COOKIE_SECURE must be true in production")
+            if not self.pwa_public_origin.startswith("https://"):
+                raise ValueError("PWA_PUBLIC_ORIGIN must use HTTPS in production")
         if self.telegram_bot_token is not None and is_placeholder(
             self.telegram_bot_token.get_secret_value()
         ):
@@ -386,6 +477,17 @@ class Settings(BaseSettings):
             raise ValueError("TELEGRAM_BOT_TOKEN is required for the bot")
         if not self.telegram_allowed_user_ids:
             raise ValueError("TELEGRAM_ALLOWED_USER_IDS is required for the bot")
+        return self
+
+    def require_pwa_auth(self) -> Self:
+        if self.pwa_telegram_user_id is None:
+            raise ValueError("PWA_TELEGRAM_USER_ID is required for PWA authentication")
+        if self.pwa_auth_secret is None:
+            raise ValueError("PWA_AUTH_SECRET is required for PWA authentication")
+        if self.telegram_bot_token is None:
+            raise ValueError("TELEGRAM_BOT_TOKEN is required for PWA authentication")
+        if self.pwa_telegram_user_id not in self.telegram_allowed_user_ids:
+            raise ValueError("PWA Telegram user must be in the Telegram allowlist")
         return self
 
     def require_scheduler(self) -> Self:

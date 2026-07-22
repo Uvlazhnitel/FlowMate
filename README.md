@@ -2,7 +2,7 @@
 
 FlowMate is a Telegram-first personal assistant. Its foundation provides a
 FastAPI API, an optional aiogram bot, PostgreSQL, Alembic migrations, tests, and
-CI. Stage 1 adds text and voice notes, Stage 2 adds structured AI drafts and
+CI. The Stage 6 foundation adds an installable authenticated PWA shell. Stage 1 adds text and voice notes, Stage 2 adds structured AI drafts and
 clarification dialogs, and Stage 3 converts confirmed drafts into Task Engine
 records.
 
@@ -12,6 +12,7 @@ The repository and Python package retain the technical name `flowmate`.
 
 - Docker with Docker Compose
 - Python 3.12 and [uv](https://docs.astral.sh/uv/) for local development
+- Node.js 22 and npm for frontend development
 
 ## Setup
 
@@ -25,9 +26,9 @@ Replace the placeholder values in `.env` before starting services. In
 particular, set a strong `APP_API_KEY` and `POSTGRES_PASSWORD`; keep the
 credentials embedded in `DATABASE_URL` consistent with PostgreSQL settings.
 
-## Start the API
+## Start the application
 
-Build and start PostgreSQL and the API:
+Build and start PostgreSQL, the API, and the PWA:
 
 ```bash
 make up
@@ -36,7 +37,9 @@ make ps
 
 The API startup applies Alembic migrations before starting Uvicorn. PostgreSQL
 is available only on the internal Compose network and is not published to the
-host.
+host. The PWA is available at `http://localhost:8080` by default and proxies
+`/api` to FastAPI on the same origin. The technical API remains available on
+`APP_PORT` for local diagnostics.
 
 Configuration is loaded from environment variables through Pydantic Settings.
 `APP_ENV` supports `development`, `test`, and `production`. Production rejects
@@ -101,6 +104,65 @@ Migration `0010` connects WorkItem dates to exact, pre-deadline, and snoozed
 reminders and extends WorkItem history for reminder actions.
 Migration `0011` adds per-user notification preferences and digest scheduling.
 Migration `0012` adds the expiring search action used by Telegram pagination.
+Migration `0013` adds hashed, expiring PWA login codes and revocable server-side
+sessions. Raw login codes, session tokens, and CSRF secrets are never stored in
+PostgreSQL.
+
+## PWA and Login
+
+The PWA lives in `apps/web` and uses React, TypeScript, Vite, TanStack Query,
+React Router, Radix primitives, and a generated service worker. It provides the
+responsive application shell and protected placeholder routes for Dashboard,
+Today, Topics, People, Agenda, Inbox, Planner Queue, Timeline, and Settings.
+Task Engine data APIs and CRUD screens are intentionally deferred.
+
+Configure the single PWA owner with a Telegram user ID that is also present in
+`TELEGRAM_ALLOWED_USER_IDS`:
+
+```dotenv
+PWA_TELEGRAM_USER_ID=123456789
+PWA_AUTH_SECRET=replace-with-at-least-32-random-characters
+PWA_PUBLIC_ORIGIN=http://localhost:8080
+PWA_COOKIE_SECURE=false
+WEB_PORT=8080
+```
+
+The login screen requests a six-digit, ten-minute code through the existing
+Telegram bot. A code is single-use, stored only as an HMAC digest, and limited
+to five verification attempts and three requests per 15 minutes. Successful
+verification creates a 30-day server-side session. At most five active device
+sessions are retained.
+
+The session cookie is `HttpOnly` and `SameSite=Lax`; production additionally
+requires `Secure=true` and an HTTPS `PWA_PUBLIC_ORIGIN`. A separate readable
+CSRF cookie is checked against `X-CSRF-Token` and the exact request Origin on
+cookie-authenticated writes. Authentication values are never stored in
+`localStorage`. The service worker caches only the application shell and static
+assets, never `/api` responses or user data.
+
+Run the frontend development server against a local API:
+
+```bash
+make api
+make web-dev
+```
+
+The Vite app is then available at `http://localhost:5173`. Frontend checks can
+also be run independently with `make web-format-check`, `make web-lint`,
+`make web-typecheck`, `make web-test`, and `make web-build`.
+
+Authentication endpoints are:
+
+```text
+POST   /api/v1/auth/login-code
+POST   /api/v1/auth/session
+GET    /api/v1/auth/me
+DELETE /api/v1/auth/session
+```
+
+API startup does not require PWA or Telegram configuration. If it is absent,
+login-code requests fail safely while health and technical Bearer endpoints
+remain available.
 
 ## Start the Bot
 
@@ -408,8 +470,9 @@ make check
 make test-db-down
 ```
 
-`make check` is the mandatory validation command. It checks formatting, Ruff,
-strict mypy, unit tests, and integration tests. The default test URL is
+`make check` is the mandatory validation command. It checks Python and frontend
+formatting, Ruff/ESLint, strict mypy/TypeScript, unit and integration tests, and
+the production PWA build. The default test URL is
 `postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test`;
 custom test database names must end in `_test`.
 
@@ -420,7 +483,7 @@ OpenAI, and other external APIs are not contacted.
 ## Architecture
 
 ```text
-host -> api (FastAPI/Uvicorn) -> postgres
+browser -> web (Nginx/PWA) -> api (FastAPI/Uvicorn) -> postgres
                     |
 Telegram -> bot ----+  [optional Compose profile: bot]
               |
