@@ -60,6 +60,17 @@ def test_task_engine_enum_contracts() -> None:
         "updated",
         "status_changed",
         "linked",
+        "completed",
+        "reopened",
+        "cancelled",
+        "rescheduled",
+        "note_added",
+        "topic_changed",
+        "person_changed",
+        "waiting_received",
+        "person_replied",
+        "reminder_snoozed",
+        "archived",
     }
     assert {value.value for value in NoteTargetType} == {
         "work_item",

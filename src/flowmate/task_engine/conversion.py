@@ -24,6 +24,7 @@ from flowmate.db.models import (
     Topic,
     WorkItem,
 )
+from flowmate.reminders.sync import ReminderPolicy
 from flowmate.task_engine.enums import (
     NoteTargetType,
     WorkItemRelationType,
@@ -119,8 +120,10 @@ class DraftConversionService:
         self,
         *,
         clock: Callable[[], datetime] | None = None,
+        reminder_policy: ReminderPolicy | None = None,
     ) -> None:
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._reminder_policy = reminder_policy
 
     async def convert(
         self,
@@ -406,6 +409,8 @@ class DraftConversionService:
             waiting_since=now if item.type is DraftItemType.WAITING else None,
             source_note_id=draft.source_note_id,
             source_draft_item_id=record.id,
+            reminder_policy=self._reminder_policy,
+            reminder_now=now,
         )
 
     async def _create_relations(

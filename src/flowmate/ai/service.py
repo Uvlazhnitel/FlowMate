@@ -5,13 +5,20 @@ from zoneinfo import ZoneInfo
 
 from flowmate.ai.analysis import analysis_to_parse_result, build_analysis_result
 from flowmate.ai.errors import AIInvalidResponseError, AITimeoutError
-from flowmate.ai.prompt import build_refinement_prompt, build_system_prompt
-from flowmate.ai.provider import AIProvider
+from flowmate.ai.prompt import (
+    build_refinement_prompt,
+    build_system_prompt,
+    build_text_routing_prompt,
+)
+from flowmate.ai.provider import AIProvider, TextRoutingProvider
 from flowmate.ai.schemas import (
     DraftAnalysisResult,
     DraftInputContext,
     DraftParseResult,
     DraftSource,
+    ManagementIntent,
+    SearchIntent,
+    TelegramTextParseResult,
 )
 
 Clock = Callable[[ZoneInfo], datetime]
@@ -81,6 +88,43 @@ class DraftParsingService:
             user_text=normalized,
             system_prompt=system_prompt,
             context=context,
+        )
+
+    async def parse_text(
+        self,
+        user_text: str,
+    ) -> DraftAnalysisResult | ManagementIntent | SearchIntent:
+        normalized = user_text.strip()
+        if not normalized:
+            raise AIInvalidResponseError("note text must not be empty")
+        context = self._build_context(DraftSource.TEXT)
+        if not isinstance(self._provider, TextRoutingProvider):
+            raise AIInvalidResponseError("AI provider does not support text routing")
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                parsed = await self._provider.parse_text(
+                    system_prompt=build_text_routing_prompt(context),
+                    user_text=normalized,
+                )
+        except TimeoutError as error:
+            raise AITimeoutError("AI text routing timed out") from error
+        if not isinstance(parsed, TelegramTextParseResult):
+            raise AIInvalidResponseError("AI provider returned invalid text routing")
+        if parsed.mode == "management":
+            if parsed.management is None:
+                raise AIInvalidResponseError("management payload is missing")
+            return parsed.management
+        if parsed.mode == "search":
+            if parsed.search is None:
+                raise AIInvalidResponseError("search payload is missing")
+            return parsed.search
+        if parsed.draft is None:
+            raise AIInvalidResponseError("draft payload is missing")
+        return build_analysis_result(
+            parsed.draft,
+            context=context,
+            high_threshold=self._high_confidence_threshold,
+            clarification_threshold=self._clarification_confidence_threshold,
         )
 
     def _build_context(self, source: DraftSource) -> DraftInputContext:

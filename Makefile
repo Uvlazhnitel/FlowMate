@@ -3,7 +3,7 @@ revision ?= -1
 TEST_DATABASE_URL ?= postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test
 export TEST_DATABASE_URL
 
-.PHONY: help setup sync format format-check lint typecheck test test-unit test-integration check migrate migration downgrade migration-current migration-history api bot up up-all down logs ps test-db-up test-db-down clean
+.PHONY: help setup sync format format-check lint typecheck test test-unit test-integration check migrate migration downgrade migration-current migration-history api bot scheduler up up-all up-worker down logs ps test-db-up test-db-down clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "FlowMate commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -66,20 +66,26 @@ api: ## Run the API locally with reload enabled
 bot: ## Run the Telegram bot locally
 	uv run python -m flowmate.bot
 
+scheduler: ## Run the reminder scheduler locally
+	uv run python -m flowmate.scheduler
+
 up: ## Build and start PostgreSQL and API
 	docker compose up -d --build postgres api
 
-up-all: ## Build and start PostgreSQL, API, and the bot profile
-	docker compose --profile bot up -d --build
+up-all: ## Build and start PostgreSQL, API, bot, and scheduler
+	docker compose --profile bot --profile scheduler up -d --build
+
+up-worker: ## Build and start the optional reminder scheduler
+	docker compose --profile scheduler up -d --build scheduler
 
 down: ## Stop application containers without deleting database data
-	docker compose --profile bot down
+	docker compose --profile bot --profile scheduler down
 
 logs: ## Follow logs from all application services
-	docker compose --profile bot logs -f
+	docker compose --profile bot --profile scheduler logs -f
 
 ps: ## Show application container status
-	docker compose --profile bot ps
+	docker compose --profile bot --profile scheduler ps
 
 test-db-up: ## Start the isolated integration-test PostgreSQL database
 	docker compose -f docker-compose.test.yml up -d --wait
@@ -88,7 +94,7 @@ test-db-down: ## Stop test PostgreSQL and delete its isolated data volume
 	docker compose -f docker-compose.test.yml down --volumes
 
 clean: ## Remove project containers, volumes, and local test caches
-	docker compose --profile bot down --volumes --remove-orphans
+	docker compose --profile bot --profile scheduler down --volumes --remove-orphans
 	docker compose -f docker-compose.test.yml down --volumes --remove-orphans
 	rm -rf .pytest_cache .mypy_cache .ruff_cache htmlcov
 	rm -f .coverage coverage.xml

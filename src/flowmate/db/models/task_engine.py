@@ -3,6 +3,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -20,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from flowmate.db.base import Base
 from flowmate.task_engine.enums import (
+    WorkItemAction,
     WorkItemEventType,
     WorkItemPriority,
     WorkItemRelationType,
@@ -32,6 +34,7 @@ WORK_ITEM_STATUSES = tuple(value.value for value in WorkItemStatus)
 WORK_ITEM_PRIORITIES = tuple(value.value for value in WorkItemPriority)
 WORK_ITEM_RELATION_TYPES = tuple(value.value for value in WorkItemRelationType)
 WORK_ITEM_EVENT_TYPES = tuple(value.value for value in WorkItemEventType)
+WORK_ITEM_ACTIONS = tuple(value.value for value in WorkItemAction)
 
 
 class Topic(Base):
@@ -381,6 +384,14 @@ class WorkItemEvent(Base):
             "created_at",
         ),
         Index("ix_work_item_events_user_id", "user_id"),
+        UniqueConstraint(
+            "telegram_update_id",
+            name="uq_work_item_events_telegram_update_id",
+        ),
+        CheckConstraint(
+            "telegram_update_id IS NULL OR telegram_update_id > 0",
+            name="ck_work_item_events_telegram_update_id_positive",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -397,6 +408,7 @@ class WorkItemEvent(Base):
         nullable=False,
     )
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    telegram_update_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
@@ -407,4 +419,75 @@ class WorkItemEvent(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("clock_timestamp()"),
+    )
+
+
+class WorkItemActionSession(Base):
+    __tablename__ = "work_item_action_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            f"action IN {WORK_ITEM_ACTIONS!r}",
+            name="ck_work_item_action_sessions_action",
+        ),
+        CheckConstraint(
+            "status IN ('open', 'completed', 'cancelled', 'expired')",
+            name="ck_work_item_action_sessions_status",
+        ),
+        CheckConstraint(
+            "expires_at > created_at",
+            name="ck_work_item_action_sessions_expiration",
+        ),
+        CheckConstraint(
+            "telegram_update_id IS NULL OR telegram_update_id > 0",
+            name="ck_work_item_action_sessions_telegram_update_id_positive",
+        ),
+        UniqueConstraint(
+            "telegram_update_id",
+            name="uq_work_item_action_sessions_telegram_update_id",
+        ),
+        Index(
+            "uq_work_item_action_sessions_user_open",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'open'"),
+        ),
+        Index("ix_work_item_action_sessions_expires_at", "expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid4
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    work_item_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("work_items.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="open", server_default="open"
+    )
+    context: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    prompt_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    telegram_update_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )

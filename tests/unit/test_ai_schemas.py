@@ -10,6 +10,12 @@ from flowmate.ai.schemas import (
     DraftItem,
     DraftItemType,
     DraftParseResult,
+    ManagementAction,
+    ManagementIntent,
+    SearchIntent,
+    SearchWorkItemStatus,
+    SearchWorkItemType,
+    TelegramTextParseResult,
     TemporalCandidate,
     TemporalStatus,
 )
@@ -233,3 +239,118 @@ def test_json_validation_rejects_impossible_normalized_date() -> None:
 def test_draft_item_rejects_extra_fields() -> None:
     with pytest.raises(ValidationError):
         DraftItem.model_validate({**item_payload(), "unexpected": "value"})
+
+
+def management_payload(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "action": ManagementAction.RESCHEDULE,
+        "target_type": DraftItemType.TASK,
+        "record_query": "подготовить отчёт",
+        "contextual_reference": False,
+        "person_candidate": None,
+        "topic_candidate": None,
+        "note_text": None,
+        "temporal_candidate": temporal_payload(),
+        "missing_fields": [],
+        "ambiguities": [],
+        "confidence": 0.95,
+    }
+    values.update(overrides)
+    return values
+
+
+def test_text_envelope_accepts_strict_management_intent() -> None:
+    result = TelegramTextParseResult.model_validate(
+        {"mode": "management", "draft": None, "management": management_payload()}
+    )
+
+    assert result.management is not None
+    assert result.management.action is ManagementAction.RESCHEDULE
+    assert result.management.temporal_candidate is not None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"mode": "management", "draft": None, "management": None},
+        {
+            "mode": "management",
+            "draft": result_payload(),
+            "management": management_payload(),
+        },
+        {"mode": "new_draft", "draft": None, "management": management_payload()},
+        {
+            "mode": "management",
+            "draft": None,
+            "management": management_payload(confidence=1.1),
+        },
+        {
+            "mode": "management",
+            "draft": None,
+            "management": management_payload(extra="forbidden"),
+        },
+    ],
+)
+def test_text_envelope_rejects_invalid_payloads(payload: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        TelegramTextParseResult.model_validate(payload)
+
+
+def test_management_intent_rejects_naive_date() -> None:
+    with pytest.raises(ValidationError):
+        ManagementIntent.model_validate(
+            management_payload(
+                temporal_candidate=temporal_payload(
+                    normalized_value=datetime(2026, 7, 21, 9)
+                )
+            )
+        )
+
+
+def search_payload(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "text_query": None,
+        "person_query": "Антон",
+        "topic_query": None,
+        "item_types": [SearchWorkItemType.FOLLOW_UP],
+        "statuses": [SearchWorkItemStatus.ACTIVE],
+        "include_all_statuses": False,
+        "due_from": None,
+        "due_to": None,
+        "overdue": False,
+        "stale_contacts": False,
+        "ambiguities": [],
+        "confidence": 0.93,
+    }
+    values.update(overrides)
+    return values
+
+
+def test_text_envelope_accepts_strict_search_intent() -> None:
+    result = TelegramTextParseResult.model_validate(
+        {"mode": "search", "search": search_payload()}
+    )
+
+    assert isinstance(result.search, SearchIntent)
+    assert result.search.person_query == "Антон"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        search_payload(statuses=["done"], include_all_statuses=True),
+        search_payload(
+            due_from="2026-07-22T12:00:00+00:00",
+            due_to="2026-07-22T10:00:00+00:00",
+        ),
+        search_payload(
+            due_from="2026-07-22T00:00:00+00:00",
+            overdue=True,
+        ),
+        search_payload(confidence=-0.1),
+        {**search_payload(), "extra": "forbidden"},
+    ],
+)
+def test_search_intent_rejects_invalid_filters(payload: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        SearchIntent.model_validate(payload)

@@ -90,6 +90,17 @@ manual notes without Telegram update IDs. Downgrading `0006` requires removing
 manual notes first because the Stage 2 schema requires every Note to have a
 Telegram update ID. Migration `0007` adds unique draft-item provenance to final
 Notes so draft conversion remains idempotent.
+Migration `0008` adds idempotent work-item events and expiring Telegram action
+sessions used for record selection and free-form action input. Both mutations
+and action sessions retain their originating Telegram update ID, so a repeated
+delivery cannot create a second event, Note, draft, or input dialog.
+Migration `0009` adds persistent reminders, delivery attempts, retry timing,
+and processing leases. PostgreSQL is the reminder source of truth; APScheduler
+only triggers periodic due-reminder scans.
+Migration `0010` connects WorkItem dates to exact, pre-deadline, and snoozed
+reminders and extends WorkItem history for reminder actions.
+Migration `0011` adds per-user notification preferences and digest scheduling.
+Migration `0012` adds the expiring search action used by Telegram pagination.
 
 ## Start the Bot
 
@@ -112,12 +123,22 @@ After configuring the bot variables, start PostgreSQL, API, and bot:
 make up-all
 ```
 
-The bot supports `/start`, `/help`, `/status`, `/notes`, `/draft`, and
-`/cancel`. Any non-empty text
-that does not begin with `/` is stored as a note. `/notes` returns previews of
-the 10 most recent notes belonging to the current Telegram user. Telegram
-update IDs make repeated delivery idempotent, so one update creates at most one
-note. Only one bot replica may run for a Telegram long-polling token.
+Start only the optional reminder worker and its API/PostgreSQL dependencies:
+
+```bash
+make up-worker
+```
+
+The bot supports `/start`, `/menu`, `/help`, `/status`, `/notes`, `/search`,
+`/draft`, `/cancel`, `/today`, `/tasks`, `/followups`, `/waiting`, `/questions`,
+`/topics`, and `/people`. `/start` and `/menu` show the persistent main menu;
+the menu buttons call the same handlers as their slash-command equivalents.
+Without AI routing, non-command text is stored as a Note. With AI
+routing enabled, text is classified as either a new Note/draft or management of
+one existing WorkItem; management input does not create an unrelated Note.
+`/notes` returns previews of the 10 most recent notes belonging to the current
+Telegram user. Telegram update IDs make repeated delivery idempotent. Only one
+bot replica may run for a Telegram long-polling token.
 
 ### Voice transcription
 
@@ -169,12 +190,14 @@ Choose `AI_MODEL` from the current
 instead of relying on an application default. The same `OPENAI_API_KEY` setting
 is shared with optional speech transcription.
 
-For a new text or voice note, the bot creates the Note and a parsing draft in
-one database transaction, then sends only the note text to the configured AI
-provider. Context includes the current local time, IANA
-timezone, active workspace, Telegram channel, and text or voice source. One
-message may produce multiple validated items with people, roles, topics, dates,
-supporting notes, and dependencies.
+For Telegram text, the bot uses one structured AI request to choose between a
+new draft and management of an existing WorkItem. A `new_draft` result creates
+the Note and parsing draft; a management result does not create an unrelated
+Note. Voice input creates its Note/draft after transcription and remains a
+draft-only flow. The provider receives text only. Context includes the current
+local time, IANA timezone, active workspace, Telegram channel, and source. One
+new-draft message may produce multiple validated items with people, roles,
+topics, dates, supporting notes, and dependencies.
 
 Every temporal candidate retains its original phrase. Resolved values are
 timezone-aware ISO datetimes; date-only due dates use `23:59:59` in the user's
@@ -220,9 +243,141 @@ case-insensitively by name or alias; clear new candidates are created, while
 vague or ambiguous candidates are skipped. Draft dependencies become directed
 WorkItem relations when both referenced items are actionable.
 
-This stage exposes no new HTTP endpoints or Telegram commands. It does not run
-a scheduler or send reminders; resolved reminder candidates are stored only as
-timezone-aware `next_follow_up_at` values.
+### Telegram work-item management
+
+`/today` shows overdue and due-today open records. `/tasks`, `/followups`,
+`/waiting`, and `/questions` show compact lists of the corresponding active
+records; `/topics` and `/people` include open-record counts. Lists use pages of
+five records with `Назад`, `Вперёд`, and `Главное меню` inline actions. Each
+WorkItem summary includes its date, people, topic, status, and a details button.
+
+The main reply keyboard contains `🎙 Записать`, `📅 Сегодня`, `✅ Задачи`,
+`🔁 Follow-up`, `⏳ Ждём`, `❓ Вопросы`, `👥 Люди`, `🗂 Темы`, `🔍 Поиск`, and
+`⚙️ Настройки`. `🎙 Записать` explains how to send text or voice; it cannot open
+Telegram's microphone directly. `/search query` searches the current user's
+open WorkItems by title, description, person, topic, type, or status. `/search`
+without a query and `🔍 Поиск` open a short-lived Reply prompt. Search replies
+are not stored as Notes or AI drafts. Completed records are included only with
+an explicit status filter or `status:all`.
+
+Search supports partial case-insensitive names and aliases plus deterministic
+operators. Quote values containing spaces:
+
+```text
+/search release person:"Антон Иванов"
+/search topic:Testing type:follow-up overdue
+/search status:done,archived Budget
+/search from:2026-07-01 to:2026-07-31 status:all
+```
+
+With AI enabled, ordinary questions such as `Что у меня осталось по Антону?`,
+`Что просрочено по теме Budget?`, or `Кого я давно не пинал?` are converted to
+strict search filters. PostgreSQL, not the model, selects every result. One
+clear conversational result opens directly; multiple results use the same
+five-item pagination. Search uses `ILIKE`/JSONB alias matching and does not
+provide fuzzy, semantic, vector, or standalone Note search.
+
+Open a record from a list to see its description, dates, people, topic, up to
+three relevant notes, recent history, and context-sensitive actions. Active
+tasks can be completed, snoozed, rescheduled, annotated, or cancelled;
+follow-ups also support **Ответ получен**; waiting records support **Получено**
+and creation of one linked follow-up. Completed records can be reopened.
+
+Actions update the existing card. Each button carries a compact revision, so a
+repeated or stale click cannot repeat a state transition and instead refreshes
+the current card. Snooze changes only the nearest active Reminder; reschedule
+changes `due_at` or `next_follow_up_at` and synchronizes reminders. Reschedule
+presets include later today, tomorrow morning, and the next working day. Custom
+dates and linked notes use an expiring Reply prompt; their text or voice input
+does not create an unrelated Note or AI draft. Every significant mutation is
+recorded as a `WorkItemEvent`. `/cancel` cancels an active work-item input
+session before it cancels an AI draft.
+
+When AI is configured, ordinary Telegram text is routed once as a new
+Note/draft, a search, or a management intent. A high-confidence intent with one
+owned match can be applied directly. Multiple matches require an explicit
+button selection showing type, title, people, topic, and date; the intended
+action is applied only after selection. The selection can be cancelled and
+expires with the standard action-session TTL. Ambiguous dates or missing values
+start one expiring input session.
+Reply references such as "эта задача" work only when replying to a WorkItem
+message. Voice messages normally remain Note input; the only management
+exception is a voice date inside an active custom-snooze prompt.
+
+This stage does not expose new HTTP endpoints, permanently delete records, or
+run a calendar integration. Dated WorkItems synchronize PostgreSQL reminders in
+the same transaction as creation or rescheduling.
+
+### Reminder scheduler
+
+The optional `scheduler` Compose profile runs `python -m flowmate.scheduler` in
+the shared non-root application image. It requires `TELEGRAM_BOT_TOKEN`, but
+the default PostgreSQL/API stack still starts without Telegram configuration.
+
+```dotenv
+SCHEDULER_INTERVAL_SECONDS=30
+REMINDER_BATCH_SIZE=50
+REMINDER_MAX_ATTEMPTS=3
+REMINDER_RETRY_DELAY_SECONDS=60
+REMINDER_PROCESSING_TIMEOUT_SECONDS=300
+REMINDER_DELIVERY_TIMEOUT_SECONDS=15
+DEADLINE_REMINDER_LEAD_MINUTES=0
+DEFAULT_MORNING_DIGEST_TIME=09:00
+DEFAULT_EVENING_DIGEST_TIME=18:00
+DEFAULT_QUIET_HOURS_START=22:00
+DEFAULT_QUIET_HOURS_END=08:00
+DEFAULT_SNOOZE_MINUTES=60
+```
+
+Due reminders are claimed with PostgreSQL row locks and a processing token.
+Temporary Telegram failures are retried up to the configured limit; permanent
+failures remain in history with a safe error category. Delivery is
+at-least-once: sent records are not selected again, but a process crash after
+Telegram accepts a message and before `sent` is committed can cause one retry.
+`REMINDER_PROCESSING_TIMEOUT_SECONDS` must be greater than
+`REMINDER_DELIVERY_TIMEOUT_SECONDS`, preventing an active delivery from losing
+its processing lease.
+Enabled morning and evening digests are created at most once per user and local
+day. They summarize current WorkItems immediately before delivery, remain
+idempotent across worker restarts, and handle local daylight-saving changes.
+Empty digests are suppressed unless the user explicitly enables them.
+
+An open follow-up uses `next_follow_up_at`, a waiting record uses `due_at`, and
+other dated records use `due_at` for an exact reminder. Set
+`DEADLINE_REMINDER_LEAD_MINUTES` to a positive number to add one earlier
+deadline notification; `0` disables it. Completion, cancellation, archiving,
+and receiving a waiting result cancel active reminders. Before delivery, the
+worker verifies that the WorkItem is still open and its date has not changed.
+
+Deadline notifications provide **Выполнено**, **Отложить**, and **Перенести**.
+Follow-ups also provide **Ответ получен**; waiting notifications provide
+**Получено** and **Follow-up**. Snooze updates the same reminder without changing
+the WorkItem date. Presets are 15 minutes, one hour, three hours, and tomorrow
+morning; a custom text or voice answer can provide another date. Reschedule
+changes the WorkItem date and event history.
+
+Ordinary notifications due during quiet hours move to the local end of the
+quiet period with a small deterministic spread. The worker checks quiet hours
+again after claiming and immediately before delivery; releasing such a claim
+does not consume a delivery attempt. Digests keep their configured schedule.
+Configure preferences in Telegram:
+
+```text
+/reminders
+/reminders timezone Europe/Riga
+/reminders morning 09:00
+/reminders evening 18:00
+/reminders snooze 60
+/reminders empty off
+/quiet 22:00 08:00
+/quiet off
+```
+
+Use `/snooze` as a reply to a reminder message. Digest actions can open today's
+items, atomically move unfinished actionable records and follow-ups to tomorrow,
+or review up to ten records one by one. Waiting dates are never moved by the
+bulk action. Use `make up-all` to run the bot and scheduler; `make up-worker`
+starts the worker independently.
 
 ## Operations
 
@@ -275,9 +430,14 @@ Telegram -> bot ----+  [optional Compose profile: bot]
                                       |
                                       +-> atomic confirmed records
                                           (Task Engine services)
+                                                   |
+                              Telegram lists/actions/history
+
+PostgreSQL <- scheduler worker -> Telegram notification service
+              [optional Compose profile: scheduler]
 ```
 
-Both application processes use the same non-root runtime image and shared async
+All application processes use the same non-root runtime image and shared async
 SQLAlchemy infrastructure. The environment allowlist remains the source of
 Telegram authorization; the `users` table owns each immutable note. Voice audio
 exists only in a permission-restricted temporary file while one update is

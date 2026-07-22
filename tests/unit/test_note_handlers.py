@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from aiogram.types import Chat, Message, Update, User
@@ -16,7 +17,8 @@ from flowmate.ai.schemas import (
     DependencyRelation,
     DraftAnalysisResult,
     DraftItemType,
-    DraftSource,
+    SearchIntent,
+    SearchWorkItemType,
 )
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.handlers.drafts import (
@@ -25,6 +27,7 @@ from flowmate.bot.handlers.drafts import (
     format_draft_summary,
 )
 from flowmate.bot.handlers.notes import (
+    MANAGEMENT_ALREADY_PROCESSED_MESSAGE,
     NO_NOTES_MESSAGE,
     NOTE_ALREADY_SAVED_MESSAGE,
     NOTE_EMPTY_MESSAGE,
@@ -65,14 +68,32 @@ def make_draft_result(title: str = "Prepare report") -> DraftAnalysisResult:
 
 
 def make_draft_service(
-    result: DraftAnalysisResult | None = None,
+    result: DraftAnalysisResult | SearchIntent | None = None,
     *,
     error: Exception | None = None,
 ) -> tuple[DraftParsingService, AsyncMock]:
     parse = AsyncMock(return_value=result or make_draft_result(), side_effect=error)
     service = MagicMock(spec=DraftParsingService)
     service.parse = parse
+    service.parse_text = parse
     return cast(DraftParsingService, service), parse
+
+
+def make_search_intent() -> SearchIntent:
+    return SearchIntent(
+        text_query=None,
+        person_query="Антон",
+        topic_query=None,
+        item_types=[SearchWorkItemType.FOLLOW_UP],
+        statuses=[],
+        include_all_statuses=False,
+        due_from=None,
+        due_to=None,
+        overdue=False,
+        stale_contacts=False,
+        ambiguities=[],
+        confidence=0.95,
+    )
 
 
 def make_message(user_id: int = 123, text: str = "Заметка") -> Message:
@@ -91,6 +112,10 @@ def make_update(message: Message, update_id: int = 1001) -> Update:
 
 def make_session() -> AsyncSession:
     session = MagicMock(spec=AsyncSession)
+    scalar_result = MagicMock()
+    scalar_result.one_or_none.return_value = None
+    session.scalars = AsyncMock(return_value=scalar_result)
+    session.scalar = AsyncMock(return_value=None)
     session.commit = AsyncMock()
     session.rollback = AsyncMock()
     return cast(AsyncSession, session)
@@ -238,7 +263,7 @@ async def test_new_text_note_is_parsed_and_returned_as_plain_text() -> None:
             service,
         )
 
-    parse.assert_awaited_once_with("Prepare report", source=DraftSource.TEXT)
+    parse.assert_awaited_once_with("Prepare report")
     assert answer.await_args_list[0].args[0] == DRAFT_ANALYZING_MESSAGE
     summary_call = answer.await_args_list[1]
     assert "Я нашёл записей: 1" in summary_call.args[0]
@@ -256,6 +281,10 @@ async def test_duplicate_text_note_does_not_call_ai() -> None:
     service, parse = make_draft_service()
     with (
         patch(
+            "flowmate.bot.handlers.notes.get_note_by_telegram_update_id",
+            new=AsyncMock(return_value=Note()),
+        ),
+        patch(
             "flowmate.bot.handlers.notes.save_note_for_message",
             new=AsyncMock(return_value=make_save_outcome("duplicate")),
         ),
@@ -265,6 +294,58 @@ async def test_duplicate_text_note_does_not_call_ai() -> None:
 
     parse.assert_not_awaited()
     answer.assert_awaited_once_with(NOTE_ALREADY_SAVED_MESSAGE)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_management_update_does_not_call_ai_or_save_note() -> None:
+    message = make_message(text="закрой задачу")
+    service, parse = make_draft_service()
+    save_note = AsyncMock()
+    with (
+        patch(
+            "flowmate.bot.handlers.notes.management_update_was_processed",
+            new=AsyncMock(return_value=True),
+        ) as was_processed,
+        patch(
+            "flowmate.bot.handlers.notes.save_note_for_message",
+            new=save_note,
+        ),
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+    ):
+        await text_note(message, make_update(message, 1002), make_session(), service)
+
+    was_processed.assert_awaited_once()
+    parse.assert_not_awaited()
+    save_note.assert_not_awaited()
+    answer.assert_awaited_once_with(MANAGEMENT_ALREADY_PROCESSED_MESSAGE)
+
+
+@pytest.mark.asyncio
+async def test_conversational_search_does_not_create_note_or_draft() -> None:
+    message = make_message(text="Что осталось по Антону?")
+    intent = make_search_intent()
+    service, parse = make_draft_service(intent)
+    save_note = AsyncMock()
+    with (
+        patch(
+            "flowmate.bot.handlers.notes.execute_search_intent",
+            new=AsyncMock(),
+        ) as execute_search,
+        patch("flowmate.bot.handlers.notes.save_note_for_message", new=save_note),
+    ):
+        await text_note(
+            message,
+            make_update(message, 1003),
+            make_session(),
+            service,
+            app_timezone=ZoneInfo("UTC"),
+        )
+
+    parse.assert_awaited_once_with("Что осталось по Антону?")
+    execute_search.assert_awaited_once()
+    assert execute_search.await_args is not None
+    assert execute_search.await_args.args[3] == intent
+    save_note.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -281,14 +362,14 @@ async def test_ai_failure_keeps_saved_note_and_logs_no_content(
             new=save_note,
         ),
         patch.object(Message, "answer", new_callable=AsyncMock) as answer,
-        caplog.at_level(logging.WARNING, logger="flowmate.bot.handlers.drafts"),
+        caplog.at_level(logging.WARNING, logger="flowmate.bot.handlers.notes"),
     ):
         await text_note(message, make_update(message), make_session(), service)
 
     save_note.assert_awaited_once()
-    parse.assert_awaited_once_with(private_content, source=DraftSource.TEXT)
+    parse.assert_awaited_once_with(private_content)
     assert [call.args[0] for call in answer.await_args_list] == [
-        DRAFT_ANALYZING_MESSAGE,
+        NOTE_SAVED_MESSAGE,
         DRAFT_FAILED_MESSAGE,
     ]
     assert "user_id=123" in caplog.text

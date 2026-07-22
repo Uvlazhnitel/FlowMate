@@ -6,12 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from flowmate.ai.errors import AIConfigurationError
 from flowmate.ai.factory import create_ai_provider
-from flowmate.ai.provider import AIProvider
+from flowmate.ai.provider import AIProvider, SnoozeTimeProvider
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.handlers import create_router
 from flowmate.core.config import Settings, get_settings
 from flowmate.core.logging import configure_logging
 from flowmate.db.session import create_engine, create_session_factory
+from flowmate.reminders.parsing import SnoozeParsingService
+from flowmate.reminders.preferences import NotificationDefaults
+from flowmate.reminders.sync import ReminderPolicy
 from flowmate.speech.errors import SpeechConfigurationError
 from flowmate.speech.factory import create_speech_provider
 from flowmate.speech.provider import SpeechToTextProvider
@@ -27,11 +30,26 @@ def create_dispatcher(
     transcription_service: TranscriptionService | None = None,
     draft_parsing_service: DraftParsingService | None = None,
 ) -> Dispatcher:
+    reminder_policy = ReminderPolicy(
+        deadline_lead_minutes=settings.deadline_reminder_lead_minutes
+    )
+    notification_defaults = NotificationDefaults.from_settings(settings)
     dispatcher = Dispatcher(
         transcription_service=transcription_service,
         draft_parsing_service=draft_parsing_service,
-        draft_conversion_service=DraftConversionService(),
+        draft_conversion_service=DraftConversionService(
+            reminder_policy=reminder_policy
+        ),
+        reminder_policy=reminder_policy,
         draft_ttl_hours=settings.draft_ttl_hours,
+        app_timezone=ZoneInfo(settings.app_timezone),
+        ai_high_confidence_threshold=settings.ai_high_confidence_threshold,
+        work_item_action_ttl_minutes=settings.work_item_action_ttl_minutes,
+        notification_defaults=notification_defaults,
+        snooze_parsing_service=SnoozeParsingService(
+            None,
+            timeout_seconds=settings.ai_timeout_seconds,
+        ),
     )
     dispatcher.include_router(
         create_router(settings.telegram_allowed_user_ids, session_factory, engine)
@@ -96,6 +114,10 @@ async def run_bot(settings: Settings | None = None) -> None:
             engine,
             transcription_service,
             draft_parsing_service,
+        )
+        dispatcher["snooze_parsing_service"] = SnoozeParsingService(
+            ai_provider if isinstance(ai_provider, SnoozeTimeProvider) else None,
+            timeout_seconds=app_settings.ai_timeout_seconds,
         )
         async with Bot(token=bot_token) as bot:
             logger.info("telegram_bot_started")

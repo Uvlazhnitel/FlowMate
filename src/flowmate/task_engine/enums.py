@@ -41,6 +41,29 @@ class WorkItemEventType(StrEnum):
     UPDATED = "updated"
     STATUS_CHANGED = "status_changed"
     LINKED = "linked"
+    COMPLETED = "completed"
+    REOPENED = "reopened"
+    CANCELLED = "cancelled"
+    RESCHEDULED = "rescheduled"
+    NOTE_ADDED = "note_added"
+    TOPIC_CHANGED = "topic_changed"
+    PERSON_CHANGED = "person_changed"
+    WAITING_RECEIVED = "waiting_received"
+    PERSON_REPLIED = "person_replied"
+    REMINDER_SNOOZED = "reminder_snoozed"
+    ARCHIVED = "archived"
+
+
+class WorkItemAction(StrEnum):
+    SELECT_RECORD = "select_record"
+    RESCHEDULE = "reschedule"
+    ADD_NOTE = "add_note"
+    CHANGE_TOPIC = "change_topic"
+    ADD_PERSON = "add_person"
+    REPLACE_PERSON = "replace_person"
+    REMINDER_SNOOZE = "reminder_snooze"
+    DIGEST_REVIEW = "digest_review"
+    SEARCH = "search"
 
 
 class NoteTargetType(StrEnum):

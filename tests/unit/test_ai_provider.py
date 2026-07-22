@@ -1,3 +1,4 @@
+# ruff: noqa: RUF001
 import asyncio
 import logging
 from datetime import UTC, datetime
@@ -19,7 +20,16 @@ from flowmate.ai.errors import (
 from flowmate.ai.factory import create_ai_provider
 from flowmate.ai.openai_provider import OpenAIAIProvider
 from flowmate.ai.prompt import build_system_prompt
-from flowmate.ai.schemas import DraftItemType, DraftParseResult, DraftSource
+from flowmate.ai.schemas import (
+    DraftItemType,
+    DraftParseResult,
+    DraftSource,
+    ManagementAction,
+    ManagementIntent,
+    SearchIntent,
+    SearchWorkItemType,
+    TelegramTextParseResult,
+)
 from flowmate.ai.service import DraftParsingService
 from flowmate.core.config import Settings
 from tests.ai_factories import make_context, make_parse_result
@@ -59,6 +69,46 @@ async def test_openai_provider_uses_structured_responses_without_tools() -> None
         timeout=17.0,
     )
     close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_uses_strict_text_routing_schema() -> None:
+    intent = ManagementIntent(
+        action=ManagementAction.COMPLETE,
+        target_type=DraftItemType.FOLLOW_UP,
+        record_query="Антон",
+        contextual_reference=False,
+        person_candidate="Антон",
+        topic_candidate=None,
+        note_text=None,
+        temporal_candidate=None,
+        missing_fields=[],
+        ambiguities=[],
+        confidence=0.94,
+    )
+    result = TelegramTextParseResult(
+        mode="management",
+        draft=None,
+        management=intent,
+    )
+    client, parse, _ = make_client(result)
+    provider = OpenAIAIProvider(client, model="configured-model", timeout_seconds=17)
+
+    parsed = await provider.parse_text(
+        system_prompt="routing prompt",
+        user_text="закрой follow-up с Антоном",
+    )
+
+    assert parsed is result
+    parse.assert_awaited_once_with(
+        model="configured-model",
+        instructions="routing prompt",
+        input="закрой follow-up с Антоном",
+        text_format=TelegramTextParseResult,
+        store=False,
+        tools=[],
+        timeout=17.0,
+    )
 
 
 @pytest.mark.asyncio
@@ -148,6 +198,22 @@ class CapturingProvider:
         return None
 
 
+class RoutingProvider(CapturingProvider):
+    def __init__(self, result: TelegramTextParseResult) -> None:
+        super().__init__()
+        self.result = result
+
+    async def parse_text(
+        self,
+        *,
+        system_prompt: str,
+        user_text: str,
+    ) -> TelegramTextParseResult:
+        self.system_prompt = system_prompt
+        self.user_text = user_text
+        return self.result
+
+
 def fixed_clock(timezone: ZoneInfo) -> datetime:
     return datetime(2026, 7, 20, 12, 30, tzinfo=UTC).astimezone(timezone)
 
@@ -174,6 +240,80 @@ async def test_service_passes_workspace_source_and_time_context() -> None:
     assert "Reference timezone: Europe/Riga" in provider.system_prompt
     assert result.context.source is DraftSource.VOICE
     assert result.context.active_workspace == "client-alpha"
+
+
+@pytest.mark.asyncio
+async def test_service_routes_management_without_creating_a_draft() -> None:
+    intent = ManagementIntent(
+        action=ManagementAction.WAITING_RECEIVED,
+        target_type=DraftItemType.WAITING,
+        record_query="ответ Антона",
+        contextual_reference=False,
+        person_candidate="Антон",
+        topic_candidate=None,
+        note_text=None,
+        temporal_candidate=None,
+        missing_fields=[],
+        ambiguities=[],
+        confidence=0.9,
+    )
+    provider = RoutingProvider(
+        TelegramTextParseResult(
+            mode="management",
+            draft=None,
+            management=intent,
+        )
+    )
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("Europe/Riga"),
+        active_workspace="personal",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=fixed_clock,
+    )
+
+    result = await service.parse_text(" Антон ответил ")
+
+    assert result is intent
+    assert provider.user_text == "Антон ответил"
+    assert "new_draft" in provider.system_prompt
+    assert "management" in provider.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_service_routes_conversational_search_to_strict_filters() -> None:
+    intent = SearchIntent(
+        text_query=None,
+        person_query=None,
+        topic_query="Testing",
+        item_types=[SearchWorkItemType.FOLLOW_UP],
+        statuses=[],
+        include_all_statuses=False,
+        due_from=None,
+        due_to=None,
+        overdue=True,
+        stale_contacts=False,
+        ambiguities=[],
+        confidence=0.96,
+    )
+    provider = RoutingProvider(TelegramTextParseResult(mode="search", search=intent))
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("Europe/Riga"),
+        active_workspace="personal",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=fixed_clock,
+    )
+
+    result = await service.parse_text("Какие follow-up просрочены по Testing?")
+
+    assert result is intent
+    assert provider.user_text == "Какие follow-up просрочены по Testing?"
+    assert "Do not invent results" in " ".join(provider.system_prompt.split())
 
 
 def test_system_prompt_contains_types_and_reference_timezone() -> None:

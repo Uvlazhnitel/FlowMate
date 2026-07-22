@@ -19,6 +19,7 @@ from flowmate.db.models import (
     WorkItemPerson,
     WorkItemRelation,
 )
+from flowmate.reminders.sync import ReminderPolicy, sync_work_item_reminders
 from flowmate.task_engine.enums import (
     NoteTargetType,
     WorkItemEventType,
@@ -348,6 +349,9 @@ async def create_work_item(
     completed_at: datetime | None = None,
     source_note_id: UUID | None = None,
     source_draft_item_id: UUID | None = None,
+    telegram_update_id: int | None = None,
+    reminder_policy: ReminderPolicy | None = None,
+    reminder_now: datetime | None = None,
 ) -> WorkItem:
     parsed_type = parse_work_item_type(item_type)
     parsed_status = parse_work_item_status(status)
@@ -395,9 +399,16 @@ async def create_work_item(
                 "status": parsed_status.value,
                 "priority": parsed_priority.value,
             },
+            telegram_update_id=telegram_update_id,
         )
     )
     await session.flush()
+    await sync_work_item_reminders(
+        session,
+        work_item,
+        policy=reminder_policy,
+        now=reminder_now,
+    )
     return work_item
 
 
@@ -616,6 +627,7 @@ async def append_work_item_event(
     event_type: WorkItemEventType | str,
     *,
     payload: dict[str, Any] | None = None,
+    telegram_update_id: int | None = None,
 ) -> WorkItemEvent:
     parsed_type = parse_event_type(event_type)
     if await get_work_item(session, user_id, work_item_id) is None:
@@ -625,6 +637,7 @@ async def append_work_item_event(
         work_item_id=work_item_id,
         event_type=parsed_type.value,
         payload=dict(payload or {}),
+        telegram_update_id=telegram_update_id,
     )
     session.add(event)
     await session.flush()

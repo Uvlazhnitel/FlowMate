@@ -15,21 +15,27 @@ from flowmate.db.models import (
     Note,
     NoteLink,
     Person,
+    Reminder,
     Topic,
     User,
+    UserNotificationPreferences,
     WorkItem,
+    WorkItemActionSession,
     WorkItemEvent,
     WorkItemPerson,
     WorkItemRelation,
 )
 
 _ = User
+_ = UserNotificationPreferences
 _ = Note
 _ = DraftSession
 _ = DraftItemRecord
 _ = Topic
 _ = Person
+_ = Reminder
 _ = WorkItem
+_ = WorkItemActionSession
 _ = WorkItemPerson
 _ = WorkItemRelation
 _ = NoteLink

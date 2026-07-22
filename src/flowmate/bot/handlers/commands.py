@@ -3,7 +3,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from flowmate.bot.filters import ActiveDraftFilter
+from flowmate.bot.filters import ActiveDraftFilter, ActiveWorkItemActionFilter
 from flowmate.bot.handlers.clarification import active_draft_message
 from flowmate.bot.handlers.drafts import (
     DRAFT_CANCELLED_MESSAGE,
@@ -11,12 +11,53 @@ from flowmate.bot.handlers.drafts import (
     draft_callback,
     show_draft,
 )
+from flowmate.bot.handlers.navigation import (
+    FOLLOW_UPS_BUTTON,
+    PEOPLE_BUTTON,
+    QUESTIONS_BUTTON,
+    RECORD_BUTTON,
+    SEARCH_BUTTON,
+    SETTINGS_BUTTON,
+    TASKS_BUTTON,
+    TODAY_BUTTON,
+    TOPICS_BUTTON,
+    WAITING_BUTTON,
+    followups_command,
+    list_callback,
+    main_menu_keyboard,
+    menu_callback,
+    menu_command,
+    people_command,
+    questions_command,
+    record_prompt,
+    search_callback,
+    search_command,
+    tasks_command,
+    today_command,
+    topics_command,
+    waiting_command,
+)
 from flowmate.bot.handlers.notes import notes_command, text_note
+from flowmate.bot.handlers.preferences import (
+    quiet_command,
+    reminders_settings_command,
+    snooze_command,
+)
+from flowmate.bot.handlers.reminders import digest_callback, reminder_callback
 from flowmate.bot.handlers.voice import voice_message
+from flowmate.bot.handlers.work_items import (
+    action_session_message,
+    work_item_callback,
+    work_item_selection_callback,
+)
 from flowmate.bot.middleware import AllowedUserMiddleware, DatabaseSessionMiddleware
 from flowmate.db.drafts import get_active_draft_for_user, transition_draft
 from flowmate.db.health import database_is_ready
 from flowmate.db.users import get_or_create_telegram_user, get_user_by_telegram_id
+from flowmate.task_engine.action_sessions import (
+    finish_action_session,
+    get_active_action_session,
+)
 
 
 async def start_command(message: Message, db_session: AsyncSession) -> None:
@@ -32,13 +73,19 @@ async def start_command(message: Message, db_session: AsyncSession) -> None:
     user.display_name = telegram_user.full_name[:255]
     user.is_active = True
     await db_session.flush()
-    await message.answer("Добро пожаловать! FlowMate готов к работе.")
+    await message.answer(
+        "Добро пожаловать! FlowMate готов к работе.",
+        parse_mode=None,
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 async def help_command(message: Message) -> None:
     await message.answer(
-        "Доступные команды: /start, /help, /status, /notes. "
-        "Черновики: /draft, /cancel. "
+        "Доступные команды: /start, /menu, /help, /status, /notes, /search. "
+        "Записи: /today, /tasks, /followups, /waiting, /questions, "
+        "/topics, /people. Черновики: /draft, /cancel. "
+        "Напоминания: /reminders, /quiet, /snooze. "
         "Отправьте текст или голосовое сообщение, чтобы сохранить заметку."
     )
 
@@ -78,6 +125,16 @@ async def cancel_command(message: Message, db_session: AsyncSession) -> None:
     if telegram_user is None:
         return
     user = await get_user_by_telegram_id(db_session, telegram_user.id)
+    action_session = (
+        await get_active_action_session(db_session, user.id)
+        if user is not None
+        else None
+    )
+    if action_session is not None:
+        await finish_action_session(db_session, action_session, status="cancelled")
+        await db_session.commit()
+        await message.answer("Текущее действие отменено.")
+        return
     draft = (
         await get_active_draft_for_user(db_session, user.id)
         if user is not None
@@ -102,11 +159,38 @@ def create_router(
     router.message.middleware(DatabaseSessionMiddleware(session_factory, engine))
     router.callback_query.middleware(DatabaseSessionMiddleware(session_factory, engine))
     router.message.register(start_command, Command("start"))
+    router.message.register(menu_command, Command("menu"))
     router.message.register(help_command, Command("help"))
     router.message.register(status_command, Command("status"))
     router.message.register(notes_command, Command("notes"))
     router.message.register(draft_command, Command("draft"))
     router.message.register(cancel_command, Command("cancel"))
+    router.message.register(today_command, Command("today"))
+    router.message.register(tasks_command, Command("tasks"))
+    router.message.register(followups_command, Command("followups"))
+    router.message.register(waiting_command, Command("waiting"))
+    router.message.register(questions_command, Command("questions"))
+    router.message.register(topics_command, Command("topics"))
+    router.message.register(people_command, Command("people"))
+    router.message.register(reminders_settings_command, Command("reminders"))
+    router.message.register(quiet_command, Command("quiet"))
+    router.message.register(snooze_command, Command("snooze"))
+    router.message.register(search_command, Command("search"))
+    router.message.register(record_prompt, F.text == RECORD_BUTTON)
+    router.message.register(today_command, F.text == TODAY_BUTTON)
+    router.message.register(tasks_command, F.text == TASKS_BUTTON)
+    router.message.register(followups_command, F.text == FOLLOW_UPS_BUTTON)
+    router.message.register(waiting_command, F.text == WAITING_BUTTON)
+    router.message.register(questions_command, F.text == QUESTIONS_BUTTON)
+    router.message.register(people_command, F.text == PEOPLE_BUTTON)
+    router.message.register(topics_command, F.text == TOPICS_BUTTON)
+    router.message.register(search_command, F.text == SEARCH_BUTTON)
+    router.message.register(reminders_settings_command, F.text == SETTINGS_BUTTON)
+    router.message.register(
+        action_session_message,
+        ActiveWorkItemActionFilter(),
+        F.text | F.voice,
+    )
     router.message.register(
         active_draft_message,
         ActiveDraftFilter(),
@@ -116,4 +200,14 @@ def create_router(
     router.message.register(text_note, F.text & ~F.text.startswith("/"))
     router.message.register(unsupported_message)
     router.callback_query.register(draft_callback, F.data.startswith("draft:"))
+    router.callback_query.register(reminder_callback, F.data.startswith("rem:"))
+    router.callback_query.register(digest_callback, F.data.startswith("dig:"))
+    router.callback_query.register(list_callback, F.data.startswith("ls:"))
+    router.callback_query.register(search_callback, F.data.startswith("lq:"))
+    router.callback_query.register(menu_callback, F.data == "nav:menu")
+    router.callback_query.register(work_item_callback, F.data.startswith("wi:"))
+    router.callback_query.register(
+        work_item_selection_callback,
+        F.data.startswith("wis:"),
+    )
     return router

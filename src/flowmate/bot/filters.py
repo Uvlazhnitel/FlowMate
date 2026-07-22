@@ -11,6 +11,32 @@ from flowmate.db.drafts import (
     get_draft_by_question_message,
 )
 from flowmate.db.users import get_user_by_telegram_id
+from flowmate.task_engine.action_sessions import get_active_action_session
+
+
+class ActiveWorkItemActionFilter(Filter):
+    async def __call__(
+        self,
+        message: Message,
+        db_session: AsyncSession,
+    ) -> bool | dict[str, Any]:
+        telegram_user = message.from_user
+        if telegram_user is None:
+            return False
+        try:
+            user = await get_user_by_telegram_id(db_session, telegram_user.id)
+            if user is None:
+                return False
+            action = await get_active_action_session(db_session, user.id)
+        except SQLAlchemyError:
+            await db_session.rollback()
+            return False
+        if action is None:
+            return False
+        return {
+            "active_work_item_action": action,
+            "action_user_id": user.id,
+        }
 
 
 class ActiveDraftFilter(Filter):

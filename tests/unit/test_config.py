@@ -40,6 +40,44 @@ def test_loads_development_defaults_without_environment() -> None:
     assert settings.ai_high_confidence_threshold == 0.8
     assert settings.ai_clarification_confidence_threshold == 0.5
     assert settings.draft_ttl_hours == 24
+    assert settings.scheduler_interval_seconds == 30
+    assert settings.reminder_batch_size == 50
+    assert settings.reminder_max_attempts == 3
+    assert settings.reminder_retry_delay_seconds == 60
+    assert settings.reminder_processing_timeout_seconds == 300
+    assert settings.reminder_delivery_timeout_seconds == 15
+    assert settings.deadline_reminder_lead_minutes == 0
+    assert settings.default_morning_digest_time.strftime("%H:%M") == "09:00"
+    assert settings.default_evening_digest_time.strftime("%H:%M") == "18:00"
+    assert settings.default_snooze_minutes == 60
+
+
+def test_notification_default_settings_parse_and_validate() -> None:
+    settings = Settings(
+        _env_file=None,
+        default_morning_digest_time="08:30",
+        default_evening_digest_time="19:15",
+        default_quiet_hours_start="23:00",
+        default_quiet_hours_end="07:00",
+        default_snooze_minutes=45,
+    )
+    assert settings.default_morning_digest_time.strftime("%H:%M") == "08:30"
+    assert settings.default_snooze_minutes == 45
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            default_quiet_hours_start="08:00",
+            default_quiet_hours_end="08:00",
+        )
+
+
+def test_processing_lease_must_exceed_delivery_timeout() -> None:
+    with pytest.raises(ValidationError, match="processing timeout"):
+        Settings(
+            _env_file=None,
+            reminder_processing_timeout_seconds=15,
+            reminder_delivery_timeout_seconds=15,
+        )
 
 
 def test_parses_speech_configuration() -> None:
@@ -116,6 +154,13 @@ def test_empty_ai_configuration_is_disabled() -> None:
         ("ai_clarification_confidence_threshold", -0.01),
         ("draft_ttl_hours", 0),
         ("draft_ttl_hours", 721),
+        ("scheduler_interval_seconds", 0),
+        ("reminder_batch_size", 0),
+        ("reminder_max_attempts", 0),
+        ("reminder_retry_delay_seconds", 0),
+        ("reminder_processing_timeout_seconds", 0),
+        ("reminder_delivery_timeout_seconds", 0),
+        ("deadline_reminder_lead_minutes", -1),
     ],
 )
 def test_rejects_invalid_speech_configuration(field: str, value: object) -> None:
@@ -188,6 +233,17 @@ def test_process_specific_requirements() -> None:
         settings.require_api()
     with pytest.raises(ValueError, match="TELEGRAM_BOT_TOKEN"):
         settings.require_bot()
+    with pytest.raises(ValueError, match="TELEGRAM_BOT_TOKEN"):
+        settings.require_scheduler()
+
+
+def test_scheduler_requires_token_but_not_allowlist() -> None:
+    settings = Settings(
+        _env_file=None,
+        telegram_bot_token="123456:private-token",
+    )
+
+    assert settings.require_scheduler() is settings
 
 
 def test_empty_process_secrets_are_treated_as_missing() -> None:

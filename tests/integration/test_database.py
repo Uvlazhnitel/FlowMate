@@ -1,5 +1,7 @@
 import asyncio
+from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
@@ -8,6 +10,7 @@ from sqlalchemy import String, inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from flowmate.db.health import database_is_ready
+from flowmate.db.session import create_engine
 from tests.conftest import (
     APPLICATION_TABLES,
     TEST_DATABASE_URL,
@@ -16,19 +19,104 @@ from tests.conftest import (
 )
 
 
+async def seed_backfill_work_item(database_url: str) -> tuple[UUID, datetime]:
+    engine = create_engine(database_url)
+    user_id = uuid4()
+    item_id = uuid4()
+    due_at = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO users (id, telegram_user_id, is_active) "
+                    "VALUES (:id, :telegram_user_id, true)"
+                ),
+                {"id": user_id, "telegram_user_id": 699_001},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO work_items "
+                    "(id, user_id, type, title, status, priority, due_at) "
+                    "VALUES (:id, :user_id, 'task', 'Backfill task', "
+                    "'active', 'normal', :due_at)"
+                ),
+                {"id": item_id, "user_id": user_id, "due_at": due_at},
+            )
+    finally:
+        await engine.dispose()
+    return item_id, due_at
+
+
+async def read_backfilled_reminder(
+    database_url: str,
+    item_id: UUID,
+) -> tuple[str, datetime] | None:
+    engine = create_engine(database_url)
+    try:
+        async with engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    text(
+                        "SELECT schedule_kind, reference_at FROM reminders "
+                        "WHERE work_item_id = :item_id"
+                    ),
+                    {"item_id": item_id},
+                )
+            ).one_or_none()
+        return (row[0], row[1]) if row is not None else None
+    finally:
+        await engine.dispose()
+
+
+async def delete_backfill_user(database_url: str) -> None:
+    engine = create_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM users WHERE telegram_user_id = 699001")
+            )
+    finally:
+        await engine.dispose()
+
+
 def test_migrations_upgrade_from_previous_stage_revision(
     migrated_database: None,
 ) -> None:
     alembic_config = Config("alembic.ini")
     try:
-        command.downgrade(alembic_config, "0006_create_task_engine")
+        command.downgrade(alembic_config, "0009_create_reminders")
         assert asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_sessions"))
         assert asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_items"))
-        for table_name in APPLICATION_TABLES:
-            assert asyncio.run(database_has_table(TEST_DATABASE_URL, table_name))
+        assert asyncio.run(
+            database_has_table(TEST_DATABASE_URL, "work_item_action_sessions")
+        )
+        assert asyncio.run(database_has_table(TEST_DATABASE_URL, "reminders"))
+        item_id, due_at = asyncio.run(seed_backfill_work_item(TEST_DATABASE_URL))
         command.upgrade(alembic_config, "head")
+        assert asyncio.run(read_backfilled_reminder(TEST_DATABASE_URL, item_id)) == (
+            "exact",
+            due_at,
+        )
+        asyncio.run(delete_backfill_user(TEST_DATABASE_URL))
         for table_name in APPLICATION_TABLES:
             assert asyncio.run(database_has_table(TEST_DATABASE_URL, table_name))
+    finally:
+        command.upgrade(alembic_config, "head")
+
+
+def test_notification_preferences_migration_from_0010(
+    migrated_database: None,
+) -> None:
+    alembic_config = Config("alembic.ini")
+    try:
+        command.downgrade(alembic_config, "0010_connect_work_item_reminders")
+        assert not asyncio.run(
+            database_has_table(TEST_DATABASE_URL, "user_notification_preferences")
+        )
+        command.upgrade(alembic_config, "head")
+        assert asyncio.run(
+            database_has_table(TEST_DATABASE_URL, "user_notification_preferences")
+        )
     finally:
         command.upgrade(alembic_config, "head")
 
@@ -86,7 +174,96 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
     assert {constraint["name"] for constraint in check_constraints} >= {
         "ck_users_telegram_user_id_positive"
     }
-    assert revision == "0007_draft_conversion"
+    assert revision == "0012_main_menu_navigation"
+
+
+@pytest.mark.integration
+async def test_reminder_schema_has_delivery_constraints(
+    database_engine: AsyncEngine,
+) -> None:
+    async with database_engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"]: column
+                for column in inspect(sync_connection).get_columns("reminders")
+            }
+        )
+        checks = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_check_constraints(
+                "reminders"
+            )
+        )
+        uniques = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_unique_constraints(
+                "reminders"
+            )
+        )
+        indexes = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_indexes("reminders")
+        )
+
+    assert columns["work_item_id"]["nullable"] is True
+    assert columns["processing_token"]["nullable"] is True
+    assert columns["next_attempt_at"]["nullable"] is True
+    assert columns["reference_at"]["nullable"] is True
+    assert columns["schedule_kind"]["nullable"] is False
+    assert columns["digest_local_date"]["nullable"] is True
+    assert columns["schedule_timezone"]["nullable"] is True
+    assert {constraint["name"] for constraint in checks} >= {
+        "ck_reminders_deduplication_key_not_blank",
+        "ck_reminders_delivery_attempts_nonnegative",
+        "ck_reminders_message_not_blank",
+        "ck_reminders_status",
+        "ck_reminders_type",
+        "ck_reminders_schedule_kind",
+        "ck_reminders_managed_reference",
+    }
+    assert {constraint["name"] for constraint in uniques} >= {
+        "uq_reminders_user_deduplication_key",
+        "uq_reminders_user_digest_local_date",
+    }
+    assert {index["name"] for index in indexes} >= {
+        "ix_reminders_status_scheduled_at",
+        "ix_reminders_user_status",
+        "ix_reminders_work_item_id",
+        "ix_reminders_work_item_status_kind",
+    }
+
+
+@pytest.mark.integration
+async def test_notification_preferences_schema(database_engine: AsyncEngine) -> None:
+    async with database_engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"]: column
+                for column in inspect(sync_connection).get_columns(
+                    "user_notification_preferences"
+                )
+            }
+        )
+        checks = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_check_constraints(
+                "user_notification_preferences"
+            )
+        )
+
+    assert {
+        "timezone",
+        "morning_digest_enabled",
+        "morning_digest_time",
+        "evening_digest_enabled",
+        "evening_digest_time",
+        "quiet_hours_enabled",
+        "quiet_hours_start",
+        "quiet_hours_end",
+        "default_snooze_minutes",
+        "send_empty_digests",
+    } <= set(columns)
+    assert {constraint["name"] for constraint in checks} >= {
+        "ck_user_notification_preferences_timezone_not_blank",
+        "ck_user_notification_preferences_snooze_range",
+        "ck_user_notification_preferences_quiet_range",
+    }
 
 
 @pytest.mark.integration
@@ -212,6 +389,40 @@ async def test_task_engine_schema_has_core_constraints(
                 "work_item_relations"
             )
         )
+        event_columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"]: column
+                for column in inspect(sync_connection).get_columns("work_item_events")
+            }
+        )
+        event_uniques = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_unique_constraints(
+                "work_item_events"
+            )
+        )
+        action_checks = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_check_constraints(
+                "work_item_action_sessions"
+            )
+        )
+        action_columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"]: column
+                for column in inspect(sync_connection).get_columns(
+                    "work_item_action_sessions"
+                )
+            }
+        )
+        action_uniques = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_unique_constraints(
+                "work_item_action_sessions"
+            )
+        )
+        action_indexes = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_indexes(
+                "work_item_action_sessions"
+            )
+        )
 
     assert {constraint["name"] for constraint in work_item_checks} >= {
         "ck_work_items_priority",
@@ -232,4 +443,22 @@ async def test_task_engine_schema_has_core_constraints(
     assert {constraint["name"] for constraint in relation_checks} >= {
         "ck_work_item_relations_not_self",
         "ck_work_item_relations_type",
+    }
+    assert event_columns["telegram_update_id"]["nullable"] is True
+    assert {constraint["name"] for constraint in event_uniques} >= {
+        "uq_work_item_events_telegram_update_id"
+    }
+    assert {constraint["name"] for constraint in action_checks} >= {
+        "ck_work_item_action_sessions_action",
+        "ck_work_item_action_sessions_expiration",
+        "ck_work_item_action_sessions_status",
+        "ck_work_item_action_sessions_telegram_update_id_positive",
+    }
+    assert action_columns["telegram_update_id"]["nullable"] is True
+    assert {constraint["name"] for constraint in action_uniques} >= {
+        "uq_work_item_action_sessions_telegram_update_id"
+    }
+    assert {index["name"] for index in action_indexes} >= {
+        "ix_work_item_action_sessions_expires_at",
+        "uq_work_item_action_sessions_user_open",
     }

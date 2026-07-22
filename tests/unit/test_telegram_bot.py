@@ -277,8 +277,10 @@ async def test_help_response() -> None:
         await help_command(make_message(123, text="/help"))
 
     answer.assert_awaited_once_with(
-        "Доступные команды: /start, /help, /status, /notes. "
-        "Черновики: /draft, /cancel. "
+        "Доступные команды: /start, /menu, /help, /status, /notes, /search. "
+        "Записи: /today, /tasks, /followups, /waiting, /questions, "
+        "/topics, /people. Черновики: /draft, /cancel. "
+        "Напоминания: /reminders, /quiet, /snooze. "
         "Отправьте текст или голосовое сообщение, чтобы сохранить заметку."
     )
 

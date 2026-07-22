@@ -71,3 +71,32 @@ Current draft: {draft_json}
 Clarification question: {question}
 Answer source: {answer_source}
 """
+
+
+def build_text_routing_prompt(context: DraftInputContext) -> str:
+    return f"""{build_system_prompt(context)}
+
+Classify the Telegram text as exactly one mode:
+- new_draft: information or actions that should become a new note and draft;
+- management: a request to modify one existing work item;
+- search: a question or request to find and inspect existing records.
+
+Management examples include completing, cancelling, reopening, rescheduling,
+marking a waiting result as received, adding a note, changing a topic, or
+adding/replacing a person. Extract a concise record_query and target type when
+stated. Set contextual_reference=true only for references such as "эта задача"
+or "this item". Never execute the requested action. If a date is ambiguous,
+preserve it as an ambiguous temporal candidate. Return only the strict routing
+schema.
+
+Search examples include questions about remaining work for a person, waiting
+records, follow-ups for a topic, overdue records, open questions, or everything
+for a topic. Convert them into deterministic filters. Use canonical work item
+types and statuses. Resolve relative date boundaries against the reference
+timezone and return timezone-aware values. Set stale_contacts=true only for
+questions asking whom the user has not contacted for a long time. Do not invent
+results and do not claim to have searched the database. Leave statuses empty to
+search only open records. Set include_all_statuses=true only when the user
+explicitly asks for everything; otherwise include closed states only when they
+are named. Exactly one payload must match the selected mode.
+"""

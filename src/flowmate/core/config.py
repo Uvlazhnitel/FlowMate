@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import time
 from functools import lru_cache
 from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit
@@ -119,6 +120,76 @@ class Settings(BaseSettings):
         le=720,
         validation_alias="DRAFT_TTL_HOURS",
     )
+    work_item_action_ttl_minutes: int = Field(
+        default=30,
+        gt=0,
+        le=1440,
+        validation_alias="WORK_ITEM_ACTION_TTL_MINUTES",
+    )
+    scheduler_interval_seconds: int = Field(
+        default=30,
+        gt=0,
+        le=3600,
+        validation_alias="SCHEDULER_INTERVAL_SECONDS",
+    )
+    reminder_batch_size: int = Field(
+        default=50,
+        gt=0,
+        le=500,
+        validation_alias="REMINDER_BATCH_SIZE",
+    )
+    reminder_max_attempts: int = Field(
+        default=3,
+        gt=0,
+        le=20,
+        validation_alias="REMINDER_MAX_ATTEMPTS",
+    )
+    reminder_retry_delay_seconds: int = Field(
+        default=60,
+        gt=0,
+        le=86400,
+        validation_alias="REMINDER_RETRY_DELAY_SECONDS",
+    )
+    reminder_processing_timeout_seconds: int = Field(
+        default=300,
+        gt=0,
+        le=86400,
+        validation_alias="REMINDER_PROCESSING_TIMEOUT_SECONDS",
+    )
+    reminder_delivery_timeout_seconds: int = Field(
+        default=15,
+        gt=0,
+        le=300,
+        validation_alias="REMINDER_DELIVERY_TIMEOUT_SECONDS",
+    )
+    deadline_reminder_lead_minutes: int = Field(
+        default=0,
+        ge=0,
+        le=525_600,
+        validation_alias="DEADLINE_REMINDER_LEAD_MINUTES",
+    )
+    default_morning_digest_time: time = Field(
+        default=time(9, 0),
+        validation_alias="DEFAULT_MORNING_DIGEST_TIME",
+    )
+    default_evening_digest_time: time = Field(
+        default=time(18, 0),
+        validation_alias="DEFAULT_EVENING_DIGEST_TIME",
+    )
+    default_quiet_hours_start: time = Field(
+        default=time(22, 0),
+        validation_alias="DEFAULT_QUIET_HOURS_START",
+    )
+    default_quiet_hours_end: time = Field(
+        default=time(8, 0),
+        validation_alias="DEFAULT_QUIET_HOURS_END",
+    )
+    default_snooze_minutes: int = Field(
+        default=60,
+        ge=1,
+        le=10_080,
+        validation_alias="DEFAULT_SNOOZE_MINUTES",
+    )
     cors_origins: Annotated[frozenset[str], NoDecode] = Field(
         default_factory=frozenset,
         validation_alias="CORS_ORIGINS",
@@ -177,6 +248,18 @@ class Settings(BaseSettings):
                 "application timezone must be a valid IANA timezone"
             ) from error
         return normalized
+
+    @field_validator(
+        "default_morning_digest_time",
+        "default_evening_digest_time",
+        "default_quiet_hours_start",
+        "default_quiet_hours_end",
+    )
+    @classmethod
+    def validate_local_time(cls, value: time) -> time:
+        if value.tzinfo is not None:
+            raise ValueError("notification default times must not include timezone")
+        return value.replace(second=0, microsecond=0)
 
     @field_validator("app_active_workspace")
     @classmethod
@@ -262,6 +345,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AI clarification threshold must be lower than high threshold"
             )
+        if self.default_quiet_hours_start == self.default_quiet_hours_end:
+            raise ValueError("default quiet hours start and end must differ")
+        if (
+            self.reminder_processing_timeout_seconds
+            <= self.reminder_delivery_timeout_seconds
+        ):
+            raise ValueError("reminder processing timeout must exceed delivery timeout")
         if self.app_env != "production":
             return self
         if self.app_debug:
@@ -296,6 +386,11 @@ class Settings(BaseSettings):
             raise ValueError("TELEGRAM_BOT_TOKEN is required for the bot")
         if not self.telegram_allowed_user_ids:
             raise ValueError("TELEGRAM_ALLOWED_USER_IDS is required for the bot")
+        return self
+
+    def require_scheduler(self) -> Self:
+        if self.telegram_bot_token is None:
+            raise ValueError("TELEGRAM_BOT_TOKEN is required for the scheduler")
         return self
 
 

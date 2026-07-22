@@ -50,6 +50,39 @@ class DraftReadiness(StrEnum):
     UNRESOLVED = "unresolved"
 
 
+class ManagementAction(StrEnum):
+    COMPLETE = "complete"
+    CANCEL = "cancel"
+    RESCHEDULE = "reschedule"
+    REOPEN = "reopen"
+    WAITING_RECEIVED = "waiting_received"
+    ADD_NOTE = "add_note"
+    CHANGE_TOPIC = "change_topic"
+    ADD_PERSON = "add_person"
+    REPLACE_PERSON = "replace_person"
+    SHOW_DETAILS = "show_details"
+
+
+class SearchWorkItemType(StrEnum):
+    TASK = "task"
+    FOLLOW_UP = "follow_up"
+    WAITING = "waiting"
+    QUESTION = "question"
+    DECISION = "decision"
+    AGENDA_ITEM = "agenda_item"
+
+
+class SearchWorkItemStatus(StrEnum):
+    INBOX = "inbox"
+    PLANNED = "planned"
+    ACTIVE = "active"
+    WAITING = "waiting"
+    SNOOZED = "snoozed"
+    DONE = "done"
+    CANCELLED = "cancelled"
+    ARCHIVED = "archived"
+
+
 class StrictDraftModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -153,6 +186,72 @@ class DraftParseResult(StrictDraftModel):
                 if target == item_number:
                     raise ValueError("draft item cannot depend on itself")
         return self
+
+
+class ManagementIntent(StrictDraftModel):
+    action: ManagementAction
+    target_type: DraftItemType | None
+    record_query: NonEmptyText | None
+    contextual_reference: bool
+    person_candidate: NonEmptyText | None
+    topic_candidate: NonEmptyText | None
+    note_text: NonEmptyText | None
+    temporal_candidate: TemporalCandidate | None
+    missing_fields: list[NonEmptyText]
+    ambiguities: list[NonEmptyText]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class SearchIntent(StrictDraftModel):
+    text_query: NonEmptyText | None
+    person_query: NonEmptyText | None
+    topic_query: NonEmptyText | None
+    item_types: list[SearchWorkItemType]
+    statuses: list[SearchWorkItemStatus]
+    include_all_statuses: bool
+    due_from: AwareDatetime | None
+    due_to: AwareDatetime | None
+    overdue: bool
+    stale_contacts: bool
+    ambiguities: list[NonEmptyText]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_filters(self) -> Self:
+        if self.include_all_statuses and self.statuses:
+            raise ValueError("all statuses cannot be combined with explicit statuses")
+        if self.due_from is not None and self.due_to is not None:
+            if self.due_from >= self.due_to:
+                raise ValueError("search date range must be increasing")
+        if self.overdue and (self.due_from is not None or self.due_to is not None):
+            raise ValueError("overdue cannot be combined with a date range")
+        return self
+
+
+class TelegramTextParseResult(StrictDraftModel):
+    mode: Literal["new_draft", "management", "search"]
+    draft: DraftParseResult | None = None
+    management: ManagementIntent | None = None
+    search: SearchIntent | None = None
+
+    @model_validator(mode="after")
+    def validate_mode_payload(self) -> Self:
+        payloads = {
+            "new_draft": self.draft,
+            "management": self.management,
+            "search": self.search,
+        }
+        if payloads[self.mode] is not None:
+            if sum(value is not None for value in payloads.values()) == 1:
+                return self
+        raise ValueError("text parse mode must have exactly one matching payload")
+
+
+class SnoozeTimeParseResult(StrictDraftModel):
+    original_phrase: NonEmptyText
+    normalized_value: AwareDatetime
+    confidence: float = Field(ge=0.0, le=1.0)
+    ambiguities: list[NonEmptyText]
 
 
 class DraftItemAssessment(StrictDraftModel):

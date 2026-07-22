@@ -1,5 +1,6 @@
 from flowmate.task_engine.enums import (
     NoteTargetType,
+    WorkItemAction,
     WorkItemEventType,
     WorkItemPriority,
     WorkItemRelationType,
@@ -9,6 +10,7 @@ from flowmate.task_engine.enums import (
 
 __all__ = [
     "NoteTargetType",
+    "WorkItemAction",
     "WorkItemEventType",
     "WorkItemPriority",
     "WorkItemRelationType",
