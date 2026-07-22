@@ -28,6 +28,7 @@ from flowmate.task_engine.enums import (
     WorkItemStatus,
     WorkItemType,
 )
+from flowmate.task_engine.planner import initial_planner_status
 
 
 def normalize_required_text(value: str, field_name: str) -> str:
@@ -379,6 +380,9 @@ async def create_work_item(
         description=normalize_optional_text(description),
         status=parsed_status.value,
         priority=parsed_priority.value,
+        planner_status=initial_planner_status(
+            parsed_type.value, parsed_status.value
+        ).value,
         topic_id=topic_id,
         due_at=due_at,
         next_follow_up_at=next_follow_up_at,

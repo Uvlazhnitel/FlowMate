@@ -17,15 +17,19 @@ from flowmate.reminders.preferences import (
     get_effective_notification_preferences,
 )
 from flowmate.reminders.timezone import resolve_local_datetime
+from flowmate.task_engine.enums import PlannerStatus, WorkItemPriority, WorkItemType
 from flowmate.task_engine.management import (
     InvalidWorkItemTransitionError,
     StaleWorkItemError,
     add_decision_from_work_item,
     add_work_item_note,
+    archive_work_item,
     bind_client_action,
     cancel_work_item,
+    change_planner_status,
     complete_work_item,
     convert_work_item_to_task,
+    edit_work_item,
     mark_waiting_received,
     reopen_work_item,
     reschedule_work_item,
@@ -67,6 +71,11 @@ class SimpleWorkItemAction(WorkItemActionBase):
         "agenda_discussed",
         "question_answered",
         "convert_to_task",
+        "archive",
+        "planner_transferred",
+        "planner_not_required",
+        "planner_update_required",
+        "planner_needs_transfer",
     ]
 
 
@@ -90,11 +99,25 @@ class SnoozeWorkItemAction(WorkItemActionBase):
     reminder_revision: int = Field(ge=0)
 
 
+class EditWorkItemAction(WorkItemActionBase):
+    action: Literal["edit"]
+    title: str = Field(min_length=1, max_length=10_000)
+    description: str | None = Field(default=None, max_length=20_000)
+    item_type: WorkItemType
+    priority: WorkItemPriority
+    topic_id: UUID | None = None
+    person_ids: list[UUID] = Field(default_factory=list, max_length=50)
+    date_changed: bool = False
+    local_date: date | None = None
+    local_time: time | None = None
+
+
 WorkItemActionRequest = Annotated[
     SimpleWorkItemAction
     | ContentWorkItemAction
     | DateWorkItemAction
-    | SnoozeWorkItemAction,
+    | SnoozeWorkItemAction
+    | EditWorkItemAction,
     Field(discriminator="action"),
 ]
 
@@ -387,6 +410,57 @@ async def work_item_action(
                 user_id,
                 work_item_id,
                 None,
+                expected_revision=payload.expected_revision,
+            )
+        elif payload.action == "archive":
+            result = await archive_work_item(
+                session,
+                user_id,
+                work_item_id,
+                None,
+                expected_revision=payload.expected_revision,
+            )
+        elif payload.action.startswith("planner_"):
+            planner_targets = {
+                "planner_transferred": PlannerStatus.TRANSFERRED,
+                "planner_not_required": PlannerStatus.NOT_REQUIRED,
+                "planner_update_required": PlannerStatus.UPDATE_REQUIRED,
+                "planner_needs_transfer": PlannerStatus.NEEDS_TRANSFER,
+            }
+            result = await change_planner_status(
+                session,
+                user_id,
+                work_item_id,
+                planner_targets[payload.action],
+                expected_revision=payload.expected_revision,
+            )
+        elif payload.action == "edit":
+            scheduled_at = None
+            if payload.date_changed:
+                if (payload.local_date is None) != (payload.local_time is None):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Local date and time must be provided together",
+                    )
+                if payload.local_date is not None and payload.local_time is not None:
+                    preferences = await _preferences(session, identity, settings)
+                    scheduled_at = resolve_local_datetime(
+                        payload.local_date,
+                        payload.local_time.replace(tzinfo=None),
+                        ZoneInfo(preferences.timezone),
+                    ).astimezone(UTC)
+            result = await edit_work_item(
+                session,
+                user_id,
+                work_item_id,
+                title=payload.title,
+                description=payload.description,
+                item_type=payload.item_type,
+                priority=payload.priority,
+                topic_id=payload.topic_id,
+                person_ids=tuple(payload.person_ids),
+                update_schedule=payload.date_changed,
+                scheduled_at=scheduled_at,
                 expected_revision=payload.expected_revision,
             )
         elif payload.action == "add_decision":

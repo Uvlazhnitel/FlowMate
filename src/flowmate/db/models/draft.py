@@ -44,9 +44,37 @@ class DraftSession(Base):
             "user_id",
             unique=True,
             postgresql_where=text(
+                "meeting_id IS NULL AND "
                 "status IN ('parsing', 'needs_clarification', 'ready')"
             ),
         ),
+        UniqueConstraint(
+            "meeting_id",
+            "capture_sequence",
+            name="uq_draft_sessions_meeting_capture_sequence",
+        ),
+        CheckConstraint(
+            "capture_sequence IS NULL OR capture_sequence > 0",
+            name="ck_draft_sessions_capture_sequence_positive",
+        ),
+        CheckConstraint(
+            "capture_review_status IS NULL OR capture_review_status IN "
+            "('pending', 'edited', 'removed')",
+            name="ck_draft_sessions_capture_review_status",
+        ),
+        CheckConstraint(
+            "overall_confidence IS NULL OR "
+            "(overall_confidence >= 0 AND overall_confidence <= 1)",
+            name="ck_draft_sessions_overall_confidence",
+        ),
+        CheckConstraint(
+            "(meeting_id IS NULL AND capture_sequence IS NULL AND "
+            "capture_review_status IS NULL) OR "
+            "(meeting_id IS NOT NULL AND capture_sequence IS NOT NULL AND "
+            "capture_review_status IS NOT NULL)",
+            name="ck_draft_sessions_capture_fields",
+        ),
+        Index("ix_draft_sessions_meeting_capture", "meeting_id", "capture_sequence"),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -63,6 +91,15 @@ class DraftSession(Base):
         nullable=False,
         unique=True,
     )
+    meeting_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("meetings.id", ondelete="CASCADE")
+    )
+    capture_sequence: Mapped[int | None] = mapped_column(Integer)
+    capture_review_status: Mapped[str | None] = mapped_column(String(16))
+    capture_context: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    overall_confidence: Mapped[float | None] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     analysis_payload: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
@@ -127,6 +164,10 @@ class DraftItemRecord(Base):
             "readiness IN ('ready', 'clarification_required', 'unresolved')",
             name="ck_draft_items_readiness",
         ),
+        CheckConstraint(
+            "selected_priority IN ('low', 'normal', 'high', 'urgent')",
+            name="ck_draft_items_selected_priority",
+        ),
         Index("ix_draft_items_session", "draft_session_id"),
     )
 
@@ -152,6 +193,14 @@ class DraftItemRecord(Base):
     normalized_date: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    selected_topic_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("topics.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    selected_priority: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="normal", server_default="normal"
+    )
     notes: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default="[]"
     )
@@ -166,3 +215,36 @@ class DraftItemRecord(Base):
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
 
     session: Mapped[DraftSession] = relationship(back_populates="items")
+
+
+class DraftItemPerson(Base):
+    __tablename__ = "draft_item_people"
+    __table_args__ = (
+        UniqueConstraint(
+            "draft_item_id", "person_id", name="uq_draft_item_people_item_person"
+        ),
+        Index("ix_draft_item_people_user_id", "user_id"),
+        Index("ix_draft_item_people_person_id", "person_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid4
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    draft_item_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("draft_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    person_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("people.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

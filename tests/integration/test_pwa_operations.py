@@ -9,7 +9,14 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from flowmate.api.app import create_app
-from flowmate.db.models import NoteLink, Reminder, User, WorkItem, WorkItemRelation
+from flowmate.db.models import (
+    NoteLink,
+    Reminder,
+    User,
+    WorkItem,
+    WorkItemEvent,
+    WorkItemRelation,
+)
 from flowmate.db.users import create_telegram_user
 from flowmate.reminders.enums import ReminderStatus
 from flowmate.reminders.preferences import NotificationDefaults, effective_preferences
@@ -141,7 +148,7 @@ async def test_operational_views_actions_and_user_isolation(
                 "waiting_overdue": 0,
                 "questions": 0,
                 "inbox": 3,
-                "planner_queue": 0,
+                "planner_queue": 2,
             }
             assert dashboard.json()["recommended"][0]["title"] == "Prepare launch"
             assert len(dashboard.json()["activity"]) == 3
@@ -460,6 +467,21 @@ async def test_pwa_work_item_action_variants(database_engine: AsyncEngine) -> No
                     )
                 )
                 assert note_count == 2
+                event_rows = await session.execute(
+                    select(WorkItemEvent.work_item_id, WorkItemEvent.event_type).where(
+                        WorkItemEvent.work_item_id.in_(
+                            (ids["agenda"], ids["discussed"], ids["question"])
+                        )
+                    )
+                )
+                events_by_item: dict[object, set[str]] = {}
+                for event_item_id, event_type in event_rows:
+                    events_by_item.setdefault(event_item_id, set()).add(event_type)
+                assert {"note_added", "updated", "rescheduled"}.issubset(
+                    events_by_item[ids["agenda"]]
+                )
+                assert "completed" in events_by_item[ids["discussed"]]
+                assert "completed" in events_by_item[ids["question"]]
                 task_reminders = list(
                     await session.scalars(
                         select(Reminder).where(Reminder.work_item_id == ids["task"])

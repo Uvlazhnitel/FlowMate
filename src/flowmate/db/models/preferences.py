@@ -32,6 +32,14 @@ class UserNotificationPreferences(Base):
             "quiet_hours_start <> quiet_hours_end",
             name="ck_user_notification_preferences_quiet_range",
         ),
+        CheckConstraint(
+            "date_display_format IN ('day_month_year', 'year_month_day')",
+            name="ck_user_notification_preferences_date_format",
+        ),
+        CheckConstraint(
+            "time_display_format IN ('24h', '12h')",
+            name="ck_user_notification_preferences_time_format",
+        ),
     )
 
     user_id: Mapped[UUID] = mapped_column(
@@ -56,6 +64,15 @@ class UserNotificationPreferences(Base):
     default_snooze_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     send_empty_digests: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
+    )
+    date_display_format: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="day_month_year",
+        server_default="day_month_year",
+    )
+    time_display_format: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="24h", server_default="24h"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

@@ -15,7 +15,7 @@ import {
 import { LoadMoreButton, OperationalLayout } from "../components/OperationalLayout";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { WorkItemCard } from "../components/WorkItemCard";
-import { formatRelative } from "../lib/dates";
+import { formatRelative, type DateTimePreferences } from "../lib/dates";
 
 const topicSections = [
   ["active", "Активные записи"],
@@ -35,10 +35,10 @@ const personSections = [
 
 export function ContextDetailPage({
   kind,
-  timezone,
+  dateTimePreferences,
 }: {
   kind: "topic" | "person";
-  timezone: string;
+  dateTimePreferences: DateTimePreferences;
 }) {
   const { id = "" } = useParams();
   const [params, setParams] = useSearchParams();
@@ -107,7 +107,11 @@ export function ContextDetailPage({
       ) : workSections.has(section) ? (
         <div className="work-list">
           {(items as WorkItemCardData[]).map((item) => (
-            <WorkItemCard key={item.id} item={item} timezone={timezone} />
+            <WorkItemCard
+              key={item.id}
+              item={item}
+              dateTimePreferences={dateTimePreferences}
+            />
           ))}
         </div>
       ) : section === "notes" ? (
@@ -115,7 +119,7 @@ export function ContextDetailPage({
           {(items as NoteEntry[]).map((note) => (
             <article className="note-card" key={note.id}>
               <p>{note.content}</p>
-              <span>{formatRelative(note.created_at, timezone)}</span>
+              <span>{formatRelative(note.created_at, dateTimePreferences)}</span>
             </article>
           ))}
         </div>
@@ -127,7 +131,7 @@ export function ContextDetailPage({
                 <strong>{event.title}</strong>
                 <span>{event.event_type.replaceAll("_", " ")}</span>
               </div>
-              <time>{formatRelative(event.created_at, timezone)}</time>
+              <time>{formatRelative(event.created_at, dateTimePreferences)}</time>
             </article>
           ))}
         </div>

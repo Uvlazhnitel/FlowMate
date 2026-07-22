@@ -117,7 +117,13 @@ export type WorkItemAction =
   | "defer"
   | "convert_to_task"
   | "add_result"
-  | "add_decision";
+  | "add_decision"
+  | "archive"
+  | "edit"
+  | "planner_transferred"
+  | "planner_not_required"
+  | "planner_update_required"
+  | "planner_needs_transfer";
 
 export interface ActionPayload {
   action: WorkItemAction;
@@ -129,6 +135,13 @@ export interface ActionPayload {
   duration_minutes?: number;
   reminder_id?: string;
   reminder_revision?: number;
+  title?: string;
+  description?: string | null;
+  item_type?: string;
+  priority?: string;
+  topic_id?: string | null;
+  person_ids?: string[];
+  date_changed?: boolean;
 }
 
 export interface ActionResponse {

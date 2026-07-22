@@ -7,8 +7,6 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.db.models import (
-    DraftItemRecord,
-    DraftSession,
     Note,
     NoteLink,
     Person,
@@ -332,17 +330,11 @@ async def dashboard_snapshot(
         "planner_queue": int(
             (
                 await session.scalar(
-                    select(func.count(DraftItemRecord.id))
-                    .join(
-                        DraftSession,
-                        DraftSession.id == DraftItemRecord.draft_session_id,
-                    )
-                    .where(
-                        DraftSession.user_id == user_id,
-                        DraftSession.status.in_(
-                            ("parsing", "needs_clarification", "ready")
+                    select(func.count(WorkItem.id)).where(
+                        WorkItem.user_id == user_id,
+                        WorkItem.planner_status.in_(
+                            ("needs_transfer", "update_required")
                         ),
-                        DraftSession.expires_at > now,
                     )
                 )
             )

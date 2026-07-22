@@ -24,7 +24,7 @@ from flowmate.bot.handlers.drafts import (
 from flowmate.bot.handlers.navigation import execute_search_intent
 from flowmate.bot.handlers.work_items import execute_management_intent
 from flowmate.db.drafts import create_parsing_draft, get_draft_by_source_note
-from flowmate.db.models import DraftSession, Note, User
+from flowmate.db.models import DraftSession, Meeting, Note, User
 from flowmate.db.notes import (
     NoteSource,
     create_note_idempotently,
@@ -32,6 +32,7 @@ from flowmate.db.notes import (
     list_recent_notes_for_user,
 )
 from flowmate.db.users import get_or_create_telegram_user, get_user_by_telegram_id
+from flowmate.meetings.service import link_note_to_active_meeting
 from flowmate.reminders.sync import ReminderPolicy
 from flowmate.task_engine.intents import management_update_was_processed
 
@@ -54,6 +55,7 @@ class NoteSaveOutcome:
     note: Note | None = None
     user: User | None = None
     draft: DraftSession | None = None
+    meeting: Meeting | None = None
 
 
 logger = logging.getLogger(__name__)
@@ -86,6 +88,11 @@ async def save_note_for_message(
             source=source,
             telegram_update_id=event_update.update_id,
         )
+        meeting = (
+            await link_note_to_active_meeting(db_session, user.id, note)
+            if created
+            else None
+        )
         draft = (
             await get_draft_by_source_note(db_session, note.id)
             if create_draft
@@ -112,6 +119,7 @@ async def save_note_for_message(
         note=note,
         user=user,
         draft=draft,
+        meeting=meeting,
     )
 
 

@@ -3,6 +3,7 @@ import logging
 from typing import Any, cast
 from uuid import UUID
 
+import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 
@@ -183,7 +184,10 @@ async def test_unexpected_error_is_safe_and_includes_request_id() -> None:
     assert "sensitive" not in response.text
 
 
-async def test_cors_is_restricted_to_configured_origin() -> None:
+@pytest.mark.parametrize("method", ["GET", "POST", "PATCH", "PUT", "DELETE"])
+async def test_cors_allows_stage_six_methods_for_configured_origin(
+    method: str,
+) -> None:
     app = create_test_app(cors_origins="https://app.example.com")
     response = await request(
         "/health/live",
@@ -191,7 +195,7 @@ async def test_cors_is_restricted_to_configured_origin() -> None:
         method="OPTIONS",
         headers={
             "Origin": "https://app.example.com",
-            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Method": method,
         },
     )
 
@@ -200,6 +204,23 @@ async def test_cors_is_restricted_to_configured_origin() -> None:
         "https://app.example.com"
     )
     assert response.headers["Access-Control-Allow-Credentials"] == "true"
+    assert method in response.headers["Access-Control-Allow-Methods"]
+
+
+async def test_cors_rejects_unconfigured_origin() -> None:
+    app = create_test_app(cors_origins="https://app.example.com")
+    response = await request(
+        "/health/live",
+        app=app,
+        method="OPTIONS",
+        headers={
+            "Origin": "https://attacker.example.com",
+            "Access-Control-Request-Method": "PUT",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Access-Control-Allow-Origin" not in response.headers
 
 
 def test_openapi_follows_debug_setting() -> None:

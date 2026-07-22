@@ -78,7 +78,11 @@ async def get_draft_for_user(
     statement = (
         select(DraftSession)
         .options(selectinload(DraftSession.items))
-        .where(DraftSession.id == draft_id, DraftSession.user_id == user_id)
+        .where(
+            DraftSession.id == draft_id,
+            DraftSession.user_id == user_id,
+            DraftSession.meeting_id.is_(None),
+        )
     )
     if for_update:
         statement = statement.with_for_update()
@@ -96,6 +100,7 @@ async def get_active_draft_for_user(
         .options(selectinload(DraftSession.items))
         .where(
             DraftSession.user_id == user_id,
+            DraftSession.meeting_id.is_(None),
             DraftSession.status.in_(OPEN_DRAFT_STATUSES),
         )
         .order_by(DraftSession.created_at.desc())
@@ -120,6 +125,7 @@ async def get_draft_by_question_message(
         .options(selectinload(DraftSession.items))
         .where(
             DraftSession.user_id == user_id,
+            DraftSession.meeting_id.is_(None),
             DraftSession.current_question_message_id == message_id,
         )
         .order_by(DraftSession.created_at.desc())
@@ -137,6 +143,7 @@ async def get_draft_by_processed_update(
         select(DraftSession)
         .where(
             DraftSession.user_id == user_id,
+            DraftSession.meeting_id.is_(None),
             DraftSession.processed_update_ids.contains([update_id]),
         )
         .order_by(DraftSession.created_at.desc())

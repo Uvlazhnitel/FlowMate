@@ -32,4 +32,6 @@ export const authenticatedUser = {
   display_name: "Мария",
   timezone: "Europe/Riga",
   default_snooze_minutes: 60,
+  date_display_format: "day_month_year",
+  time_display_format: "24h",
 };

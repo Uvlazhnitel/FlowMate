@@ -17,6 +17,7 @@ from flowmate.ai.schemas import (
     DraftParseResult,
     DraftSource,
     ManagementIntent,
+    MeetingDraftContext,
     SearchIntent,
     TelegramTextParseResult,
 )
@@ -53,16 +54,17 @@ class DraftParsingService:
         user_text: str,
         *,
         source: DraftSource,
+        context: DraftInputContext | None = None,
     ) -> DraftAnalysisResult:
         normalized = user_text.strip()
         if not normalized:
             raise AIInvalidResponseError("note text must not be empty")
 
-        context = self._build_context(source)
+        parse_context = context or self._build_context(source)
         return await self._parse_with_prompt(
             user_text=normalized,
-            system_prompt=build_system_prompt(context),
-            context=context,
+            system_prompt=build_system_prompt(parse_context),
+            context=parse_context,
         )
 
     async def refine(
@@ -134,6 +136,23 @@ class DraftParsingService:
             active_workspace=self._active_workspace,
             channel="telegram",
             source=source,
+        )
+
+    def build_meeting_context(
+        self,
+        *,
+        source: DraftSource,
+        timezone: ZoneInfo,
+        current_datetime: datetime,
+        meeting: MeetingDraftContext,
+    ) -> DraftInputContext:
+        return DraftInputContext(
+            current_datetime=current_datetime.astimezone(timezone),
+            timezone=timezone.key,
+            active_workspace=self._active_workspace,
+            channel="telegram",
+            source=source,
+            meeting=meeting,
         )
 
     async def _parse_with_prompt(

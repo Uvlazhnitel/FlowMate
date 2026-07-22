@@ -47,6 +47,8 @@ class EffectiveNotificationPreferences:
     quiet_hours_end: time
     default_snooze_minutes: int
     send_empty_digests: bool
+    date_display_format: str
+    time_display_format: str
 
     @property
     def zoneinfo(self) -> ZoneInfo:
@@ -84,6 +86,8 @@ def effective_preferences(
             quiet_hours_end=defaults.quiet_hours_end,
             default_snooze_minutes=defaults.snooze_minutes,
             send_empty_digests=False,
+            date_display_format="day_month_year",
+            time_display_format="24h",
         )
     return EffectiveNotificationPreferences(
         timezone=value.timezone,
@@ -96,6 +100,8 @@ def effective_preferences(
         quiet_hours_end=value.quiet_hours_end,
         default_snooze_minutes=value.default_snooze_minutes,
         send_empty_digests=value.send_empty_digests,
+        date_display_format=value.date_display_format,
+        time_display_format=value.time_display_format,
     )
 
 
@@ -147,6 +153,8 @@ async def get_or_create_notification_preferences(
             quiet_hours_end=defaults.quiet_hours_end,
             default_snooze_minutes=defaults.snooze_minutes,
             send_empty_digests=False,
+            date_display_format="day_month_year",
+            time_display_format="24h",
         )
         .on_conflict_do_nothing(index_elements=["user_id"])
         .returning(UserNotificationPreferences)

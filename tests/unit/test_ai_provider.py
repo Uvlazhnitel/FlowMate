@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -26,6 +27,8 @@ from flowmate.ai.schemas import (
     DraftSource,
     ManagementAction,
     ManagementIntent,
+    MeetingDraftContext,
+    MeetingReviewParseResult,
     SearchIntent,
     SearchWorkItemType,
     TelegramTextParseResult,
@@ -105,6 +108,33 @@ async def test_openai_provider_uses_strict_text_routing_schema() -> None:
         instructions="routing prompt",
         input="закрой follow-up с Антоном",
         text_format=TelegramTextParseResult,
+        store=False,
+        tools=[],
+        timeout=17.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_uses_strict_meeting_review_schema() -> None:
+    result = MeetingReviewParseResult(
+        summary="Meeting summary",
+        proposals=[],
+        agenda=[],
+        suggested_next_actions=[],
+    )
+    client, parse, _ = make_client(result)
+    provider = OpenAIAIProvider(client, model="configured-model", timeout_seconds=17)
+
+    parsed = await provider.parse_meeting_review(
+        system_prompt="review prompt", user_text="safe captures"
+    )
+
+    assert parsed is result
+    parse.assert_awaited_once_with(
+        model="configured-model",
+        instructions="review prompt",
+        input="safe captures",
+        text_format=MeetingReviewParseResult,
         store=False,
         tools=[],
         timeout=17.0,
@@ -240,6 +270,40 @@ async def test_service_passes_workspace_source_and_time_context() -> None:
     assert "Reference timezone: Europe/Riga" in provider.system_prompt
     assert result.context.source is DraftSource.VOICE
     assert result.context.active_workspace == "client-alpha"
+
+
+@pytest.mark.asyncio
+async def test_service_passes_meeting_snapshot_without_forcing_links() -> None:
+    provider = CapturingProvider()
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("UTC"),
+        active_workspace="personal",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+    )
+    meeting = MeetingDraftContext(
+        meeting_id=UUID("d7fe9be7-63e7-434d-b27a-34f9816f0748"),
+        meeting_type="team",
+        participants=["Anna"],
+        topics=["Launch"],
+        primary_topic="Launch",
+    )
+    context = service.build_meeting_context(
+        source=DraftSource.TEXT,
+        timezone=ZoneInfo("Europe/Riga"),
+        current_datetime=datetime(2026, 7, 22, 10, tzinfo=UTC),
+        meeting=meeting,
+    )
+
+    result = await service.parse("Capture", source=DraftSource.TEXT, context=context)
+
+    assert result.context.meeting == meeting
+    assert "Active meeting type: team" in provider.system_prompt
+    assert "Known meeting participants: Anna" in provider.system_prompt
+    assert "Linked meeting topics: Launch" in provider.system_prompt
+    assert "Do not\nassign every participant or topic" in provider.system_prompt
 
 
 @pytest.mark.asyncio

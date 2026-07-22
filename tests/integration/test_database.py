@@ -79,6 +79,71 @@ async def delete_backfill_user(database_url: str) -> None:
         await engine.dispose()
 
 
+async def seed_planner_status_event(database_url: str) -> UUID:
+    engine = create_engine(database_url)
+    user_id = uuid4()
+    item_id = uuid4()
+    event_id = uuid4()
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO users (id, telegram_user_id, is_active) "
+                    "VALUES (:id, :telegram_user_id, true)"
+                ),
+                {"id": user_id, "telegram_user_id": 699_002},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO work_items "
+                    "(id, user_id, type, title, status, priority) "
+                    "VALUES (:id, :user_id, 'task', 'Planner event downgrade', "
+                    "'active', 'normal')"
+                ),
+                {"id": item_id, "user_id": user_id},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO work_item_events "
+                    "(id, user_id, work_item_id, event_type) "
+                    "VALUES (:id, :user_id, :work_item_id, "
+                    "'planner_status_changed')"
+                ),
+                {"id": event_id, "user_id": user_id, "work_item_id": item_id},
+            )
+    finally:
+        await engine.dispose()
+    return event_id
+
+
+async def read_event_type(database_url: str, event_id: UUID) -> str | None:
+    engine = create_engine(database_url)
+    try:
+        async with engine.connect() as connection:
+            return cast(
+                str | None,
+                await connection.scalar(
+                    text(
+                        "SELECT event_type FROM work_item_events WHERE id = :event_id"
+                    ),
+                    {"event_id": event_id},
+                ),
+            )
+    finally:
+        await engine.dispose()
+
+
+async def delete_planner_event_user(database_url: str) -> None:
+    engine = create_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM users WHERE telegram_user_id = 699002")
+            )
+    finally:
+        await engine.dispose()
+
+
 def test_migrations_upgrade_from_previous_stage_revision(
     migrated_database: None,
 ) -> None:
@@ -117,6 +182,17 @@ def test_notification_preferences_migration_from_0010(
         assert asyncio.run(
             database_has_table(TEST_DATABASE_URL, "user_notification_preferences")
         )
+    finally:
+        command.upgrade(alembic_config, "head")
+
+
+def test_planner_event_survives_downgrade_to_0014(migrated_database: None) -> None:
+    alembic_config = Config("alembic.ini")
+    event_id = asyncio.run(seed_planner_status_event(TEST_DATABASE_URL))
+    try:
+        command.downgrade(alembic_config, "0014_pwa_operations")
+        assert asyncio.run(read_event_type(TEST_DATABASE_URL, event_id)) == "updated"
+        asyncio.run(delete_planner_event_user(TEST_DATABASE_URL))
     finally:
         command.upgrade(alembic_config, "head")
 
@@ -174,7 +250,7 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
     assert {constraint["name"] for constraint in check_constraints} >= {
         "ck_users_telegram_user_id_positive"
     }
-    assert revision == "0014_pwa_operations"
+    assert revision == "0018_meeting_review_completion"
 
 
 def test_pwa_auth_migration_from_0012(migrated_database: None) -> None:
@@ -474,4 +550,47 @@ async def test_task_engine_schema_has_core_constraints(
     assert {index["name"] for index in action_indexes} >= {
         "ix_work_item_action_sessions_expires_at",
         "uq_work_item_action_sessions_user_open",
+    }
+
+
+@pytest.mark.integration
+async def test_meeting_capture_schema_constraints(database_engine: AsyncEngine) -> None:
+    async with database_engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"]: column
+                for column in inspect(sync_connection).get_columns("draft_sessions")
+            }
+        )
+        checks = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_check_constraints(
+                "draft_sessions"
+            )
+        )
+        uniques = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_unique_constraints(
+                "draft_sessions"
+            )
+        )
+        indexes = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_indexes(
+                "draft_sessions"
+            )
+        )
+
+    assert columns["meeting_id"]["nullable"] is True
+    assert columns["capture_sequence"]["nullable"] is True
+    assert columns["capture_context"]["nullable"] is False
+    assert {constraint["name"] for constraint in checks} >= {
+        "ck_draft_sessions_capture_fields",
+        "ck_draft_sessions_capture_review_status",
+        "ck_draft_sessions_capture_sequence_positive",
+        "ck_draft_sessions_overall_confidence",
+    }
+    assert {constraint["name"] for constraint in uniques} >= {
+        "uq_draft_sessions_meeting_capture_sequence"
+    }
+    assert {index["name"] for index in indexes} >= {
+        "ix_draft_sessions_meeting_capture",
+        "uq_draft_sessions_user_open",
     }

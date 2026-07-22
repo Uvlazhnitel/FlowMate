@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.db.models import (
@@ -19,11 +19,14 @@ from flowmate.reminders.sync import (
 )
 from flowmate.task_engine.enums import (
     NoteTargetType,
+    PlannerStatus,
     WorkItemEventType,
+    WorkItemPriority,
     WorkItemRelationType,
     WorkItemStatus,
     WorkItemType,
 )
+from flowmate.task_engine.planner import ELIGIBLE_PLANNER_TYPES, OPEN_WORK_ITEM_STATUSES
 from flowmate.task_engine.queries import OPEN_STATUSES
 from flowmate.task_engine.service import (
     create_linked_note,
@@ -33,6 +36,10 @@ from flowmate.task_engine.service import (
     get_topic,
     get_work_item,
     link_person_to_work_item,
+    normalize_optional_text,
+    normalize_required_text,
+    parse_work_item_priority,
+    parse_work_item_type,
     validate_aware_datetime,
 )
 
@@ -119,6 +126,8 @@ async def append_management_event(
     event_type: WorkItemEventType,
     telegram_update_id: int | None,
     payload: dict[str, object],
+    *,
+    bind_origin: bool = True,
 ) -> WorkItemEvent:
     event = WorkItemEvent(
         user_id=item.user_id,
@@ -126,13 +135,89 @@ async def append_management_event(
         event_type=event_type.value,
         telegram_update_id=telegram_update_id,
         client_action_id=(
-            session.info.get("client_action_id") if telegram_update_id is None else None
+            session.info.get("client_action_id")
+            if telegram_update_id is None and bind_origin
+            else None
         ),
         payload=payload,
     )
     session.add(event)
     await session.flush()
     return event
+
+
+async def sync_planner_status(
+    session: AsyncSession,
+    item: WorkItem,
+    *,
+    reason: str,
+) -> bool:
+    previous = item.planner_status
+    if item.type not in ELIGIBLE_PLANNER_TYPES:
+        target = PlannerStatus.NOT_REQUIRED.value
+    elif item.status not in OPEN_WORK_ITEM_STATUSES:
+        target = PlannerStatus.NO_LONGER_RELEVANT.value
+    elif reason == "reopened" or previous == PlannerStatus.NO_LONGER_RELEVANT.value:
+        target = (
+            PlannerStatus.UPDATE_REQUIRED.value
+            if item.planner_transferred_at is not None
+            else PlannerStatus.NEEDS_TRANSFER.value
+        )
+    elif previous == PlannerStatus.TRANSFERRED.value:
+        target = PlannerStatus.UPDATE_REQUIRED.value
+    elif reason == "type_changed" and previous == PlannerStatus.NOT_REQUIRED.value:
+        target = PlannerStatus.NEEDS_TRANSFER.value
+    else:
+        return False
+    if target == previous:
+        return False
+    item.planner_status = target
+    await append_management_event(
+        session,
+        item,
+        WorkItemEventType.PLANNER_STATUS_CHANGED,
+        None,
+        {"previous": previous, "new": target, "reason": reason},
+        bind_origin=False,
+    )
+    return True
+
+
+async def change_planner_status(
+    session: AsyncSession,
+    user_id: UUID,
+    work_item_id: UUID,
+    target: PlannerStatus,
+    *,
+    expected_revision: int,
+    now: datetime | None = None,
+) -> MutationResult:
+    duplicate = await existing_mutation(session, user_id, None)
+    if duplicate is not None:
+        return duplicate
+    item = await lock_work_item(
+        session, user_id, work_item_id, expected_revision=expected_revision
+    )
+    if item.type not in ELIGIBLE_PLANNER_TYPES:
+        raise InvalidWorkItemTransitionError("work item is not eligible for Planner")
+    if item.status not in OPEN_WORK_ITEM_STATUSES:
+        raise InvalidWorkItemTransitionError(
+            "terminal work items cannot enter Planner queue"
+        )
+    previous = item.planner_status
+    if previous == target.value:
+        raise InvalidWorkItemTransitionError("Planner status is unchanged")
+    item.planner_status = target.value
+    if target is PlannerStatus.TRANSFERRED:
+        item.planner_transferred_at = now or management_now()
+    event = await append_management_event(
+        session,
+        item,
+        WorkItemEventType.PLANNER_STATUS_CHANGED,
+        None,
+        {"previous": previous, "new": target.value},
+    )
+    return MutationResult(item, event, True)
 
 
 async def existing_mutation(
@@ -176,6 +261,7 @@ async def complete_work_item(
         {"from_status": previous, "completed_at": completed_at.isoformat()},
     )
     await cancel_work_item_reminders(session, item, now=completed_at)
+    await sync_planner_status(session, item, reason="completed")
     return MutationResult(item, event, True)
 
 
@@ -206,6 +292,7 @@ async def cancel_work_item(
         {"from_status": previous},
     )
     await cancel_work_item_reminders(session, item, now=cancelled_at)
+    await sync_planner_status(session, item, reason="cancelled")
     return MutationResult(item, event, True)
 
 
@@ -236,6 +323,7 @@ async def reopen_work_item(
         telegram_update_id,
         {"from_status": WorkItemStatus.DONE.value, "to_status": "inbox"},
     )
+    await sync_planner_status(session, item, reason="reopened")
     return MutationResult(item, event, True)
 
 
@@ -280,6 +368,7 @@ async def reschedule_work_item(
         policy=reminder_policy,
         allow_final_replacement=previous != new_date,
     )
+    await sync_planner_status(session, item, reason="rescheduled")
     return MutationResult(item, event, True)
 
 
@@ -312,6 +401,7 @@ async def mark_waiting_received(
         {"from_status": previous, "received_at": received_at.isoformat()},
     )
     await cancel_work_item_reminders(session, item, now=received_at)
+    await sync_planner_status(session, item, reason="waiting_received")
     return MutationResult(item, event, True)
 
 
@@ -344,6 +434,7 @@ async def mark_follow_up_replied(
         {"from_status": previous, "replied_at": replied_at.isoformat()},
     )
     await cancel_work_item_reminders(session, item, now=replied_at)
+    await sync_planner_status(session, item, reason="person_replied")
     return MutationResult(item, event, True)
 
 
@@ -354,11 +445,14 @@ async def archive_work_item(
     telegram_update_id: int | None,
     *,
     now: datetime | None = None,
+    expected_revision: int | None = None,
 ) -> MutationResult:
     duplicate = await existing_mutation(session, user_id, telegram_update_id)
     if duplicate is not None:
         return duplicate
-    item = await lock_work_item(session, user_id, work_item_id)
+    item = await lock_work_item(
+        session, user_id, work_item_id, expected_revision=expected_revision
+    )
     if item.status == WorkItemStatus.ARCHIVED.value:
         raise InvalidWorkItemTransitionError("work item is already archived")
     previous = item.status
@@ -372,6 +466,137 @@ async def archive_work_item(
         {"from_status": previous, "archived_at": archived_at.isoformat()},
     )
     await cancel_work_item_reminders(session, item, now=archived_at)
+    await sync_planner_status(session, item, reason="archived")
+    return MutationResult(item, event, True)
+
+
+async def edit_work_item(
+    session: AsyncSession,
+    user_id: UUID,
+    work_item_id: UUID,
+    *,
+    title: str,
+    description: str | None,
+    item_type: WorkItemType | str,
+    priority: WorkItemPriority | str,
+    topic_id: UUID | None,
+    person_ids: tuple[UUID, ...],
+    expected_revision: int,
+    update_schedule: bool = False,
+    scheduled_at: datetime | None = None,
+) -> MutationResult:
+    duplicate = await existing_mutation(session, user_id, None)
+    if duplicate is not None:
+        return duplicate
+    item = await lock_work_item(
+        session, user_id, work_item_id, expected_revision=expected_revision
+    )
+    if item.status == WorkItemStatus.ARCHIVED.value:
+        raise InvalidWorkItemTransitionError("archived work items cannot be changed")
+    parsed_type = parse_work_item_type(item_type)
+    parsed_priority = parse_work_item_priority(priority)
+    validate_aware_datetime(scheduled_at, "scheduled_at")
+    if topic_id is not None and await get_topic(session, user_id, topic_id) is None:
+        raise ValueError("topic not found")
+    people = []
+    for person_id in dict.fromkeys(person_ids):
+        person = await get_person(session, user_id, person_id)
+        if person is None:
+            raise ValueError("person not found")
+        people.append(person)
+    previous_type = item.type
+    previous_topic = item.topic_id
+    previous_schedule = item.next_follow_up_at or item.due_at
+    previous_people = set(
+        await session.scalars(
+            select(WorkItemPerson.person_id).where(
+                WorkItemPerson.user_id == user_id,
+                WorkItemPerson.work_item_id == item.id,
+            )
+        )
+    )
+    item.title = normalize_required_text(title, "title")
+    item.description = normalize_optional_text(description)
+    item.type = parsed_type.value
+    item.priority = parsed_priority.value
+    item.topic_id = topic_id
+    if update_schedule:
+        if parsed_type is WorkItemType.FOLLOW_UP:
+            item.next_follow_up_at = scheduled_at
+            item.due_at = None
+        else:
+            item.due_at = scheduled_at
+            item.next_follow_up_at = None
+    await session.execute(
+        delete(WorkItemPerson).where(
+            WorkItemPerson.user_id == user_id,
+            WorkItemPerson.work_item_id == item.id,
+        )
+    )
+    for person in people:
+        await link_person_to_work_item(session, user_id, item.id, person.id)
+    event = await append_management_event(
+        session,
+        item,
+        WorkItemEventType.UPDATED,
+        None,
+        {
+            "fields": [
+                "title",
+                "description",
+                "type",
+                "priority",
+                "topic",
+                "people",
+                *(("date",) if update_schedule else ()),
+            ]
+        },
+    )
+    if previous_topic != topic_id:
+        await append_management_event(
+            session,
+            item,
+            WorkItemEventType.TOPIC_CHANGED,
+            None,
+            {
+                "previous_topic_id": str(previous_topic) if previous_topic else None,
+                "new_topic_id": str(topic_id) if topic_id else None,
+            },
+            bind_origin=False,
+        )
+    current_people = {person.id for person in people}
+    if previous_people != current_people:
+        await append_management_event(
+            session,
+            item,
+            WorkItemEventType.PERSON_CHANGED,
+            None,
+            {"operation": "replace_all"},
+            bind_origin=False,
+        )
+    current_schedule = item.next_follow_up_at or item.due_at
+    if update_schedule and previous_schedule != current_schedule:
+        await append_management_event(
+            session,
+            item,
+            WorkItemEventType.RESCHEDULED,
+            None,
+            {
+                "previous": previous_schedule.isoformat()
+                if previous_schedule is not None
+                else None,
+                "new": current_schedule.isoformat()
+                if current_schedule is not None
+                else None,
+            },
+            bind_origin=False,
+        )
+    await sync_work_item_reminders(session, item)
+    await sync_planner_status(
+        session,
+        item,
+        reason="type_changed" if previous_type != item.type else "details_changed",
+    )
     return MutationResult(item, event, True)
 
 
@@ -440,6 +665,7 @@ async def change_work_item_topic(
             "new_topic_id": str(topic_id) if topic_id else None,
         },
     )
+    await sync_planner_status(session, item, reason="topic_changed")
     return MutationResult(item, event, True)
 
 
@@ -484,6 +710,7 @@ async def change_work_item_person(
             "new_person_id": str(person_id),
         },
     )
+    await sync_planner_status(session, item, reason="person_changed")
     return MutationResult(item, event, True)
 
 
@@ -583,6 +810,7 @@ async def convert_work_item_to_task(
         {"field": "type", "previous": previous, "new": WorkItemType.TASK.value},
     )
     await sync_work_item_reminders(session, item)
+    await sync_planner_status(session, item, reason="type_changed")
     return MutationResult(item, event, True)
 
 

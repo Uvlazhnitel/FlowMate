@@ -164,6 +164,10 @@ async def test_save_note_commits_created_or_duplicate_result(
             "flowmate.bot.handlers.notes.create_note_idempotently",
             new=AsyncMock(return_value=(object(), created)),
         ) as create_note,
+        patch(
+            "flowmate.bot.handlers.notes.link_note_to_active_meeting",
+            new=AsyncMock(return_value=None),
+        ) as link_meeting,
     ):
         result = await save_note_for_message(
             message,
@@ -183,6 +187,7 @@ async def test_save_note_commits_created_or_duplicate_result(
     )
     cast(AsyncMock, session.commit).assert_awaited_once()
     cast(AsyncMock, session.rollback).assert_not_awaited()
+    assert link_meeting.await_count == (1 if created else 0)
 
 
 @pytest.mark.asyncio

@@ -27,6 +27,27 @@ function emptyOperationalResponse(path: string): Response {
       deadlines: [],
     });
   }
+  if (path.includes("/settings/topics") || path.includes("/settings/people")) {
+    return jsonResponse({ items: [], limit: 20, offset: 0, has_more: false });
+  }
+  if (path.endsWith("/api/v1/settings")) {
+    return jsonResponse({
+      preferences: {
+        timezone: "Europe/Riga",
+        morning_digest_enabled: false,
+        morning_digest_time: "09:00:00",
+        evening_digest_enabled: false,
+        evening_digest_time: "18:00:00",
+        quiet_hours_start: "22:00:00",
+        quiet_hours_end: "08:00:00",
+        default_snooze_minutes: 60,
+        send_empty_digests: false,
+        date_display_format: "day_month_year",
+        time_display_format: "24h",
+      },
+      providers: { ai_configured: false, speech_configured: false },
+    });
+  }
   return jsonResponse({
     items: [],
     limit: 20,
@@ -89,9 +110,10 @@ describe("protected application", () => {
     ["/topics", "Темы"],
     ["/people", "Люди"],
     ["/agenda", "Повестка"],
-    ["/inbox", "Входящие"],
-    ["/planner-queue", "Очередь планирования"],
-    ["/timeline", "Лента"],
+    ["/inbox", "Inbox"],
+    ["/planner-queue", "Planner Queue"],
+    ["/timeline", "Timeline"],
+    ["/meetings", "Встречи"],
     ["/settings", "Настройки"],
   ])("renders protected route %s", async (path, title) => {
     stubEmptyApplication();
@@ -154,10 +176,16 @@ describe("login and logout", () => {
 
   it("sends the CSRF cookie value when logging out", async () => {
     document.cookie = "flowmate_csrf=csrf-value; path=/";
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(authenticatedUser))
-      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input);
+      if (path.includes("/api/v1/auth/me")) {
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      }
+      if (path.includes("/api/v1/auth/session") && init?.method === "DELETE") {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return Promise.resolve(emptyOperationalResponse(path));
+    });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     renderApplication("/settings");
@@ -165,8 +193,17 @@ describe("login and logout", () => {
     await user.click(
       await screen.findByRole("button", { name: /Выйти на этом устройстве/ }),
     );
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    const request = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/auth/session",
+        expect.objectContaining({ method: "DELETE" }),
+      ),
+    );
+    const logoutCall = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        requestPath(input).includes("/api/v1/auth/session") && init?.method === "DELETE",
+    );
+    const request = logoutCall?.[1] as RequestInit;
     expect(new Headers(request.headers).get("X-CSRF-Token")).toBe("csrf-value");
     expect(await screen.findByRole("heading", { name: "Войти в FlowMate" })).toBeVisible();
   });

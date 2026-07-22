@@ -108,16 +108,54 @@ Migration `0013` adds hashed, expiring PWA login codes and revocable server-side
 sessions. Raw login codes, session tokens, and CSRF secrets are never stored in
 PostgreSQL.
 Migration `0014` adds per-user PWA action idempotency keys to WorkItem events.
+Migration `0015_pwa_remaining_screens` adds manual Planner state and transfer
+timestamps, Note inbox disposition, display preferences, and ownership-safe
+exact topic/person selections for draft items. It also adds the
+`planner_status_changed` history event used by Timeline.
+Migration `0016_meeting_mode_foundation` adds ownership-safe meetings,
+participants, topics, captured-note links, state history, and persistent
+Telegram setup sessions. A partial unique index permits only one active meeting
+per user.
+Migration `0017_meeting_fast_capture` links independent DraftSessions to active
+meetings, preserves immutable source Notes and context snapshots, and adds
+stable per-meeting capture numbering and non-destructive review state.
+Migration `0018_meeting_review_completion` adds validated meeting reviews,
+agenda outcomes, idempotent result links, and meeting-to-WorkItem provenance.
 
 ## PWA and Login
 
 The PWA lives in `apps/web` and uses React, TypeScript, Vite, TanStack Query,
 React Router, Radix primitives, and a generated service worker. It provides the
 responsive application shell and protected routes for Dashboard, Today,
-Topics, People, Agenda, Inbox, Planner Queue, Timeline, and Settings.
+Topics, People, Agenda, Inbox, Planner Queue, Timeline, Settings, and Meetings.
 Dashboard, Today, Topics, People, and Agenda provide ownership-safe operational
-views and reuse Task Engine services for work-item actions. Inbox, Planner
-Queue, and Timeline remain shell placeholders.
+views and reuse Task Engine services for work-item actions. Inbox supports
+explicit review and atomic conversion of uncertain drafts, Planner Queue tracks
+manual transfer state without Microsoft integration, Timeline exposes redacted
+domain history, and Settings manages notification preferences, active topics,
+people, aliases, and provider readiness booleans without returning secrets.
+Meetings provides an active Meeting Mode card, manual start/end/cancel actions,
+participant and topic selection, paginated recent meetings, and chronological
+fast captures. Text and voice captures are acknowledged immediately and kept as
+editable drafts; unresolved AI fields do not interrupt an active meeting. After
+`/meeting_end`, structured review proposes decisions and next actions without
+writing final records. The user can clarify, exclude, send incomplete items to
+Inbox, opt individual actions into the manual Planner Queue, and confirm ready
+items through the existing Task Engine and reminder services.
+
+Typical Telegram flow:
+
+```text
+/meeting
+<send text or voice captures>
+/meeting_notes
+/meeting_end
+/meeting_review
+```
+
+The PWA meeting detail at `/meetings/{id}` shows metadata, chronological
+captures, summary, agenda outcomes, decisions, resulting records, unresolved
+items, next actions, and safe meeting history.
 
 Configure the single PWA owner with a Telegram user ID that is also present in
 `TELEGRAM_ALLOWED_USER_IDS`:
@@ -153,6 +191,21 @@ make web-dev
 The Vite app is then available at `http://localhost:5173`. Frontend checks can
 also be run independently with `make web-format-check`, `make web-lint`,
 `make web-typecheck`, `make web-test`, and `make web-build`.
+
+For a production Compose deployment, configure `APP_ENV=production`, a strong
+`APP_API_KEY`, database credentials, `PWA_AUTH_SECRET`, an HTTPS
+`PWA_PUBLIC_ORIGIN`, and `PWA_COOKIE_SECURE=true`, then run:
+
+```bash
+docker compose up -d --build postgres api web
+docker compose ps
+docker compose logs -f api web
+```
+
+Add `--profile bot --profile scheduler` only when the Telegram bot and reminder
+worker are configured. API startup applies Alembic migrations through `0017`
+before serving requests; Nginx serves the built PWA and proxies `/api` to
+FastAPI on the same origin.
 
 Authentication endpoints are:
 

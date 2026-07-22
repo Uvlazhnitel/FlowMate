@@ -5,9 +5,13 @@ import { Link, useSearchParams } from "react-router-dom";
 import { getTopics, operationsKeys } from "../api/operations";
 import { OperationalLayout } from "../components/OperationalLayout";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
-import { formatDateTime } from "../lib/dates";
+import { formatDateTime, type DateTimePreferences } from "../lib/dates";
 
-export function TopicsPage({ timezone }: { timezone: string }) {
+export function TopicsPage({
+  dateTimePreferences,
+}: {
+  dateTimePreferences: DateTimePreferences;
+}) {
   const [params, setParams] = useSearchParams();
   const q = params.get("q") ?? "";
   const page = Number(params.get("page") ?? 0);
@@ -59,7 +63,7 @@ export function TopicsPage({ timezone }: { timezone: string }) {
               <footer>
                 <span>
                   <CalendarClock size={15} aria-hidden />{" "}
-                  {formatDateTime(topic.next_deadline, timezone)}
+                  {formatDateTime(topic.next_deadline, dateTimePreferences)}
                 </span>
                 <ArrowRight size={18} aria-hidden />
               </footer>

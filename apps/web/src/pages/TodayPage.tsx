@@ -9,6 +9,7 @@ import {
 } from "../components/OperationalLayout";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { WorkItemCard } from "../components/WorkItemCard";
+import type { DateTimePreferences } from "../lib/dates";
 
 const sections = [
   ["overdue", "Просрочено"],
@@ -19,10 +20,10 @@ const sections = [
 ] as const;
 
 export function TodayPage({
-  timezone,
+  dateTimePreferences,
   defaultSnoozeMinutes,
 }: {
-  timezone: string;
+  dateTimePreferences: DateTimePreferences;
   defaultSnoozeMinutes: number;
 }) {
   const [params, setParams] = useSearchParams();
@@ -57,7 +58,7 @@ export function TodayPage({
           key={section}
           section={section}
           label={label}
-          timezone={timezone}
+          dateTimePreferences={dateTimePreferences}
           defaultSnoozeMinutes={defaultSnoozeMinutes}
           focused={selected !== "all"}
         />
@@ -69,13 +70,13 @@ export function TodayPage({
 function TodaySection({
   section,
   label,
-  timezone,
+  dateTimePreferences,
   defaultSnoozeMinutes,
   focused,
 }: {
   section: (typeof sections)[number][0];
   label: string;
-  timezone: string;
+  dateTimePreferences: DateTimePreferences;
   defaultSnoozeMinutes: number;
   focused: boolean;
 }) {
@@ -111,7 +112,7 @@ function TodaySection({
             <WorkItemCard
               key={item.id}
               item={item}
-              timezone={timezone}
+              dateTimePreferences={dateTimePreferences}
               defaultSnoozeMinutes={defaultSnoozeMinutes}
             />
           ))}

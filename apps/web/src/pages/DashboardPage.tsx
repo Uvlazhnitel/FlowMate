@@ -6,7 +6,7 @@ import { getDashboard, operationsKeys } from "../api/operations";
 import { OperationalLayout, SectionHeading } from "../components/OperationalLayout";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { WorkItemCard } from "../components/WorkItemCard";
-import { formatRelative } from "../lib/dates";
+import { formatRelative, type DateTimePreferences } from "../lib/dates";
 
 const summaryDefinitions = [
   ["overdue", "Просрочено", "/today?section=overdue"],
@@ -18,7 +18,11 @@ const summaryDefinitions = [
   ["planner_queue", "Planner Queue", "/planner-queue"],
 ] as const;
 
-export function DashboardPage() {
+export function DashboardPage({
+  dateTimePreferences,
+}: {
+  dateTimePreferences: DateTimePreferences;
+}) {
   const query = useQuery({ queryKey: operationsKeys.dashboard, queryFn: getDashboard });
   if (query.isPending) return <LoadingState label="Собираем обзор" />;
   if (query.isError)
@@ -51,7 +55,11 @@ export function DashboardPage() {
           {data.recommended.length ? (
             <div className="work-list">
               {data.recommended.map((item) => (
-                <WorkItemCard key={item.id} item={item} timezone={data.timezone} />
+                <WorkItemCard
+                  key={item.id}
+                  item={item}
+                  dateTimePreferences={dateTimePreferences}
+                />
               ))}
             </div>
           ) : (
@@ -86,7 +94,7 @@ export function DashboardPage() {
                   <History size={16} aria-hidden />
                   <div>
                     <strong>{event.title}</strong>
-                    <span>{formatRelative(event.created_at, data.timezone)}</span>
+                    <span>{formatRelative(event.created_at, dateTimePreferences)}</span>
                   </div>
                 </div>
               ))

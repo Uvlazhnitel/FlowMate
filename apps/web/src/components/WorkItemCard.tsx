@@ -17,7 +17,7 @@ import {
   type WorkItemAction,
   type WorkItemCardData,
 } from "../api/operations";
-import { formatDateTime } from "../lib/dates";
+import { formatDateTime, type DateTimePreferences } from "../lib/dates";
 
 const typeLabels: Record<string, string> = {
   task: "Задача",
@@ -40,12 +40,12 @@ export function StatusBadge({ item }: { item: WorkItemCardData }) {
 
 export function WorkItemCard({
   item,
-  timezone,
+  dateTimePreferences,
   agenda = false,
   defaultSnoozeMinutes = 60,
 }: {
   item: WorkItemCardData;
-  timezone: string;
+  dateTimePreferences: DateTimePreferences;
   agenda?: boolean;
   defaultSnoozeMinutes?: number;
 }) {
@@ -144,7 +144,7 @@ export function WorkItemCard({
       <div className="work-card__meta">
         <span>
           <CalendarClock size={14} aria-hidden />
-          {formatDateTime(item.effective_at, timezone)}
+          {formatDateTime(item.effective_at, dateTimePreferences)}
         </span>
         {item.topic_name && <span>#{item.topic_name}</span>}
         {item.people.length > 0 && (

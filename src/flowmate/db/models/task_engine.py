@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from flowmate.db.base import Base
 from flowmate.task_engine.enums import (
+    PlannerStatus,
     WorkItemAction,
     WorkItemEventType,
     WorkItemPriority,
@@ -35,6 +36,7 @@ WORK_ITEM_PRIORITIES = tuple(value.value for value in WorkItemPriority)
 WORK_ITEM_RELATION_TYPES = tuple(value.value for value in WorkItemRelationType)
 WORK_ITEM_EVENT_TYPES = tuple(value.value for value in WorkItemEventType)
 WORK_ITEM_ACTIONS = tuple(value.value for value in WorkItemAction)
+PLANNER_STATUSES = tuple(value.value for value in PlannerStatus)
 
 
 class Topic(Base):
@@ -155,6 +157,10 @@ class WorkItem(Base):
             name="ck_work_items_priority",
         ),
         CheckConstraint(
+            f"planner_status IN {PLANNER_STATUSES!r}",
+            name="ck_work_items_planner_status",
+        ),
+        CheckConstraint(
             "char_length(btrim(title)) > 0",
             name="ck_work_items_title_not_blank",
         ),
@@ -162,6 +168,7 @@ class WorkItem(Base):
         Index("ix_work_items_user_due_at", "user_id", "due_at"),
         Index("ix_work_items_topic_id", "topic_id"),
         Index("ix_work_items_source_note_id", "source_note_id"),
+        Index("ix_work_items_user_planner", "user_id", "planner_status"),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -186,6 +193,15 @@ class WorkItem(Base):
         nullable=False,
         default=WorkItemPriority.NORMAL.value,
         server_default=WorkItemPriority.NORMAL.value,
+    )
+    planner_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=PlannerStatus.NOT_REQUIRED.value,
+        server_default=PlannerStatus.NOT_REQUIRED.value,
+    )
+    planner_transferred_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     topic_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),

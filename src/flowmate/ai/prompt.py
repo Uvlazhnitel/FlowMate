@@ -5,6 +5,19 @@ def build_system_prompt(context: DraftInputContext) -> str:
     offset = context.current_datetime.strftime("%z")
     formatted_offset = f"{offset[:3]}:{offset[3:]}" if offset else "+00:00"
     item_types = ", ".join(item_type.value for item_type in DraftItemType)
+    meeting_context = ""
+    if context.meeting is not None:
+        participants = ", ".join(context.meeting.participants) or "none"
+        topics = ", ".join(context.meeting.topics) or "none"
+        meeting_context = f"""
+Active meeting ID: {context.meeting.meeting_id}
+Active meeting type: {context.meeting.meeting_type}
+Known meeting participants: {participants}
+Linked meeting topics: {topics}
+Primary meeting topic: {context.meeting.primary_topic or "none"}
+Use this context only to resolve explicit or clearly implied references. Do not
+assign every participant or topic to every item.
+"""
     return f"""You convert a user's Telegram note into structured draft data.
 
 Supported item types: {item_types}.
@@ -46,6 +59,7 @@ Reference UTC offset: {formatted_offset}
 Active workspace: {context.active_workspace}
 Input channel: {context.channel}
 Input source: {context.source.value}
+{meeting_context}
 """
 
 

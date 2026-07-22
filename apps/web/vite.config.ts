@@ -16,6 +16,7 @@ export default defineConfig({
         name: "FlowMate",
         short_name: "FlowMate",
         description: "Telegram-first personal task and follow-up assistant",
+        lang: "ru",
         theme_color: "#173f3a",
         background_color: "#f3eddf",
         display: "standalone",

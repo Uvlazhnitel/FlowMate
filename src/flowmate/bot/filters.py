@@ -11,6 +11,9 @@ from flowmate.db.drafts import (
     get_draft_by_question_message,
 )
 from flowmate.db.users import get_user_by_telegram_id
+from flowmate.meetings.review import get_latest_review
+from flowmate.meetings.service import get_active_meeting
+from flowmate.meetings.setup import get_open_setup
 from flowmate.task_engine.action_sessions import get_active_action_session
 
 
@@ -92,3 +95,77 @@ class ActiveDraftFilter(Filter):
         if expired is not None:
             return {"expired_draft": expired, "draft_user_id": user.id}
         return False
+
+
+class MeetingTitleReplyFilter(Filter):
+    async def __call__(
+        self, message: Message, db_session: AsyncSession
+    ) -> bool | dict[str, Any]:
+        telegram_user = message.from_user
+        replied = message.reply_to_message
+        if telegram_user is None or replied is None:
+            return False
+        try:
+            user = await get_user_by_telegram_id(db_session, telegram_user.id)
+            if user is None:
+                return False
+            setup = await get_open_setup(db_session, user.id)
+        except SQLAlchemyError:
+            await db_session.rollback()
+            return False
+        if (
+            setup is None
+            or setup.step != "title"
+            or setup.prompt_message_id != replied.message_id
+        ):
+            return False
+        return {"meeting_setup": setup, "meeting_user_id": user.id}
+
+
+class ActiveMeetingCaptureFilter(Filter):
+    async def __call__(
+        self, message: Message, db_session: AsyncSession
+    ) -> bool | dict[str, Any]:
+        telegram_user = message.from_user
+        if telegram_user is None:
+            return False
+        try:
+            user = await get_user_by_telegram_id(db_session, telegram_user.id)
+            if user is None:
+                return False
+            meeting = await get_active_meeting(db_session, user.id)
+        except SQLAlchemyError:
+            await db_session.rollback()
+            return False
+        if meeting is None:
+            return False
+        return {"capture_user_id": user.id, "active_meeting": meeting}
+
+
+class MeetingReviewReplyFilter(Filter):
+    async def __call__(
+        self, message: Message, db_session: AsyncSession
+    ) -> bool | dict[str, Any]:
+        telegram_user = message.from_user
+        if telegram_user is None:
+            return False
+        try:
+            user = await get_user_by_telegram_id(db_session, telegram_user.id)
+            review = (
+                await get_latest_review(db_session, user.id)
+                if user is not None
+                else None
+            )
+        except SQLAlchemyError:
+            await db_session.rollback()
+            return False
+        if review is None or review.current_item_id is None:
+            return False
+        replied = message.reply_to_message
+        if (
+            replied is not None
+            and review.current_question_message_id is not None
+            and replied.message_id != review.current_question_message_id
+        ):
+            return False
+        return {"active_meeting_review": review}

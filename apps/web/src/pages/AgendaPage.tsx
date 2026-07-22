@@ -9,12 +9,13 @@ import {
 } from "../components/OperationalLayout";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { WorkItemCard } from "../components/WorkItemCard";
+import type { DateTimePreferences } from "../lib/dates";
 
 export function AgendaPage({
-  timezone,
+  dateTimePreferences,
   defaultSnoozeMinutes,
 }: {
-  timezone: string;
+  dateTimePreferences: DateTimePreferences;
   defaultSnoozeMinutes: number;
 }) {
   const [params, setParams] = useSearchParams();
@@ -77,7 +78,7 @@ export function AgendaPage({
                     <WorkItemCard
                       key={item.id}
                       item={item}
-                      timezone={timezone}
+                      dateTimePreferences={dateTimePreferences}
                       agenda
                       defaultSnoozeMinutes={defaultSnoozeMinutes}
                     />

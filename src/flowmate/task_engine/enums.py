@@ -28,6 +28,14 @@ class WorkItemPriority(StrEnum):
     URGENT = "urgent"
 
 
+class PlannerStatus(StrEnum):
+    NOT_REQUIRED = "not_required"
+    NEEDS_TRANSFER = "needs_transfer"
+    TRANSFERRED = "transferred"
+    UPDATE_REQUIRED = "update_required"
+    NO_LONGER_RELEVANT = "no_longer_relevant"
+
+
 class WorkItemRelationType(StrEnum):
     RELATED_TO = "related_to"
     BLOCKED_BY = "blocked_by"
@@ -52,6 +60,7 @@ class WorkItemEventType(StrEnum):
     PERSON_REPLIED = "person_replied"
     REMINDER_SNOOZED = "reminder_snoozed"
     ARCHIVED = "archived"
+    PLANNER_STATUS_CHANGED = "planner_status_changed"
 
 
 class WorkItemAction(StrEnum):

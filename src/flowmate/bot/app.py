@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from flowmate.ai.errors import AIConfigurationError
 from flowmate.ai.factory import create_ai_provider
-from flowmate.ai.provider import AIProvider, SnoozeTimeProvider
+from flowmate.ai.provider import AIProvider, MeetingReviewProvider, SnoozeTimeProvider
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.handlers import create_router
 from flowmate.core.config import Settings, get_settings
@@ -29,6 +29,7 @@ def create_dispatcher(
     engine: AsyncEngine,
     transcription_service: TranscriptionService | None = None,
     draft_parsing_service: DraftParsingService | None = None,
+    meeting_review_provider: MeetingReviewProvider | None = None,
 ) -> Dispatcher:
     reminder_policy = ReminderPolicy(
         deadline_lead_minutes=settings.deadline_reminder_lead_minutes
@@ -37,6 +38,7 @@ def create_dispatcher(
     dispatcher = Dispatcher(
         transcription_service=transcription_service,
         draft_parsing_service=draft_parsing_service,
+        meeting_review_provider=meeting_review_provider,
         draft_conversion_service=DraftConversionService(
             reminder_policy=reminder_policy
         ),
@@ -44,6 +46,9 @@ def create_dispatcher(
         draft_ttl_hours=settings.draft_ttl_hours,
         app_timezone=ZoneInfo(settings.app_timezone),
         ai_high_confidence_threshold=settings.ai_high_confidence_threshold,
+        ai_clarification_confidence_threshold=(
+            settings.ai_clarification_confidence_threshold
+        ),
         work_item_action_ttl_minutes=settings.work_item_action_ttl_minutes,
         notification_defaults=notification_defaults,
         snooze_parsing_service=SnoozeParsingService(
@@ -114,6 +119,7 @@ async def run_bot(settings: Settings | None = None) -> None:
             engine,
             transcription_service,
             draft_parsing_service,
+            ai_provider if isinstance(ai_provider, MeetingReviewProvider) else None,
         )
         dispatcher["snooze_parsing_service"] = SnoozeParsingService(
             ai_provider if isinstance(ai_provider, SnoozeTimeProvider) else None,

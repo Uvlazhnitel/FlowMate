@@ -5,9 +5,13 @@ import { Link, useSearchParams } from "react-router-dom";
 import { getPeople, operationsKeys } from "../api/operations";
 import { OperationalLayout } from "../components/OperationalLayout";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
-import { formatRelative } from "../lib/dates";
+import { formatRelative, type DateTimePreferences } from "../lib/dates";
 
-export function PeoplePage({ timezone }: { timezone: string }) {
+export function PeoplePage({
+  dateTimePreferences,
+}: {
+  dateTimePreferences: DateTimePreferences;
+}) {
   const [params, setParams] = useSearchParams();
   const q = params.get("q") ?? "";
   const page = Number(params.get("page") ?? 0);
@@ -65,7 +69,9 @@ export function PeoplePage({ timezone }: { timezone: string }) {
                 <span>{person.question_count} вопросов</span>
               </div>
               <footer>
-                <span>Активность: {formatRelative(person.last_activity, timezone)}</span>
+                <span>
+                  Активность: {formatRelative(person.last_activity, dateTimePreferences)}
+                </span>
                 <ArrowRight size={18} aria-hidden />
               </footer>
             </Link>

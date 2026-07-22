@@ -281,6 +281,8 @@ async def test_help_response() -> None:
         "Записи: /today, /tasks, /followups, /waiting, /questions, "
         "/topics, /people. Черновики: /draft, /cancel. "
         "Напоминания: /reminders, /quiet, /snooze. "
+        "Встречи: /meeting, /meeting_status, /meeting_notes, /meeting_end, "
+        "/meeting_review, /meeting_cancel. "
         "Отправьте текст или голосовое сообщение, чтобы сохранить заметку."
     )
 

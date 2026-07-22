@@ -17,6 +17,7 @@ from flowmate.ai.schemas import (
 )
 from flowmate.db.drafts import transition_draft
 from flowmate.db.models import (
+    DraftItemPerson,
     DraftItemRecord,
     DraftSession,
     Note,
@@ -27,6 +28,7 @@ from flowmate.db.models import (
 from flowmate.reminders.sync import ReminderPolicy
 from flowmate.task_engine.enums import (
     NoteTargetType,
+    PlannerStatus,
     WorkItemRelationType,
     WorkItemStatus,
     WorkItemType,
@@ -132,6 +134,9 @@ class DraftConversionService:
         draft_id: UUID,
         user_id: UUID,
         allow_incomplete: bool = False,
+        selected_item_ids: set[UUID] | None = None,
+        status_overrides: dict[UUID, WorkItemStatus] | None = None,
+        planner_overrides: dict[UUID, PlannerStatus] | None = None,
     ) -> DraftConversionResult:
         draft = await self._lock_draft(session, draft_id, user_id)
         if draft is None:
@@ -140,16 +145,26 @@ class DraftConversionService:
             allow_incomplete and draft.status == "needs_clarification"
         ):
             raise DraftNotConvertibleError("draft status cannot be converted")
-        if not draft.items:
+        records_to_convert = [
+            item
+            for item in draft.items
+            if selected_item_ids is None or item.id in selected_item_ids
+        ]
+        if not records_to_convert:
             raise DraftNotConvertibleError("draft has no items")
 
-        existing = await self._existing_outputs(session, draft)
+        if (
+            selected_item_ids is not None
+            and {item.id for item in records_to_convert} != selected_item_ids
+        ):
+            raise DraftNotConvertibleError("selected draft item not found")
+        existing = await self._existing_outputs(session, draft, records_to_convert)
         if existing is not None:
-            if draft.status != "confirmed":
+            if selected_item_ids is None and draft.status != "confirmed":
                 await transition_draft(session, draft, "confirmed")
             return existing
 
-        assessments = self._validate_items(draft)
+        assessments = self._validate_items(records_to_convert)
         now = self._clock()
         if now.tzinfo is None or now.utcoffset() is None:
             raise DraftConversionError("conversion clock must be timezone-aware")
@@ -160,16 +175,18 @@ class DraftConversionService:
         notes: list[Note] = []
         counts: Counter[DraftItemType] = Counter()
 
-        for record, assessment in zip(draft.items, assessments, strict=True):
+        for record, assessment in zip(records_to_convert, assessments, strict=True):
             item = assessment.item
             topic = await self._resolve_topic(
                 session,
                 user_id,
+                record,
                 item.topic_candidates,
             )
             people = await self._resolve_people(
                 session,
                 user_id,
+                record,
                 item.person_candidates,
                 people_cache,
             )
@@ -213,7 +230,12 @@ class DraftConversionService:
                 assessment,
                 topic,
                 now,
+                status_override=(status_overrides or {}).get(record.id),
             )
+            work_item.planner_status = (
+                (planner_overrides or {}).get(record.id)
+                or PlannerStatus(work_item.planner_status)
+            ).value
             for person in people:
                 await link_person_to_work_item(
                     session,
@@ -225,8 +247,11 @@ class DraftConversionService:
             work_items.append(work_item)
             counts[item.type] += 1
 
-        await self._create_relations(session, user_id, assessments, records)
-        await transition_draft(session, draft, "confirmed")
+        await self._create_relations(
+            session, user_id, records_to_convert, assessments, records
+        )
+        if selected_item_ids is None:
+            await transition_draft(session, draft, "confirmed")
         return DraftConversionResult(
             draft_id=draft.id,
             work_items=tuple(work_items),
@@ -252,8 +277,9 @@ class DraftConversionService:
         self,
         session: AsyncSession,
         draft: DraftSession,
+        records: list[DraftItemRecord],
     ) -> DraftConversionResult | None:
-        source_ids = [item.id for item in draft.items]
+        source_ids = [item.id for item in records]
         work_items = list(
             await session.scalars(
                 select(WorkItem).where(
@@ -278,7 +304,7 @@ class DraftConversionService:
             raise DraftConversionIntegrityError("draft conversion is partially stored")
         work_by_source = {item.source_draft_item_id: item for item in work_items}
         notes_by_source = {note.source_draft_item_id: note for note in notes}
-        for draft_item in draft.items:
+        for draft_item in records:
             item_type = DraftItemType(draft_item.item_type)
             if item_type is DraftItemType.NOTE:
                 consistent = draft_item.id in notes_by_source
@@ -292,7 +318,7 @@ class DraftConversionService:
                 raise DraftConversionIntegrityError(
                     "draft conversion provenance is inconsistent"
                 )
-        counts = Counter(DraftItemType(item.item_type) for item in draft.items)
+        counts = Counter(DraftItemType(item.item_type) for item in records)
         return DraftConversionResult(
             draft_id=draft.id,
             work_items=tuple(work_items),
@@ -302,10 +328,10 @@ class DraftConversionService:
 
     def _validate_items(
         self,
-        draft: DraftSession,
+        records: list[DraftItemRecord],
     ) -> list[DraftItemAssessment]:
         assessments: list[DraftItemAssessment] = []
-        for record in draft.items:
+        for record in records:
             try:
                 assessment = DraftItemAssessment.model_validate_json(
                     json.dumps(record.raw_payload)
@@ -321,8 +347,14 @@ class DraftConversionService:
         self,
         session: AsyncSession,
         user_id: UUID,
+        record: DraftItemRecord,
         candidates: list[str],
     ) -> Topic | None:
+        if record.selected_topic_id is not None:
+            topic = await session.get(Topic, record.selected_topic_id)
+            if topic is None or topic.user_id != user_id:
+                raise DraftConversionIntegrityError("selected topic is not owned")
+            return topic
         unique = {normalize_candidate(value): value for value in candidates}
         if len(unique) != 1:
             return None
@@ -339,9 +371,24 @@ class DraftConversionService:
         self,
         session: AsyncSession,
         user_id: UUID,
+        record: DraftItemRecord,
         candidates: list[str],
         cache: dict[str, Person | None],
     ) -> list[Person]:
+        selected = list(
+            await session.scalars(
+                select(Person)
+                .join(DraftItemPerson, DraftItemPerson.person_id == Person.id)
+                .where(
+                    DraftItemPerson.user_id == user_id,
+                    DraftItemPerson.draft_item_id == record.id,
+                    Person.user_id == user_id,
+                )
+                .order_by(Person.display_name, Person.id)
+            )
+        )
+        if selected:
+            return selected
         resolved: list[Person] = []
         seen: set[UUID] = set()
         for candidate in candidates:
@@ -374,6 +421,7 @@ class DraftConversionService:
         assessment: DraftItemAssessment,
         topic: Topic | None,
         now: datetime,
+        status_override: WorkItemStatus | None = None,
     ) -> WorkItem:
         item = assessment.item
         item_type = ACTIONABLE_TYPES[item.type]
@@ -392,21 +440,24 @@ class DraftConversionService:
         next_follow_up = due if item.type is DraftItemType.FOLLOW_UP else None
         if reminder is not None:
             next_follow_up = reminder
+        status = status_override or (
+            WorkItemStatus.WAITING
+            if item.type is DraftItemType.WAITING
+            else WorkItemStatus.INBOX
+        )
         return await create_work_item(
             session,
             draft.user_id,
             item_type=item_type,
             title=item.title,
             description=combine_description(item.description, item.notes),
-            status=(
-                WorkItemStatus.WAITING
-                if item.type is DraftItemType.WAITING
-                else WorkItemStatus.INBOX
-            ),
+            priority=record.selected_priority,
+            status=status,
             topic_id=topic.id if topic is not None else None,
             due_at=due,
             next_follow_up_at=next_follow_up,
-            waiting_since=now if item.type is DraftItemType.WAITING else None,
+            waiting_since=now if status is WorkItemStatus.WAITING else None,
+            completed_at=now if status is WorkItemStatus.DONE else None,
             source_note_id=draft.source_note_id,
             source_draft_item_id=record.id,
             reminder_policy=self._reminder_policy,
@@ -417,12 +468,13 @@ class DraftConversionService:
         self,
         session: AsyncSession,
         user_id: UUID,
+        source_records: list[DraftItemRecord],
         assessments: list[DraftItemAssessment],
         records: dict[int, WorkItem | Note],
     ) -> None:
         created: set[tuple[UUID, UUID, WorkItemRelationType]] = set()
-        for position, assessment in enumerate(assessments, start=1):
-            current = records[position]
+        for source_record, assessment in zip(source_records, assessments, strict=True):
+            current = records[source_record.position]
             if not isinstance(current, WorkItem):
                 continue
             for dependency in assessment.item.dependencies:

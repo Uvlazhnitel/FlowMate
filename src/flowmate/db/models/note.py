@@ -42,7 +42,17 @@ class Note(Base):
             "char_length(btrim(content)) > 0",
             name="ck_notes_content_not_blank",
         ),
+        CheckConstraint(
+            "inbox_disposition IN ('pending', 'kept', 'archived')",
+            name="ck_notes_inbox_disposition",
+        ),
         Index("ix_notes_user_id_created_at", "user_id", "created_at"),
+        Index(
+            "ix_notes_user_inbox_disposition",
+            "user_id",
+            "inbox_disposition",
+            "created_at",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -55,6 +65,9 @@ class Note(Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
+    inbox_disposition: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
     telegram_update_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     source_draft_item_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
