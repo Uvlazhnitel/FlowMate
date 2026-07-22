@@ -82,7 +82,7 @@ async def snooze_work_item_reminder(
     session: AsyncSession,
     user_id: UUID,
     reminder_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     *,
     duration: timedelta | None = None,
     until: datetime | None = None,

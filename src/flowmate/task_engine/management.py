@@ -31,6 +31,7 @@ from flowmate.task_engine.service import (
     create_work_item_relation,
     get_person,
     get_topic,
+    get_work_item,
     link_person_to_work_item,
     validate_aware_datetime,
 )
@@ -65,16 +66,29 @@ def management_now() -> datetime:
 async def event_for_update(
     session: AsyncSession,
     user_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
 ) -> WorkItemEvent | None:
+    client_action_id = session.info.get("client_action_id")
+    if telegram_update_id is None and not isinstance(client_action_id, UUID):
+        raise ValueError("mutation origin is required")
+    origin_filter = (
+        WorkItemEvent.telegram_update_id == telegram_update_id
+        if telegram_update_id is not None
+        else WorkItemEvent.client_action_id == client_action_id
+    )
     return (
         await session.scalars(
             select(WorkItemEvent).where(
                 WorkItemEvent.user_id == user_id,
-                WorkItemEvent.telegram_update_id == telegram_update_id,
+                origin_filter,
             )
         )
     ).one_or_none()
+
+
+def bind_client_action(session: AsyncSession, client_action_id: UUID) -> None:
+    """Bind one PWA idempotency key to the current request transaction."""
+    session.info["client_action_id"] = client_action_id
 
 
 async def lock_work_item(
@@ -103,7 +117,7 @@ async def append_management_event(
     session: AsyncSession,
     item: WorkItem,
     event_type: WorkItemEventType,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     payload: dict[str, object],
 ) -> WorkItemEvent:
     event = WorkItemEvent(
@@ -111,6 +125,9 @@ async def append_management_event(
         work_item_id=item.id,
         event_type=event_type.value,
         telegram_update_id=telegram_update_id,
+        client_action_id=(
+            session.info.get("client_action_id") if telegram_update_id is None else None
+        ),
         payload=payload,
     )
     session.add(event)
@@ -121,7 +138,7 @@ async def append_management_event(
 async def existing_mutation(
     session: AsyncSession,
     user_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
 ) -> MutationResult | None:
     event = await event_for_update(session, user_id, telegram_update_id)
     if event is None:
@@ -134,7 +151,7 @@ async def complete_work_item(
     session: AsyncSession,
     user_id: UUID,
     work_item_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     *,
     now: datetime | None = None,
     expected_revision: int | None = None,
@@ -166,7 +183,7 @@ async def cancel_work_item(
     session: AsyncSession,
     user_id: UUID,
     work_item_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     *,
     expected_revision: int | None = None,
 ) -> MutationResult:
@@ -196,7 +213,7 @@ async def reopen_work_item(
     session: AsyncSession,
     user_id: UUID,
     work_item_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     *,
     expected_revision: int | None = None,
 ) -> MutationResult:
@@ -226,7 +243,7 @@ async def reschedule_work_item(
     session: AsyncSession,
     user_id: UUID,
     work_item_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     new_date: datetime,
     *,
     reminder_policy: ReminderPolicy | None = None,
@@ -270,7 +287,7 @@ async def mark_waiting_received(
     session: AsyncSession,
     user_id: UUID,
     work_item_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     *,
     now: datetime | None = None,
     expected_revision: int | None = None,
@@ -302,7 +319,7 @@ async def mark_follow_up_replied(
     session: AsyncSession,
     user_id: UUID,
     work_item_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     *,
     now: datetime | None = None,
     expected_revision: int | None = None,
@@ -334,7 +351,7 @@ async def archive_work_item(
     session: AsyncSession,
     user_id: UUID,
     work_item_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     *,
     now: datetime | None = None,
 ) -> MutationResult:
@@ -362,7 +379,7 @@ async def add_work_item_note(
     session: AsyncSession,
     user_id: UUID,
     work_item_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     content: str,
     *,
     expected_revision: int | None = None,
@@ -400,7 +417,7 @@ async def change_work_item_topic(
     session: AsyncSession,
     user_id: UUID,
     work_item_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     topic_id: UUID | None,
 ) -> MutationResult:
     duplicate = await existing_mutation(session, user_id, telegram_update_id)
@@ -430,7 +447,7 @@ async def change_work_item_person(
     session: AsyncSession,
     user_id: UUID,
     work_item_id: UUID,
-    telegram_update_id: int,
+    telegram_update_id: int | None,
     person_id: UUID,
     *,
     replace_person_id: UUID | None = None,
@@ -533,3 +550,97 @@ async def create_follow_up_from_waiting(
         WorkItemRelationType.CREATED_FROM,
     )
     return follow_up, True
+
+
+async def convert_work_item_to_task(
+    session: AsyncSession,
+    user_id: UUID,
+    work_item_id: UUID,
+    telegram_update_id: int | None,
+    *,
+    expected_revision: int | None = None,
+) -> MutationResult:
+    duplicate = await existing_mutation(session, user_id, telegram_update_id)
+    if duplicate is not None:
+        return duplicate
+    item = await lock_work_item(
+        session, user_id, work_item_id, expected_revision=expected_revision
+    )
+    if item.status not in OPEN_STATUSES or item.type not in {
+        WorkItemType.AGENDA_ITEM.value,
+        WorkItemType.QUESTION.value,
+    }:
+        raise InvalidWorkItemTransitionError(
+            "only open agenda items and questions can become tasks"
+        )
+    previous = item.type
+    item.type = WorkItemType.TASK.value
+    event = await append_management_event(
+        session,
+        item,
+        WorkItemEventType.UPDATED,
+        telegram_update_id,
+        {"field": "type", "previous": previous, "new": WorkItemType.TASK.value},
+    )
+    await sync_work_item_reminders(session, item)
+    return MutationResult(item, event, True)
+
+
+async def add_decision_from_work_item(
+    session: AsyncSession,
+    user_id: UUID,
+    work_item_id: UUID,
+    telegram_update_id: int | None,
+    title: str,
+    *,
+    expected_revision: int | None = None,
+) -> tuple[MutationResult, WorkItem]:
+    duplicate = await existing_mutation(session, user_id, telegram_update_id)
+    if duplicate is not None:
+        decision_id = duplicate.event.payload.get("decision_id")
+        decision = await get_work_item(session, user_id, UUID(str(decision_id)))
+        if decision is None:
+            raise ValueError("decision not found")
+        return duplicate, decision
+    item = await lock_work_item(
+        session, user_id, work_item_id, expected_revision=expected_revision
+    )
+    if item.status == WorkItemStatus.ARCHIVED.value:
+        raise InvalidWorkItemTransitionError("archived work items cannot be changed")
+    created_at = management_now()
+    decision = await create_work_item(
+        session,
+        user_id,
+        item_type=WorkItemType.DECISION,
+        title=title,
+        status=WorkItemStatus.DONE,
+        topic_id=item.topic_id,
+        completed_at=created_at,
+    )
+    people = list(
+        await session.scalars(
+            select(WorkItemPerson).where(
+                WorkItemPerson.user_id == user_id,
+                WorkItemPerson.work_item_id == item.id,
+            )
+        )
+    )
+    for association in people:
+        await link_person_to_work_item(
+            session, user_id, decision.id, association.person_id
+        )
+    await create_work_item_relation(
+        session,
+        user_id,
+        decision.id,
+        item.id,
+        WorkItemRelationType.CREATED_FROM,
+    )
+    event = await append_management_event(
+        session,
+        item,
+        WorkItemEventType.UPDATED,
+        telegram_update_id,
+        {"operation": "add_decision", "decision_id": str(decision.id)},
+    )
+    return MutationResult(item, event, True), decision

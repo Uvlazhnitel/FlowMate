@@ -107,14 +107,17 @@ Migration `0012` adds the expiring search action used by Telegram pagination.
 Migration `0013` adds hashed, expiring PWA login codes and revocable server-side
 sessions. Raw login codes, session tokens, and CSRF secrets are never stored in
 PostgreSQL.
+Migration `0014` adds per-user PWA action idempotency keys to WorkItem events.
 
 ## PWA and Login
 
 The PWA lives in `apps/web` and uses React, TypeScript, Vite, TanStack Query,
 React Router, Radix primitives, and a generated service worker. It provides the
-responsive application shell and protected placeholder routes for Dashboard,
-Today, Topics, People, Agenda, Inbox, Planner Queue, Timeline, and Settings.
-Task Engine data APIs and CRUD screens are intentionally deferred.
+responsive application shell and protected routes for Dashboard, Today,
+Topics, People, Agenda, Inbox, Planner Queue, Timeline, and Settings.
+Dashboard, Today, Topics, People, and Agenda provide ownership-safe operational
+views and reuse Task Engine services for work-item actions. Inbox, Planner
+Queue, and Timeline remain shell placeholders.
 
 Configure the single PWA owner with a Telegram user ID that is also present in
 `TELEGRAM_ALLOWED_USER_IDS`:

@@ -174,7 +174,7 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
     assert {constraint["name"] for constraint in check_constraints} >= {
         "ck_users_telegram_user_id_positive"
     }
-    assert revision == "0013_pwa_auth"
+    assert revision == "0014_pwa_operations"
 
 
 def test_pwa_auth_migration_from_0012(migrated_database: None) -> None:

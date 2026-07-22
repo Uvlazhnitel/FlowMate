@@ -388,9 +388,18 @@ class WorkItemEvent(Base):
             "telegram_update_id",
             name="uq_work_item_events_telegram_update_id",
         ),
+        UniqueConstraint(
+            "user_id",
+            "client_action_id",
+            name="uq_work_item_events_user_client_action_id",
+        ),
         CheckConstraint(
             "telegram_update_id IS NULL OR telegram_update_id > 0",
             name="ck_work_item_events_telegram_update_id_positive",
+        ),
+        CheckConstraint(
+            "num_nonnulls(telegram_update_id, client_action_id) <= 1",
+            name="ck_work_item_events_one_action_origin",
         ),
     )
 
@@ -409,6 +418,9 @@ class WorkItemEvent(Base):
     )
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
     telegram_update_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    client_action_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,

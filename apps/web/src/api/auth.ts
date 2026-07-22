@@ -3,6 +3,8 @@ import { apiRequest } from "./client";
 export interface AuthenticatedUser {
   id: string;
   display_name: string | null;
+  timezone: string;
+  default_snooze_minutes: number;
 }
 
 export interface LoginCodeResponse {

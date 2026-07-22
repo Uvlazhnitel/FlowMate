@@ -7,6 +7,7 @@ import {
   Inbox,
   LayoutDashboard,
   ListChecks,
+  MoreHorizontal,
   Settings,
   Tags,
   Users,
@@ -34,12 +35,37 @@ const navigationItems: NavigationItem[] = [
   { to: "/settings", label: "Настройки", icon: Settings },
 ];
 
+const primaryMobilePaths = new Set([
+  "/dashboard",
+  "/today",
+  "/agenda",
+  "/topics",
+  "/people",
+]);
+
 function Navigation({ mobile = false }: { mobile?: boolean }) {
+  const visible = mobile
+    ? navigationItems.filter((item) => primaryMobilePaths.has(item.to))
+    : navigationItems;
+  const overflow = navigationItems.filter((item) => !primaryMobilePaths.has(item.to));
   return (
     <nav className={mobile ? "mobile-nav" : "sidebar-nav"} aria-label="Основная навигация">
-      {navigationItems.map((item) => {
+      {visible.map((item) => {
         return <NavigationLink key={item.to} item={item} mobile={mobile} />;
       })}
+      {mobile && (
+        <details className="mobile-more">
+          <summary>
+            <MoreHorizontal size={19} aria-hidden />
+            <span>Ещё</span>
+          </summary>
+          <div>
+            {overflow.map((item) => (
+              <NavigationLink key={item.to} item={item} mobile />
+            ))}
+          </div>
+        </details>
+      )}
     </nav>
   );
 }
@@ -96,7 +122,7 @@ export function AppShell({ user }: { user: AuthenticatedUser }) {
               <Avatar.Fallback>{initials}</Avatar.Fallback>
             </Avatar.Root>
           </header>
-          <Outlet />
+          <Outlet context={user} />
         </main>
         <Navigation mobile />
       </div>

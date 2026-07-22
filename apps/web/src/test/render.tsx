@@ -30,4 +30,6 @@ export function jsonResponse(body: object, status = 200): Response {
 export const authenticatedUser = {
   id: "13b1670c-df1e-43ea-b695-1d8fe0f043d5",
   display_name: "Мария",
+  timezone: "Europe/Riga",
+  default_snooze_minutes: 60,
 };

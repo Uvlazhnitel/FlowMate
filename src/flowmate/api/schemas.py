@@ -32,6 +32,8 @@ class LoginCodeVerifyRequest(BaseModel):
 class PwaUserResponse(BaseModel):
     id: UUID
     display_name: str | None
+    timezone: str
+    default_snooze_minutes: int
 
 
 class ErrorDetail(BaseModel):

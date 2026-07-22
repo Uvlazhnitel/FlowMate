@@ -4,6 +4,52 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { authenticatedUser, jsonResponse, renderApplication } from "./test/render";
 
+function requestPath(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  return input instanceof URL ? input.href : input.url;
+}
+
+function emptyOperationalResponse(path: string): Response {
+  if (path.includes("/dashboard")) {
+    return jsonResponse({
+      timezone: "Europe/Riga",
+      summary: {
+        overdue: 0,
+        due_today: 0,
+        follow_ups: 0,
+        waiting_overdue: 0,
+        questions: 0,
+        inbox: 0,
+        planner_queue: 0,
+      },
+      recommended: [],
+      activity: [],
+      deadlines: [],
+    });
+  }
+  return jsonResponse({
+    items: [],
+    limit: 20,
+    offset: 0,
+    has_more: false,
+    timezone: "Europe/Riga",
+  });
+}
+
+function stubEmptyApplication() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) => {
+      const path = requestPath(input);
+      return Promise.resolve(
+        path.includes("/api/v1/auth/me")
+          ? jsonResponse(authenticatedUser)
+          : emptyOperationalResponse(path),
+      );
+    }),
+  );
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -48,7 +94,7 @@ describe("protected application", () => {
     ["/timeline", "Лента"],
     ["/settings", "Настройки"],
   ])("renders protected route %s", async (path, title) => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(authenticatedUser)));
+    stubEmptyApplication();
 
     renderApplication(path);
 
@@ -57,12 +103,12 @@ describe("protected application", () => {
   });
 
   it("uses an honest empty state on foundation pages", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(authenticatedUser)));
+    stubEmptyApplication();
 
     renderApplication("/dashboard");
 
     expect(
-      await screen.findByRole("heading", { name: "Обзор готов к данным", level: 2 }),
+      await screen.findByRole("heading", { name: "Всё спокойно", level: 2 }),
     ).toBeVisible();
   });
 
@@ -85,7 +131,10 @@ describe("login and logout", () => {
       .mockResolvedValueOnce(
         jsonResponse({ status: "code_sent", expires_in_seconds: 600 }, 202),
       )
-      .mockResolvedValueOnce(jsonResponse(authenticatedUser));
+      .mockResolvedValueOnce(jsonResponse(authenticatedUser))
+      .mockImplementation((input: RequestInfo | URL) =>
+        Promise.resolve(emptyOperationalResponse(requestPath(input))),
+      );
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     renderApplication("/login");

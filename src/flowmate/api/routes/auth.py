@@ -28,6 +28,10 @@ from flowmate.auth.pwa import (
     verify_login_code,
 )
 from flowmate.core.config import Settings, get_settings
+from flowmate.reminders.preferences import (
+    NotificationDefaults,
+    get_effective_notification_preferences,
+)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["pwa-auth"])
 
@@ -42,10 +46,21 @@ def _sender(request: Request) -> LoginCodeSender:
     return sender
 
 
-def _user_response(identity: PwaIdentity) -> PwaUserResponse:
+async def _user_response(
+    identity: PwaIdentity,
+    session: AsyncSession,
+    settings: Settings,
+) -> PwaUserResponse:
+    preferences = await get_effective_notification_preferences(
+        session,
+        identity.user.id,
+        NotificationDefaults.from_settings(settings),
+    )
     return PwaUserResponse(
         id=identity.user.id,
         display_name=identity.user.display_name,
+        timezone=preferences.timezone,
+        default_snooze_minutes=preferences.default_snooze_minutes,
     )
 
 
@@ -158,9 +173,16 @@ async def create_pwa_session(
         created.token,
         created.csrf_token,
     )
+    preferences = await get_effective_notification_preferences(
+        session,
+        created.user.id,
+        NotificationDefaults.from_settings(settings),
+    )
     return PwaUserResponse(
         id=created.user.id,
         display_name=created.user.display_name,
+        timezone=preferences.timezone,
+        default_snooze_minutes=preferences.default_snooze_minutes,
     )
 
 
@@ -171,8 +193,10 @@ async def create_pwa_session(
 )
 async def current_pwa_user(
     identity: Annotated[PwaIdentity, Depends(require_pwa_session)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> PwaUserResponse:
-    return _user_response(identity)
+    return await _user_response(identity, session, settings)
 
 
 @router.delete(
