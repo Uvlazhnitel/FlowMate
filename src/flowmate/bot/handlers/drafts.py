@@ -58,6 +58,7 @@ DRAFT_NOT_FOUND_MESSAGE = "Активный черновик не найден."
 DRAFT_BUSY_MESSAGE = "Предыдущий ответ ещё обрабатывается."
 DRAFT_REPLY_REQUIRED_MESSAGE = "Ответьте на текущее уточнение через Reply."
 DRAFT_CHANGE_QUESTION = "Что изменить в черновике?"
+NEXT_CAPTURE_MESSAGE = "Можно записать следующий пункт."
 
 ITEM_TYPE_LABELS = {
     DraftItemType.TASK: "задача",
@@ -81,6 +82,17 @@ TEMPORAL_STATUS_LABELS = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+async def restore_main_menu(message: Message) -> None:
+    # Import locally to keep draft and navigation handlers independently importable.
+    from flowmate.bot.handlers.navigation import main_menu_keyboard
+
+    await message.answer(
+        NEXT_CAPTURE_MESSAGE,
+        parse_mode=None,
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 async def mark_draft_failed_safely(
@@ -462,6 +474,7 @@ async def _draft_callback(
         await db_session.commit()
         await callback_query.answer()
         await callback_query.message.edit_text(DRAFT_CANCELLED_MESSAGE)
+        await restore_main_menu(callback_query.message)
         return
     if action == "confirm" and draft.status in {
         "needs_clarification",
@@ -478,6 +491,7 @@ async def _draft_callback(
         await db_session.commit()
         await callback_query.answer()
         await callback_query.message.edit_text(conversion_summary(result))
+        await restore_main_menu(callback_query.message)
         return
     if action == "change" and draft.status in {"needs_clarification", "ready"}:
         draft.status = "needs_clarification"
@@ -518,6 +532,7 @@ async def _draft_callback(
             )
             await db_session.commit()
             await callback_query.message.edit_text(conversion_summary(result))
+            await restore_main_menu(callback_query.message)
             return
         if option.get("action") == "change":
             draft.current_question = DRAFT_CHANGE_QUESTION

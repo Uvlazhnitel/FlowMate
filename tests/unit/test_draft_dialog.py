@@ -457,6 +457,7 @@ async def test_draft_callbacks_transition_owned_session(
         ),
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
         patch.object(Message, "edit_text", new_callable=AsyncMock) as edit_text,
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
     ):
         await draft_callback(
             callback,
@@ -467,6 +468,12 @@ async def test_draft_callbacks_transition_owned_session(
 
     assert draft.status == expected_status
     edit_text.assert_awaited_once_with(expected_message)
+    answer.assert_awaited_once()
+    menu_call = answer.await_args
+    assert menu_call is not None
+    assert menu_call.args == ("Можно записать следующий пункт.",)
+    assert menu_call.kwargs["parse_mode"] is None
+    assert menu_call.kwargs["reply_markup"].is_persistent is True
 
 
 @pytest.mark.asyncio
