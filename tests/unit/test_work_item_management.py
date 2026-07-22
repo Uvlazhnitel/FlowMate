@@ -18,6 +18,7 @@ from flowmate.ai.schemas import (
 )
 from flowmate.bot.handlers.navigation import today_command
 from flowmate.bot.handlers.work_items import (
+    apply_management_intent,
     details_keyboard,
     encode_revision,
     execute_management_intent,
@@ -237,6 +238,7 @@ async def test_complete_callback_commits_and_refreshes_card() -> None:
     session = MagicMock(spec=AsyncSession)
     session.commit = AsyncMock()
     session.rollback = AsyncMock()
+    session.refresh = AsyncMock()
     preferences = SimpleNamespace(
         zoneinfo=ZoneInfo("UTC"),
         morning_digest_time=time(9),
@@ -659,6 +661,57 @@ async def test_selection_preserves_and_applies_intended_action() -> None:
     assert apply_call.kwargs["item"] == item
     assert apply_call.kwargs["intent"] == intent
     answer.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_waiting_received_offer_uses_revision_aware_follow_up_callback() -> None:
+    message = make_message("Антон ответил")
+    update = Update(update_id=9202, message=message)
+    item = make_details("waiting").item
+    intent = ManagementIntent(
+        action=ManagementAction.WAITING_RECEIVED,
+        target_type=DraftItemType.WAITING,
+        record_query="Антон",
+        contextual_reference=False,
+        person_candidate="Антон",
+        topic_candidate=None,
+        note_text=None,
+        temporal_candidate=None,
+        missing_fields=[],
+        ambiguities=[],
+        confidence=0.95,
+    )
+    session = MagicMock(spec=AsyncSession)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    with (
+        patch(
+            "flowmate.bot.handlers.work_items.mark_waiting_received",
+            new=AsyncMock(),
+        ),
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+    ):
+        await apply_management_intent(
+            message,
+            update,
+            cast(AsyncSession, session),
+            user_id=item.user_id,
+            telegram_user_id=123,
+            item=item,
+            intent=intent,
+            action_ttl_minutes=30,
+            app_timezone=ZoneInfo("UTC"),
+        )
+
+    assert answer.await_count == 2
+    follow_up_markup = answer.await_args_list[1].kwargs["reply_markup"]
+    callback_data = follow_up_markup.inline_keyboard[0][0].callback_data
+    parsed = parse_work_item_callback(callback_data)
+    assert parsed is not None
+    assert parsed[0] == "f"
+    assert parsed[1] == item.id
+    assert parsed[2] == encode_revision(int(item.updated_at.timestamp() * 1_000_000))
+    session.refresh.assert_awaited_once_with(item, attribute_names=["updated_at"])
 
 
 @pytest.mark.asyncio

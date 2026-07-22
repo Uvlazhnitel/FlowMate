@@ -1196,6 +1196,7 @@ async def apply_management_intent(
         await db_session.commit()
         await message.answer(response)
         if intent.action is ManagementAction.WAITING_RECEIVED:
+            await db_session.refresh(item, attribute_names=["updated_at"])
             await message.answer(
                 "Создать follow-up по результату?",
                 reply_markup=InlineKeyboardMarkup(
@@ -1203,7 +1204,7 @@ async def apply_management_intent(
                         [
                             InlineKeyboardButton(
                                 text="Создать follow-up",
-                                callback_data=f"wi:followup:{item.id}",
+                                callback_data=item_action_data("f", item),
                             )
                         ]
                     ]
