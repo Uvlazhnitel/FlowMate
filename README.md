@@ -203,7 +203,7 @@ docker compose logs -f api web
 ```
 
 Add `--profile bot --profile scheduler` only when the Telegram bot and reminder
-worker are configured. API startup applies Alembic migrations through `0017`
+worker are configured. API startup applies Alembic migrations through `0018`
 before serving requests; Nginx serves the built PWA and proxies `/api` to
 FastAPI on the same origin.
 
