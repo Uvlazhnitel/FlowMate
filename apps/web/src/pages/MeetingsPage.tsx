@@ -227,7 +227,11 @@ export function CaptureCard({
             Пункт №{capture.sequence} ·{" "}
             {capture.source_type === "voice" ? "голос" : "текст"}
           </span>
-          <p className="meeting-capture__source">{capture.source_text}</p>
+          <p className="meeting-capture__source">
+            {capture.source_redacted
+              ? "Исходная расшифровка очищена по сроку хранения."
+              : capture.source_text}
+          </p>
         </div>
         <div className="meeting-capture__status">
           <span className="status-badge">{capture.status}</span>

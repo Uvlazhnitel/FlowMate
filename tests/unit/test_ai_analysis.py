@@ -91,8 +91,40 @@ def test_confidence_and_semantic_issues_determine_readiness() -> None:
     ]
 
 
-def test_global_ambiguity_prevents_ready_status() -> None:
-    result = make_parse_result(ambiguities=["Неясен владелец"])
+def test_optional_missing_fields_and_general_ambiguity_do_not_block_capture() -> None:
+    result = make_parse_result(
+        [
+            make_draft_item(
+                title="Скинуть деньги за Польшу",
+                missing_fields=["сумма", "дата", "тема"],
+                ambiguities=["Сумма не указана"],
+                confidence=0.92,
+            )
+        ],
+        ambiguities=["Неясна сумма"],
+    )
+
+    analysis = build_analysis_result(
+        result,
+        context=make_context(),
+        high_threshold=0.8,
+        clarification_threshold=0.5,
+    )
+
+    assert analysis.items[0].readiness is DraftReadiness.READY
+    assert analysis.items[0].item.missing_fields == ["сумма", "дата", "тема"]
+
+
+def test_explicit_identity_ambiguity_requires_clarification() -> None:
+    result = make_parse_result(
+        [
+            make_draft_item(
+                person_candidates=["Анна", "Анна П."],
+                ambiguities=["Неясно, какая Анна"],
+                confidence=0.95,
+            )
+        ]
+    )
 
     analysis = build_analysis_result(
         result,

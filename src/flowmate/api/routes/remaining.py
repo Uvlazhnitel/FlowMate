@@ -25,6 +25,7 @@ from flowmate.reminders.preferences import (
     validate_timezone,
 )
 from flowmate.reminders.timezone import resolve_local_datetime
+from flowmate.stabilization.audit import record_audit_event
 from flowmate.task_engine.conversion import (
     DraftConversionError,
     DraftConversionService,
@@ -207,7 +208,9 @@ async def inbox_draft(
         )
     )
     return await serialize_draft(
-        session, draft, source_content=note.content if note is not None else ""
+        session,
+        draft,
+        source_content=(note.content or "") if note is not None else "",
     )
 
 
@@ -257,7 +260,9 @@ async def update_draft_item(
         raise HTTPException(status_code=409, detail=str(error)) from error
     note = await session.get(Note, draft.source_note_id)
     return await serialize_draft(
-        session, draft, source_content=note.content if note is not None else ""
+        session,
+        draft,
+        source_content=(note.content or "") if note is not None else "",
     )
 
 
@@ -546,6 +551,15 @@ async def update_user_settings(
         session, identity.user.id, ReminderType.EVENING_DIGEST, now=now
     )
     await session.flush()
+    await record_audit_event(
+        session,
+        actor_kind="pwa",
+        action="settings.preferences_updated",
+        outcome="success",
+        user_id=identity.user.id,
+        entity_kind="preferences",
+        safe_metadata={"status": "updated"},
+    )
     return _settings_payload(await _preferences(session, identity, settings), settings)
 
 
@@ -632,6 +646,15 @@ async def create_pwa_topic(
             description=payload.description,
             aliases=payload.aliases,
         )
+        await record_audit_event(
+            session,
+            actor_kind="pwa",
+            action="topic.created",
+            outcome="success",
+            user_id=identity.user.id,
+            entity_kind="topic",
+            entity_id=topic.id,
+        )
         return _topic_payload(topic)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -656,6 +679,16 @@ async def update_pwa_topic(
     topic.aliases = normalize_aliases(payload.aliases, topic.name)
     topic.is_active = payload.is_active
     await session.flush()
+    await record_audit_event(
+        session,
+        actor_kind="pwa",
+        action="topic.updated",
+        outcome="success",
+        user_id=identity.user.id,
+        entity_kind="topic",
+        entity_id=topic.id,
+        safe_metadata={"status": "active" if topic.is_active else "inactive"},
+    )
     return _topic_payload(topic)
 
 
@@ -696,6 +729,15 @@ async def create_pwa_person(
         notes=payload.notes,
         aliases=payload.aliases,
     )
+    await record_audit_event(
+        session,
+        actor_kind="pwa",
+        action="person.created",
+        outcome="success",
+        user_id=identity.user.id,
+        entity_kind="person",
+        entity_id=person.id,
+    )
     return _person_payload(person)
 
 
@@ -719,4 +761,14 @@ async def update_pwa_person(
     person.aliases = normalize_aliases(payload.aliases, person.display_name)
     person.is_active = payload.is_active
     await session.flush()
+    await record_audit_event(
+        session,
+        actor_kind="pwa",
+        action="person.updated",
+        outcome="success",
+        user_id=identity.user.id,
+        entity_kind="person",
+        entity_id=person.id,
+        safe_metadata={"status": "active" if person.is_active else "inactive"},
+    )
     return _person_payload(person)

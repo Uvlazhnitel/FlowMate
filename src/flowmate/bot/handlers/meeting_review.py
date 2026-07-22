@@ -16,7 +16,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from flowmate.ai.errors import AIError
 from flowmate.ai.provider import MeetingReviewProvider
+from flowmate.ai.schemas import DraftSource
+from flowmate.ai.service import DraftParsingService
 from flowmate.db.models import MeetingReview, MeetingReviewItem
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.meetings.review import (
@@ -223,6 +226,7 @@ async def meeting_review_reply(
     db_session: AsyncSession,
     active_meeting_review: MeetingReview,
     transcription_service: TranscriptionService | None,
+    draft_parsing_service: DraftParsingService | None,
 ) -> None:
     text = (message.text or "").strip()
     voice = message.voice
@@ -253,6 +257,9 @@ async def meeting_review_reply(
     if not text or active_meeting_review.current_item_id is None:
         await message.answer("Пришлите текстовый или голосовой ответ.")
         return
+    if draft_parsing_service is None:
+        await message.answer("AI-разбор уточнения пока не настроен.")
+        return
     try:
         review = await answer_review_item(
             db_session,
@@ -260,10 +267,12 @@ async def meeting_review_reply(
             active_meeting_review.meeting_id,
             active_meeting_review.current_item_id,
             text,
+            parsing_service=draft_parsing_service,
+            answer_source=DraftSource.VOICE if voice is not None else DraftSource.TEXT,
             telegram_update_id=event_update.update_id,
         )
         await _next_question(message, db_session, review)
         await db_session.commit()
-    except (MeetingReviewError, SQLAlchemyError):
+    except (AIError, MeetingReviewError, SQLAlchemyError):
         await db_session.rollback()
         await message.answer("Не удалось сохранить уточнение.")

@@ -185,6 +185,54 @@ class Settings(BaseSettings):
         le=3600,
         validation_alias="SCHEDULER_INTERVAL_SECONDS",
     )
+    maintenance_interval_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        validation_alias="MAINTENANCE_INTERVAL_SECONDS",
+    )
+    ai_recovery_interval_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=3600,
+        validation_alias="AI_RECOVERY_INTERVAL_SECONDS",
+    )
+    ai_recovery_lease_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=86400,
+        validation_alias="AI_RECOVERY_LEASE_SECONDS",
+    )
+    ai_recovery_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        validation_alias="AI_RECOVERY_MAX_ATTEMPTS",
+    )
+    terminal_transcript_retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=3650,
+        validation_alias="TERMINAL_TRANSCRIPT_RETENTION_DAYS",
+    )
+    unresolved_transcript_retention_days: int = Field(
+        default=90,
+        ge=1,
+        le=3650,
+        validation_alias="UNRESOLVED_TRANSCRIPT_RETENTION_DAYS",
+    )
+    expired_record_retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=3650,
+        validation_alias="EXPIRED_RECORD_RETENTION_DAYS",
+    )
+    temporary_audio_max_age_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        validation_alias="TEMPORARY_AUDIO_MAX_AGE_SECONDS",
+    )
     reminder_batch_size: int = Field(
         default=50,
         gt=0,
@@ -428,6 +476,14 @@ class Settings(BaseSettings):
             <= self.reminder_delivery_timeout_seconds
         ):
             raise ValueError("reminder processing timeout must exceed delivery timeout")
+        if (
+            self.unresolved_transcript_retention_days
+            < self.terminal_transcript_retention_days
+        ):
+            raise ValueError(
+                "unresolved transcript retention must not be shorter than "
+                "terminal retention"
+            )
         if (
             self.pwa_telegram_user_id is not None
             and self.pwa_telegram_user_id not in self.telegram_allowed_user_ids

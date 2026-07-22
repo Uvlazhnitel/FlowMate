@@ -261,7 +261,7 @@ async def text_note(
 
 
 def format_note_preview(note: Note, position: int) -> str:
-    normalized = " ".join(note.content.split())
+    normalized = " ".join((note.content or "[голосовая расшифровка очищена]").split())
     if len(normalized) > NOTE_PREVIEW_LENGTH:
         normalized = f"{normalized[: NOTE_PREVIEW_LENGTH - 3]}..."
     source = {"voice": "голос", "manual": "вручную"}.get(note.source, "текст")

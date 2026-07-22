@@ -214,13 +214,14 @@ describe("remaining operational screens", () => {
   it("applies Timeline filters and exposes remaining screens in mobile overflow", async () => {
     const event = {
       id: "7a525364-5948-41f8-8976-4d0324115ea2",
-      event_type: "planner_status_changed",
+      entity_kind: "meeting",
+      entity_id: "e105aeb6-39f2-48e0-8088-ec3e774fb81d",
+      event_type: "meeting_started",
       occurred_at: "2026-07-22T10:00:00Z",
-      work_item_id: item.id,
-      title: item.title,
-      work_item_type: "task",
+      title: "Migration sync",
+      work_item_type: null,
       status: "active",
-      topic: { id: item.topic_id, name: "Migration" },
+      topics: [{ id: item.topic_id, name: "Migration" }],
       people: [],
     };
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
@@ -246,12 +247,16 @@ describe("remaining operational screens", () => {
     const user = userEvent.setup();
 
     renderApplication(
-      `/timeline?from=2026-07-01&event_type=planner_status_changed&topic_id=${item.topic_id}`,
+      `/timeline?from=2026-07-01&event_type=meeting_started&topic_id=${item.topic_id}`,
     );
 
-    expect(await screen.findByText("Подготовить миграцию")).toBeVisible();
+    const meetingTitle = await screen.findByText("Migration sync");
+    expect(meetingTitle).toBeVisible();
+    expect(
+      within(meetingTitle.closest("article")!).getByText("Встреча началась"),
+    ).toBeVisible();
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("event_type=planner_status_changed"),
+      expect.stringContaining("event_type=meeting_started"),
       expect.anything(),
     );
     const mobileNavigation = screen

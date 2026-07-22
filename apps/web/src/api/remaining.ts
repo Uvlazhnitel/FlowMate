@@ -83,13 +83,14 @@ export interface PlannerEntry {
 
 export interface TimelineEntry {
   id: string;
+  entity_kind: "work_item" | "meeting";
+  entity_id: string;
   event_type: string;
   occurred_at: string;
-  work_item_id: string;
   title: string;
-  work_item_type: string;
+  work_item_type: string | null;
   status: string;
-  topic: EntityRef | null;
+  topics: EntityRef[];
   people: EntityRef[];
 }
 

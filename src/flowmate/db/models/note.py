@@ -39,8 +39,11 @@ class Note(Base):
             name="ck_notes_source",
         ),
         CheckConstraint(
-            "char_length(btrim(content)) > 0",
-            name="ck_notes_content_not_blank",
+            "(content IS NOT NULL AND char_length(btrim(content)) > 0 AND "
+            "transcript_redacted_at IS NULL) OR "
+            "(content IS NULL AND source = 'voice' AND "
+            "transcript_redacted_at IS NOT NULL)",
+            name="ck_notes_content_or_redacted",
         ),
         CheckConstraint(
             "inbox_disposition IN ('pending', 'kept', 'archived')",
@@ -63,7 +66,7 @@ class Note(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     inbox_disposition: Mapped[str] = mapped_column(
         String(16), nullable=False, default="pending", server_default="pending"
@@ -78,6 +81,9 @@ class Note(Base):
             use_alter=True,
         ),
         nullable=True,
+    )
+    transcript_redacted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

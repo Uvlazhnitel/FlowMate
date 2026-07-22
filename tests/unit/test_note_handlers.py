@@ -273,10 +273,12 @@ async def test_new_text_note_is_parsed_and_returned_as_plain_text() -> None:
     summary_call = answer.await_args_list[1]
     assert "Я нашёл записей: 1" in summary_call.args[0]
     assert "Общая уверенность: 82%" in summary_call.args[0]
-    assert "Статус: нужно уточнение" in summary_call.args[0]
+    assert "Статус: готово" in summary_call.args[0]
     assert "[задача] Prepare report" in summary_call.args[0]
     assert summary_call.kwargs == {"parse_mode": None}
-    assert "Уточните" in answer.await_args_list[2].args[0]
+    assert answer.await_args_list[2].args[0] == (
+        "Проверьте черновик. Финальные записи ещё не созданы."
+    )
     assert "reply_markup" in answer.await_args_list[2].kwargs
 
 
@@ -399,7 +401,9 @@ async def test_long_draft_summary_is_split_without_markup() -> None:
     assert len(summary_calls) == 3
     assert all(len(call.args[0]) <= 4000 for call in summary_calls)
     assert all(call.kwargs == {"parse_mode": None} for call in summary_calls)
-    assert "Уточните" in answer.await_args_list[-1].args[0]
+    assert answer.await_args_list[-1].args[0] == (
+        "Проверьте черновик. Финальные записи ещё не созданы."
+    )
 
 
 @pytest.mark.asyncio

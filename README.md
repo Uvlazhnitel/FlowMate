@@ -38,8 +38,9 @@ make ps
 The API startup applies Alembic migrations before starting Uvicorn. PostgreSQL
 is available only on the internal Compose network and is not published to the
 host. The PWA is available at `http://localhost:8080` by default and proxies
-`/api` to FastAPI on the same origin. The technical API remains available on
-`APP_PORT` for local diagnostics.
+`/api` to FastAPI on the same origin. The Compose technical API remains
+available on `API_HOST_PORT` for local diagnostics; its container port stays at
+`8000` for the Nginx upstream.
 
 Configuration is loaded from environment variables through Pydantic Settings.
 `APP_ENV` supports `development`, `test`, and `production`. Production rejects
@@ -60,7 +61,8 @@ curl -H "Authorization: Bearer $APP_API_KEY" \
   http://localhost:8000/api/v1/status
 ```
 
-Use the value configured by `APP_PORT` instead of `8000` when it is changed.
+Use the value configured by `API_HOST_PORT` instead of `8000` for Compose.
+Standalone API runs continue to use `APP_PORT`.
 OpenAPI documentation is available at `/docs` only when `APP_DEBUG=true`.
 It is always disabled in production because production configuration rejects
 debug mode.
@@ -121,6 +123,11 @@ meetings, preserves immutable source Notes and context snapshots, and adds
 stable per-meeting capture numbering and non-destructive review state.
 Migration `0018_meeting_review_completion` adds validated meeting reviews,
 agenda outcomes, idempotent result links, and meeting-to-WorkItem provenance.
+Migration `0019_stage7_stabilization` indexes ownership-scoped Meeting events
+for stable unified Timeline pagination.
+Migration `0020_stage8_stabilization` adds persistent Telegram receipts,
+PostgreSQL-backed AI recovery jobs, safe audit events, prompt versions,
+transcript redaction metadata, and an explicit unknown-delivery reminder state.
 
 ## PWA and Login
 
@@ -131,8 +138,8 @@ Topics, People, Agenda, Inbox, Planner Queue, Timeline, Settings, and Meetings.
 Dashboard, Today, Topics, People, and Agenda provide ownership-safe operational
 views and reuse Task Engine services for work-item actions. Inbox supports
 explicit review and atomic conversion of uncertain drafts, Planner Queue tracks
-manual transfer state without Microsoft integration, Timeline exposes redacted
-domain history, and Settings manages notification preferences, active topics,
+manual transfer state without Microsoft integration, Timeline combines
+redacted WorkItem and Meeting history, and Settings manages notification preferences, active topics,
 people, aliases, and provider readiness booleans without returning secrets.
 Meetings provides an active Meeting Mode card, manual start/end/cancel actions,
 participant and topic selection, paginated recent meetings, and chronological
@@ -142,6 +149,9 @@ editable drafts; unresolved AI fields do not interrupt an active meeting. After
 writing final records. The user can clarify, exclude, send incomplete items to
 Inbox, opt individual actions into the manual Planner Queue, and confirm ready
 items through the existing Task Engine and reminder services.
+Text or voice clarification answers update only the referenced structured
+capture item and its review projection. Failed parsing leaves that item pending;
+successful confirmation remains atomic and idempotent.
 
 Typical Telegram flow:
 
@@ -202,10 +212,34 @@ docker compose ps
 docker compose logs -f api web
 ```
 
+For a private Tailscale deployment, expose only the local reverse-proxy targets
+and let Tailscale Serve terminate HTTPS:
+
+```dotenv
+FLOWMATE_BIND_ADDRESS=127.0.0.1
+API_HOST_PORT=8001
+WEB_BIND_HOST=127.0.0.1
+PWA_PUBLIC_ORIGIN=https://homeserver.example-tailnet.ts.net:8443
+PWA_COOKIE_SECURE=true
+CORS_ORIGINS=
+APP_DEBUG=false
+```
+
+```bash
+tailscale serve --https=8443 http://127.0.0.1:8080
+```
+
+Every client must be signed into the same tailnet with Tailscale DNS enabled.
+The hostname must resolve to the server's Tailscale IP; remove any custom split
+DNS rule for `ts.net` that overrides MagicDNS. Open the HTTPS URL directly on
+each device, request the login code through Telegram, and install that origin as
+a new PWA. A previously installed localhost or SSH-tunnel PWA has a different
+origin and cannot be reused.
+
 Add `--profile bot --profile scheduler` only when the Telegram bot and reminder
-worker are configured. API startup applies Alembic migrations through `0018`
-before serving requests; Nginx serves the built PWA and proxies `/api` to
-FastAPI on the same origin.
+worker are configured. API startup applies Alembic migrations through
+`0020_stage8_stabilization` before serving requests; Nginx serves the built PWA
+and proxies `/api` to FastAPI on the same origin.
 
 Authentication endpoints are:
 
@@ -449,9 +483,11 @@ DEFAULT_SNOOZE_MINUTES=60
 
 Due reminders are claimed with PostgreSQL row locks and a processing token.
 Temporary Telegram failures are retried up to the configured limit; permanent
-failures remain in history with a safe error category. Delivery is
-at-least-once: sent records are not selected again, but a process crash after
-Telegram accepts a message and before `sent` is committed can cause one retry.
+failures remain in history with a safe error category. Delivery is at-most-once
+after the network attempt starts. A process or network failure after that point
+stores `delivery_unknown` and never retries automatically, avoiding duplicate
+reminders. An operator can deliberately retry with
+`make reminder-retry id=UUID`; this action is audited.
 `REMINDER_PROCESSING_TIMEOUT_SECONDS` must be greater than
 `REMINDER_DELIVERY_TIMEOUT_SECONDS`, preventing an active delivery from losing
 its processing lease.
@@ -503,10 +539,71 @@ starts the worker independently.
 make logs
 make ps
 make down
+make maintenance-once
+make ai-eval
 ```
 
 `make down` preserves PostgreSQL data. `make clean` removes application and test
 volumes, so it permanently deletes local database data.
+
+### Stabilization, cleanup and recovery
+
+Telegram update IDs are claimed in PostgreSQL before handler execution. A
+completed receipt is permanent; a stale processing lease may be reclaimed after
+a restart. Draft parsing, Meeting captures, and Meeting review generation also
+have unique PostgreSQL jobs. The bot normally completes them synchronously, and
+the scheduler retries pending or stale jobs up to three times without relying on
+process memory.
+
+The scheduler runs cleanup hourly. Completed/converted voice transcripts are
+redacted after 30 days; unresolved transcripts are redacted after 90 days.
+Structured records, Meeting links, events, source IDs, and idempotency records
+remain. Expired login codes, revoked sessions, and expired dialog sessions are
+removed after 30 days. Old inactive ordinary drafts lose bulky AI payloads but
+retain stable provenance where required. Orphan `flowmate-*.ogg` files older
+than one hour are removed at bot startup and before creating a new temp file.
+
+Audit events contain only actor/action/outcome, entity IDs, safe categories,
+counts, and prompt versions. They never contain note text, transcripts, raw AI
+payloads, provider errors, cookies, tokens, or API keys. Audit has no public PWA
+endpoint.
+
+### Backup and restore
+
+Create a compressed PostgreSQL custom-format backup:
+
+```bash
+BACKUP_DIR=/var/backups/flowmate make backup
+```
+
+The directory receives mode `0700`, dump and manifest files receive `0600`, and
+the manifest contains SHA-256 and size only. Daily runs retain seven daily and
+four Sunday weekly copies. Configure host cron to run `make backup`;
+application APScheduler intentionally does not own backups.
+
+Verify an isolated restore using the test PostgreSQL container:
+
+```bash
+make restore-check backup=/var/backups/flowmate/flowmate-daily-TIMESTAMP.dump
+```
+
+The command refuses targets not ending in `_restore_test`, verifies checksum
+and Alembic head, and never replaces production. Backups are not encrypted or
+copied off-host by FlowMate; production storage must provide both separately.
+
+### Offline AI evaluation and real voice smoke
+
+`make ai-eval` validates anonymized recorded structured responses, critical date
+rules, prompt versions, and routing prompt size without network access. Fixtures
+use fictional names and contain no corporate data.
+
+For a release candidate, send newly recorded non-sensitive Telegram voice clips
+covering: a short action; `7 августа` without time; an explicit date and time;
+multiple items; noisy speech; silence; oversized audio; voice clarification;
+Meeting capture/review; duplicate update delivery; and restart during parsing.
+Verify acknowledgement, dates, deferred clarification, idempotency, recovery,
+final records/reminders, and absence of `.ogg` files. Never commit recordings or
+their real transcripts.
 
 ## Tests and Quality
 

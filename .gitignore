@@ -24,4 +24,6 @@ docker-compose.local.yml
 node_modules/
 apps/web/dist/
 apps/web/coverage/
+backups/
+*.ogg
 npm-debug.log*

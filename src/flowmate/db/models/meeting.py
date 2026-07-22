@@ -186,6 +186,7 @@ class MeetingEvent(Base):
             "user_id", "client_action_id", "event_type", name="uq_meeting_events_client"
         ),
         Index("ix_meeting_events_meeting_created", "meeting_id", "created_at"),
+        Index("ix_meeting_events_user_created_id", "user_id", "created_at", "id"),
     )
     id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=uuid4
@@ -300,6 +301,12 @@ class MeetingReview(Base):
         nullable=False, default=0, server_default="0"
     )
     last_error_code: Mapped[str | None] = mapped_column(String(64))
+    prompt_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="meeting-review-v2",
+        server_default="legacy-v1",
+    )
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

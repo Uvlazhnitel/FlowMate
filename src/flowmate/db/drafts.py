@@ -7,6 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from flowmate.ai.prompt_versions import DRAFT_PROMPT_VERSION
 from flowmate.ai.schemas import (
     DraftAnalysisResult,
     DraftItemAssessment,
@@ -15,6 +16,7 @@ from flowmate.ai.schemas import (
 from flowmate.db.models import DraftItemRecord, DraftSession
 from flowmate.db.models.draft import OPEN_DRAFT_STATUSES
 from flowmate.drafts.questions import ClarificationQuestion
+from flowmate.stabilization.jobs import complete_entity_ai_jobs, enqueue_ai_job
 
 DraftStatus = Literal[
     "parsing",
@@ -26,6 +28,7 @@ DraftStatus = Literal[
     "failed",
 ]
 ClaimResult = Literal["claimed", "duplicate", "busy", "inactive"]
+PROCESSING_LEASE = timedelta(minutes=5)
 
 
 def utc_now() -> datetime:
@@ -49,10 +52,22 @@ async def create_parsing_draft(
         user_id=user_id,
         source_note_id=source_note_id,
         status="parsing",
+        prompt_version=DRAFT_PROMPT_VERSION,
         expires_at=expires_after(current, ttl_hours),
     )
     session.add(draft)
     await session.flush()
+    await enqueue_ai_job(
+        session,
+        user_id=user_id,
+        job_kind="draft_parse",
+        entity_id=draft.id,
+        operation_key="initial",
+        prompt_name="draft",
+        prompt_version=DRAFT_PROMPT_VERSION,
+        input_source="note",
+        now=current,
+    )
     return draft
 
 
@@ -109,6 +124,7 @@ async def get_active_draft_for_user(
     if draft is not None and draft.expires_at <= (now or utc_now()):
         draft.status = "expired"
         draft.processing_update_id = None
+        draft.processing_started_at = None
         await session.flush()
         return None
     return draft
@@ -190,6 +206,7 @@ async def replace_draft_analysis(
     draft.current_question_context = question.context if question is not None else None
     draft.current_question_message_id = None
     draft.processing_update_id = None
+    draft.processing_started_at = None
     draft.expires_at = expires_after(current, ttl_hours)
     await session.execute(
         delete(DraftItemRecord).where(DraftItemRecord.draft_session_id == draft.id)
@@ -218,6 +235,12 @@ async def replace_draft_analysis(
         )
     await session.flush()
     await session.refresh(draft, attribute_names=["items"])
+    await complete_entity_ai_jobs(
+        session,
+        entity_id=draft.id,
+        job_kinds=("draft_parse", "meeting_capture_parse", "draft_refine"),
+        now=current,
+    )
 
 
 def load_analysis(draft: DraftSession) -> DraftAnalysisResult:
@@ -237,6 +260,7 @@ async def transition_draft(
     draft.current_question_context = None
     draft.current_question_message_id = None
     draft.processing_update_id = None
+    draft.processing_started_at = None
     await session.flush()
 
 
@@ -273,9 +297,12 @@ async def claim_update(
     if update_id in draft.processed_update_ids:
         return "duplicate", draft
     if draft.processing_update_id is not None:
-        return "busy", draft
+        started_at = draft.processing_started_at
+        if started_at is None or started_at > current - PROCESSING_LEASE:
+            return "busy", draft
     draft.processed_update_ids = [*draft.processed_update_ids[-99:], update_id]
     draft.processing_update_id = update_id
+    draft.processing_started_at = current
     draft.expires_at = expires_after(current, ttl_hours)
     await session.flush()
     return "claimed", draft
@@ -286,4 +313,5 @@ async def clear_processing_update(
     draft: DraftSession,
 ) -> None:
     draft.processing_update_id = None
+    draft.processing_started_at = None
     await session.flush()

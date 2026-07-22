@@ -17,6 +17,7 @@ class ReminderStatus(StrEnum):
     SNOOZED = "snoozed"
     CANCELLED = "cancelled"
     FAILED = "failed"
+    DELIVERY_UNKNOWN = "delivery_unknown"
 
 
 class ReminderScheduleKind(StrEnum):

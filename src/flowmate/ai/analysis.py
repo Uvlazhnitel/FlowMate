@@ -7,6 +7,7 @@ from flowmate.ai.schemas import (
     DraftInputContext,
     DraftItem,
     DraftItemAssessment,
+    DraftItemType,
     DraftParseResult,
     DraftReadiness,
     TemporalCandidate,
@@ -191,11 +192,16 @@ def classify_readiness(
         return DraftReadiness.UNRESOLVED
     if item.confidence < clarification_threshold:
         return DraftReadiness.UNRESOLVED
+    if item.type is DraftItemType.UNKNOWN:
+        return DraftReadiness.CLARIFICATION_REQUIRED
+    # Provider-reported missing details remain useful Inbox metadata, but they
+    # must not turn optional fields such as amount, topic, or date into blockers.
+    identity_is_ambiguous = bool(item.ambiguities) and (
+        len(item.person_candidates) > 1 or len(item.topic_candidates) > 1
+    )
     needs_clarification = (
         item.confidence < high_threshold
-        or bool(item.missing_fields)
-        or bool(item.ambiguities)
-        or bool(result_ambiguities)
+        or identity_is_ambiguous
         or any(
             candidate is not None and candidate.status is TemporalStatus.AMBIGUOUS
             for candidate in temporal_candidates

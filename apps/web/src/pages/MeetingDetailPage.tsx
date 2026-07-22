@@ -190,7 +190,8 @@ export function MeetingDetailPage({
         {(reviewAction.isError ||
           itemAction.isError ||
           clarification.isError ||
-          agenda.isError) && (
+          agenda.isError ||
+          addAgenda.isError) && (
           <p className="inline-error">
             Изменение не сохранено. Обновите данные и повторите.
           </p>
@@ -461,15 +462,22 @@ export function MeetingDetailPage({
         <div className="section-heading">
           <h2>Timeline</h2>
         </div>
-        {review?.timeline.map((event) => (
-          <article className="timeline-row" key={event.id}>
-            <span>{formatDateTime(event.created_at, dateTimePreferences)}</span>
-            <strong>{event.event_type}</strong>
-            <span>
-              {event.previous_status ?? "—"} → {event.new_status}
-            </span>
-          </article>
-        ))}
+        {!review?.timeline.length ? (
+          <EmptyState
+            title="История встречи пока пуста"
+            description="События появятся после обработки встречи."
+          />
+        ) : (
+          review.timeline.map((event) => (
+            <article className="timeline-row" key={event.id}>
+              <span>{formatDateTime(event.created_at, dateTimePreferences)}</span>
+              <strong>{event.event_type}</strong>
+              <span>
+                {event.previous_status ?? "—"} → {event.new_status}
+              </span>
+            </article>
+          ))
+        )}
       </section>
     </OperationalLayout>
   );

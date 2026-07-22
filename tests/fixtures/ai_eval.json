@@ -1,0 +1,222 @@
+[
+  {
+    "id": "date_only_reminder_august",
+    "input": "Напомни 7 августа сделать офбординг Миры",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Сделать офбординг Миры",
+          "description": null,
+          "person_candidates": ["Мира"],
+          "topic_candidates": [],
+          "due_date_candidate": null,
+          "reminder_candidate": {
+            "original_phrase": "7 августа",
+            "normalized_value": "2026-08-07T23:59:59+03:00",
+            "status": "resolved",
+            "explanation": null,
+            "time_was_explicit": false
+          },
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.96
+        }
+      ],
+      "ambiguities": [],
+      "confidence": 0.96
+    },
+    "expected_types": ["task"],
+    "expected_due": "2026-08-07T23:59:59+03:00",
+    "expected_reminder": null
+  },
+  {
+    "id": "multiple_actions",
+    "input": "Аня готовит план к пятнице, а я жду бюджет от Бориса",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Подготовить план",
+          "description": null,
+          "person_candidates": ["Аня"],
+          "topic_candidates": [],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": ["date"],
+          "ambiguities": ["пятница требует привязки к контексту"],
+          "dependencies": [],
+          "confidence": 0.72
+        },
+        {
+          "type": "waiting",
+          "title": "Получить бюджет от Бориса",
+          "description": null,
+          "person_candidates": ["Борис"],
+          "topic_candidates": [],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.9
+        }
+      ],
+      "ambiguities": [],
+      "confidence": 0.81
+    },
+    "expected_types": ["task", "waiting"],
+    "expected_due": null,
+    "expected_reminder": null
+  },
+  {
+    "id": "invalid_date",
+    "input": "Поставь задачу на 31 февраля",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Выполнить задачу",
+          "description": null,
+          "person_candidates": [],
+          "topic_candidates": [],
+          "due_date_candidate": {
+            "original_phrase": "31 февраля",
+            "normalized_value": null,
+            "status": "invalid",
+            "explanation": "такой даты не существует",
+            "time_was_explicit": false
+          },
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": ["valid_date"],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.7
+        }
+      ],
+      "ambiguities": [],
+      "confidence": 0.7
+    },
+    "expected_types": ["task"],
+    "expected_due": null,
+    "expected_reminder": null
+  },
+  {
+    "id": "short_voice_note",
+    "input": "Позвонить Лене",
+    "recorded_output": {
+      "overall_intent": "follow_up",
+      "draft_items": [
+        {
+          "type": "follow_up",
+          "title": "Позвонить Лене",
+          "description": null,
+          "person_candidates": ["Лена"],
+          "topic_candidates": [],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": ["date"],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.78
+        }
+      ],
+      "ambiguities": [],
+      "confidence": 0.78
+    },
+    "expected_types": ["follow_up"],
+    "expected_due": null,
+    "expected_reminder": null
+  },
+  {
+    "id": "payment_without_amount",
+    "input": "Скинуть деньги за Польшу",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Скинуть деньги за Польшу",
+          "description": null,
+          "person_candidates": [],
+          "topic_candidates": [],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": ["сумма"],
+          "ambiguities": ["Сумма не указана"],
+          "dependencies": [],
+          "confidence": 0.92
+        }
+      ],
+      "ambiguities": ["Сумма не указана"],
+      "confidence": 0.92
+    },
+    "expected_types": ["task"],
+    "expected_due": null,
+    "expected_reminder": null,
+    "expected_readiness": ["ready"]
+  },
+  {
+    "kind": "exact_date",
+    "id": "year_rollover",
+    "input": "5 января",
+    "current_datetime": "2026-12-30T12:00:00+02:00",
+    "timezone": "Europe/Riga",
+    "expected": "2027-01-05T23:59:59+02:00"
+  },
+  {
+    "kind": "exact_date",
+    "id": "dst_spring_date",
+    "input": "29 марта 2027",
+    "current_datetime": "2027-03-01T12:00:00+02:00",
+    "timezone": "Europe/Riga",
+    "expected": "2027-03-29T23:59:59+03:00"
+  },
+  {
+    "kind": "exact_date",
+    "id": "impossible_exact_date",
+    "input": "31 февраля 2027",
+    "current_datetime": "2027-01-10T12:00:00+02:00",
+    "timezone": "Europe/Riga",
+    "expected": null
+  },
+  {
+    "kind": "invalid_provider_output",
+    "id": "provider_empty_items",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [],
+      "ambiguities": [],
+      "confidence": 0.8
+    }
+  },
+  {
+    "kind": "meeting_context",
+    "id": "meeting_people_and_topics",
+    "context": {
+      "current_datetime": "2026-07-22T12:00:00+03:00",
+      "timezone": "Europe/Riga",
+      "active_workspace": "anonymized-evaluation",
+      "channel": "telegram",
+      "source": "voice",
+      "meeting": {
+        "meeting_id": "00000000-0000-0000-0000-000000000008",
+        "meeting_type": "team",
+        "participants": ["Алексей", "Алексей П."],
+        "topics": ["Запуск", "Поддержка"],
+        "primary_topic": "Запуск"
+      }
+    },
+    "expected_fragments": ["Алексей, Алексей П.", "Запуск, Поддержка"]
+  }
+]

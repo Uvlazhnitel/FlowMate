@@ -65,12 +65,6 @@ def question_for_item(
                 QuestionOption("Вопрос", "это вопрос"),
             ),
         )
-    if item.missing_fields:
-        missing = item.missing_fields[0]
-        return ClarificationQuestion(
-            text=f"Уточните «{missing}» для «{item.title}».",
-            context=item_context(position, "missing_field"),
-        )
     if len(item.person_candidates) in {2, 3, 4} and item.ambiguities:
         return ClarificationQuestion(
             text=f"С кем связано: {item.title}?",  # noqa: RUF001
@@ -80,10 +74,14 @@ def question_for_item(
                 for candidate in item.person_candidates
             ),
         )
-    if item.ambiguities:
+    if len(item.topic_candidates) in {2, 3, 4} and item.ambiguities:
         return ClarificationQuestion(
-            text=f"Уточните для «{item.title}»: {item.ambiguities[0]}",
-            context=item_context(position, "ambiguity"),
+            text=f"С какой темой связано: {item.title}?",  # noqa: RUF001
+            context=item_context(position, "topic"),
+            options=tuple(
+                QuestionOption(candidate, f"выбрана тема: {candidate}")
+                for candidate in item.topic_candidates
+            ),
         )
     if assessment.readiness is not DraftReadiness.READY:
         return ClarificationQuestion(
@@ -104,9 +102,4 @@ def next_clarification_question(
         question = question_for_item(assessment, position)
         if question is not None:
             return question
-    if analysis.ambiguities:
-        return ClarificationQuestion(
-            text=f"Уточните: {analysis.ambiguities[0]}",
-            context={"field": "result_ambiguity"},
-        )
     return None

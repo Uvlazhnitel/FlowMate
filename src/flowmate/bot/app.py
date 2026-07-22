@@ -84,10 +84,14 @@ async def run_bot(settings: Settings | None = None) -> None:
         except SpeechConfigurationError:
             logger.warning("speech_provider_disabled category=incomplete_configuration")
 
+        temporary_files = TemporaryAudioFileService(
+            max_age_seconds=app_settings.temporary_audio_max_age_seconds
+        )
+        temporary_files.cleanup_orphans()
         transcription_service = (
             TranscriptionService(
                 speech_provider,
-                TemporaryAudioFileService(),
+                temporary_files,
                 timeout_seconds=app_settings.speech_timeout_seconds,
                 max_file_size_bytes=app_settings.speech_max_file_size_bytes,
             )

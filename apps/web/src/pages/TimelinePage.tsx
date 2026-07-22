@@ -26,6 +26,16 @@ const eventLabels: Record<string, string> = {
   waiting_received: "Ожидание получено",
   planner_status_changed: "Изменён Planner status",
   archived: "Архивировано",
+  meeting_created: "Встреча создана",
+  meeting_started: "Встреча началась",
+  meeting_ended: "Встреча завершена",
+  meeting_cancelled: "Встреча отменена",
+  meeting_review_generated: "Итог встречи подготовлен",
+  meeting_review_failed: "Итог встречи требует повторной обработки",
+  meeting_clarification_answered: "Уточнение встречи сохранено",
+  meeting_converted: "Итог встречи подтверждён",
+  meeting_completed: "Встреча обработана",
+  meeting_agenda_updated: "Agenda встречи обновлена",
 };
 
 const workItemTypes = [
@@ -177,7 +187,10 @@ export function TimelinePage({
                     <CalendarDays size={14} />{" "}
                     {formatDateTime(event.occurred_at, dateTimePreferences)}
                   </span>
-                  {event.topic && <span>#{event.topic.name}</span>}
+                  {event.entity_kind === "meeting" && <span>Встреча</span>}
+                  {event.topics.length > 0 && (
+                    <span>#{event.topics.map((topic) => topic.name).join(", #")}</span>
+                  )}
                   {event.people.length > 0 && (
                     <span>
                       <UserRound size={14} />{" "}

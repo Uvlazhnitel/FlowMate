@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -9,14 +10,19 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from flowmate.ai.schemas import (
     DraftItemType,
+    DraftParseResult,
+    DraftSource,
     MeetingAgendaSuggestion,
     MeetingReviewParseResult,
     MeetingReviewProposal,
+    TemporalStatus,
 )
+from flowmate.ai.service import DraftParsingService
 from flowmate.api.app import create_app
 from flowmate.db.drafts import create_parsing_draft, get_draft_for_user
 from flowmate.db.models import (
     DraftItemPerson,
+    DraftItemRecord,
     MeetingAgendaEntry,
     MeetingEvent,
     MeetingNote,
@@ -40,6 +46,7 @@ from flowmate.meetings.capture import (
 )
 from flowmate.meetings.enums import MeetingStatus, MeetingType
 from flowmate.meetings.review import (
+    answer_review_item,
     confirm_review,
     generate_review,
     review_revision,
@@ -64,7 +71,7 @@ from flowmate.meetings.service import (
 from flowmate.meetings.setup import claim_setup_update, open_setup
 from flowmate.task_engine.conversion import DraftConversionService
 from flowmate.task_engine.enums import WorkItemPriority, WorkItemStatus, WorkItemType
-from flowmate.task_engine.remaining import DraftItemEdit
+from flowmate.task_engine.remaining import DraftItemEdit, list_timeline
 from flowmate.task_engine.service import (
     create_person,
     create_topic,
@@ -101,6 +108,12 @@ class MeetingReviewStub:
         assert '"captures"' in user_text
         self.calls += 1
         return self.result
+
+    async def parse(self, *, system_prompt: str, user_text: str) -> DraftParseResult:
+        raise AssertionError("exact date clarification must not call the AI provider")
+
+    async def close(self) -> None:
+        return None
 
 
 @pytest.fixture(autouse=True)
@@ -144,6 +157,23 @@ async def test_meeting_domain_transitions_context_and_isolation(
         )
         with pytest.raises(ActiveMeetingExistsError):
             await start_meeting(session, user.id, second.id, now=now)
+        timeline = await list_timeline(
+            session,
+            user.id,
+            start=None,
+            end=None,
+            topic_id=topic.id,
+            person_id=person.id,
+            event_type="meeting_started",
+            work_item_type=None,
+            limit=10,
+            offset=0,
+        )
+        assert len(timeline.items) == 1
+        assert timeline.items[0]["entity_kind"] == "meeting"
+        assert timeline.items[0]["entity_id"] == meeting.id
+        assert timeline.items[0]["event_type"] == "meeting_started"
+        assert "payload" not in timeline.items[0]
         note, created = await create_note_idempotently(
             session,
             user_id=user.id,
@@ -427,9 +457,18 @@ async def test_meeting_review_conversion_agenda_planner_and_isolation(
                         title="Prepare launch plan",
                         topic_candidates=["Launch"],
                         person_candidates=["Anna"],
-                        due_date_candidate=make_temporal_candidate(),
+                        reminder_candidate=make_temporal_candidate(
+                            original_phrase="in August",
+                            normalized_value=None,
+                            status=TemporalStatus.AMBIGUOUS,
+                            explanation="Exact date is missing",
+                            time_was_explicit=False,
+                        ),
+                        missing_fields=["Уточнить срок"],
+                        ambiguities=["Срок неясен"],
                     ),
                     suggested_next_action="Anna prepares the plan",
+                    clarification_question="Какой срок?",
                 ),
                 MeetingReviewProposal(
                     source_capture_id=capture.id,
@@ -476,6 +515,40 @@ async def test_meeting_review_conversion_agenda_planner_and_isolation(
             )
         ).id == review.id
         assert provider.calls == 1
+        task_review_item = await session.scalar(
+            select(MeetingReviewItem).where(
+                MeetingReviewItem.review_id == review.id,
+                MeetingReviewItem.category == "task",
+            )
+        )
+        assert task_review_item is not None
+        assert task_review_item.status == "clarification_required"
+        parsing_service = DraftParsingService(
+            provider,
+            timezone=ZoneInfo("UTC"),
+            active_workspace="personal",
+            timeout_seconds=5,
+            high_confidence_threshold=0.8,
+            clarification_confidence_threshold=0.5,
+        )
+        await answer_review_item(
+            session,
+            user.id,
+            meeting.id,
+            task_review_item.id,
+            "7 августа",
+            parsing_service=parsing_service,
+            answer_source=DraftSource.TEXT,
+        )
+        source_item = await session.get(
+            DraftItemRecord, task_review_item.source_draft_item_id
+        )
+        assert source_item is not None
+        assert source_item.normalized_date == datetime(
+            2026, 8, 7, 23, 59, 59, tzinfo=UTC
+        )
+        assert source_item.readiness == "ready"
+        assert task_review_item.status == "ready"
         await edit_capture_item(
             session,
             user.id,

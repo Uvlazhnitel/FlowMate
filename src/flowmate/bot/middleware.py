@@ -3,10 +3,15 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import CallbackQuery, Message, TelegramObject
+from aiogram.types import CallbackQuery, Message, TelegramObject, Update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from flowmate.db.session import session_scope
+from flowmate.stabilization.idempotency import (
+    claim_telegram_update,
+    complete_telegram_update,
+    fail_telegram_update,
+)
 
 Handler = Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]]
 
@@ -60,3 +65,50 @@ class DatabaseSessionMiddleware(BaseMiddleware):
             data["db_session"] = session
             data["db_engine"] = self.engine
             return await handler(event, data)
+
+
+class PersistentUpdateMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Handler,
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        update = data.get("event_update")
+        session = data.get("db_session")
+        if not isinstance(update, Update) or not isinstance(session, AsyncSession):
+            return await handler(event, data)
+        telegram_user_id = (
+            event.from_user.id
+            if isinstance(event, Message | CallbackQuery)
+            and event.from_user is not None
+            else None
+        )
+        event_kind = "callback" if isinstance(event, CallbackQuery) else "message"
+        claim = await claim_telegram_update(
+            session,
+            update_id=update.update_id,
+            telegram_user_id=telegram_user_id,
+            event_kind=event_kind,
+        )
+        await session.commit()
+        if not claim.accepted:
+            if isinstance(event, CallbackQuery):
+                await event.answer(
+                    "Действие уже обработано."
+                    if claim.duplicate
+                    else "Действие обрабатывается."
+                )
+            return None
+        try:
+            result = await handler(event, data)
+        except BaseException:
+            await session.rollback()
+            await fail_telegram_update(
+                session, update.update_id, error_code="handler_exception"
+            )
+            await session.commit()
+            raise
+        await complete_telegram_update(session, update.update_id)
+        await session.commit()
+        return result

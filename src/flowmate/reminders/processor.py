@@ -29,6 +29,8 @@ from flowmate.reminders.service import (
     claim_due_reminders,
     get_claimed_reminder_delivery,
     mark_reminder_delivery_failure,
+    mark_reminder_delivery_started,
+    mark_reminder_delivery_unknown,
     mark_reminder_sent,
 )
 
@@ -130,6 +132,12 @@ class ReminderProcessor:
                 timezone=ZoneInfo(delivery.timezone),
                 now=self._clock(),
             )
+            async with session_scope(self._session_factory) as session:
+                started = await mark_reminder_delivery_started(
+                    session, claim, now=self._clock()
+                )
+            if not started:
+                return
             async with asyncio.timeout(self._delivery_timeout_seconds):
                 await self._notification_service.send(notification)
         except PermanentNotificationError as error:
@@ -141,6 +149,14 @@ class ReminderProcessor:
             )
             return
         except TemporaryNotificationError as error:
+            if error.retry_after_seconds is None:
+                await self._mark_unknown(claim, error.code)
+                logger.warning(
+                    "reminder_delivery_unknown reminder_id=%s category=%s",
+                    claim.id,
+                    error.code,
+                )
+                return
             retry_delay = self._retry_delay
             if error.retry_after_seconds is not None:
                 retry_delay = max(
@@ -160,14 +176,9 @@ class ReminderProcessor:
             )
             return
         except TimeoutError:
-            await self._mark_failure(
-                claim,
-                "delivery_timeout",
-                permanent=False,
-            )
+            await self._mark_unknown(claim, "delivery_timeout")
             logger.warning(
-                "reminder_delivery_failed reminder_id=%s "
-                "category=delivery_timeout permanent=false",
+                "reminder_delivery_unknown reminder_id=%s category=delivery_timeout",
                 claim.id,
             )
             return
@@ -193,4 +204,13 @@ class ReminderProcessor:
                 permanent=permanent,
                 max_attempts=self._max_attempts,
                 retry_delay=retry_delay or self._retry_delay,
+            )
+
+    async def _mark_unknown(self, claim: ClaimedReminder, error_code: str) -> None:
+        async with session_scope(self._session_factory) as session:
+            await mark_reminder_delivery_unknown(
+                session,
+                claim,
+                now=self._clock(),
+                error_code=error_code,
             )

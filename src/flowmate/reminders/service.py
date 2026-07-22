@@ -232,6 +232,21 @@ async def claim_due_reminders(
         .where(
             Reminder.status == ReminderStatus.PROCESSING.value,
             Reminder.processing_started_at <= stale_before,
+            Reminder.delivery_started_at.is_not(None),
+        )
+        .values(
+            status=ReminderStatus.DELIVERY_UNKNOWN.value,
+            delivery_unknown_at=now,
+            last_error="delivery_outcome_unknown",
+            processing_started_at=None,
+            processing_token=None,
+        )
+    )
+    await session.execute(
+        update(Reminder)
+        .where(
+            Reminder.status == ReminderStatus.PROCESSING.value,
+            Reminder.processing_started_at <= stale_before,
             Reminder.delivery_attempts >= max_attempts,
         )
         .values(
@@ -253,6 +268,7 @@ async def claim_due_reminders(
     stale_processing = and_(
         Reminder.status == ReminderStatus.PROCESSING.value,
         Reminder.processing_started_at <= stale_before,
+        Reminder.delivery_started_at.is_(None),
     )
     effective_at = case(
         (Reminder.status == ReminderStatus.SNOOZED.value, Reminder.snoozed_until),
@@ -493,6 +509,8 @@ async def mark_reminder_sent(
     reminder.next_attempt_at = None
     reminder.processing_started_at = None
     reminder.processing_token = None
+    reminder.delivery_started_at = None
+    reminder.delivery_unknown_at = None
     await session.flush()
     return True
 
@@ -526,6 +544,7 @@ async def mark_reminder_delivery_failure(
     reminder.last_error = error_code
     reminder.processing_started_at = None
     reminder.processing_token = None
+    reminder.delivery_started_at = None
     if permanent or reminder.delivery_attempts >= max_attempts:
         reminder.status = ReminderStatus.FAILED.value
         reminder.next_attempt_at = None
@@ -534,3 +553,86 @@ async def mark_reminder_delivery_failure(
         reminder.next_attempt_at = now + retry_delay
     await session.flush()
     return True
+
+
+async def mark_reminder_delivery_started(
+    session: AsyncSession,
+    claim: ClaimedReminder,
+    *,
+    now: datetime,
+) -> bool:
+    validate_aware_datetime(now, "now")
+    reminder = await session.scalar(
+        select(Reminder)
+        .where(
+            Reminder.id == claim.id,
+            Reminder.status == ReminderStatus.PROCESSING.value,
+            Reminder.processing_token == claim.processing_token,
+            Reminder.delivery_started_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if reminder is None:
+        return False
+    reminder.delivery_started_at = now
+    await session.flush()
+    return True
+
+
+async def mark_reminder_delivery_unknown(
+    session: AsyncSession,
+    claim: ClaimedReminder,
+    *,
+    now: datetime,
+    error_code: str,
+) -> bool:
+    validate_aware_datetime(now, "now")
+    if ERROR_CODE_PATTERN.fullmatch(error_code) is None:
+        raise ValueError("error_code must be a safe category")
+    reminder = await session.scalar(
+        select(Reminder)
+        .where(
+            Reminder.id == claim.id,
+            Reminder.status == ReminderStatus.PROCESSING.value,
+            Reminder.processing_token == claim.processing_token,
+        )
+        .with_for_update()
+    )
+    if reminder is None:
+        return False
+    reminder.status = ReminderStatus.DELIVERY_UNKNOWN.value
+    reminder.delivery_unknown_at = now
+    reminder.last_error = error_code
+    reminder.processing_started_at = None
+    reminder.processing_token = None
+    reminder.next_attempt_at = None
+    await session.flush()
+    return True
+
+
+async def retry_unknown_reminder(
+    session: AsyncSession,
+    reminder_id: UUID,
+    *,
+    now: datetime,
+) -> Reminder | None:
+    validate_aware_datetime(now, "now")
+    reminder = await session.scalar(
+        select(Reminder)
+        .where(
+            Reminder.id == reminder_id,
+            Reminder.status == ReminderStatus.DELIVERY_UNKNOWN.value,
+        )
+        .with_for_update()
+    )
+    if reminder is None:
+        return None
+    reminder.status = ReminderStatus.PENDING.value
+    reminder.scheduled_at = now
+    reminder.next_attempt_at = now
+    reminder.delivery_attempts = 0
+    reminder.delivery_started_at = None
+    reminder.delivery_unknown_at = None
+    reminder.last_error = None
+    await session.flush()
+    return reminder

@@ -1,9 +1,18 @@
 from flowmate.ai.schemas import DraftInputContext, DraftItemType, DraftParseResult
 
 
-def build_system_prompt(context: DraftInputContext) -> str:
+def build_reference_context(context: DraftInputContext) -> str:
     offset = context.current_datetime.strftime("%z")
     formatted_offset = f"{offset[:3]}:{offset[3:]}" if offset else "+00:00"
+    return f"""Reference local datetime: {context.current_datetime.isoformat()}
+Reference timezone: {context.timezone}
+Reference UTC offset: {formatted_offset}
+Active workspace: {context.active_workspace}
+Input channel: {context.channel}
+Input source: {context.source.value}"""
+
+
+def build_system_prompt(context: DraftInputContext) -> str:
     item_types = ", ".join(item_type.value for item_type in DraftItemType)
     meeting_context = ""
     if context.meeting is not None:
@@ -52,14 +61,13 @@ must be marked ambiguous rather than guessed.
 Give every item its own confidence from 0 to 1. Never create database records,
 execute tools, or claim that an action was performed. Do not invent people,
 topics, dates, reminders, or missing context. Put unresolved information in
-missing_fields and ambiguities. Return only data matching the requested schema.
+missing_fields and ambiguities only when it prevents reliable interpretation.
+Amounts, descriptions, topics, people, dates, and times are optional unless the
+user explicitly made them essential to the requested action. In particular, do
+not request an amount for a meaningful payment task that did not state one.
+Return only data matching the requested schema.
 
-Reference local datetime: {context.current_datetime.isoformat()}
-Reference timezone: {context.timezone}
-Reference UTC offset: {formatted_offset}
-Active workspace: {context.active_workspace}
-Input channel: {context.channel}
-Input source: {context.source.value}
+{build_reference_context(context)}
 {meeting_context}
 """
 
@@ -80,6 +88,8 @@ changes supported by the answer. Preserve unaffected items and their order.
 Return the complete updated draft, not a patch. Reassess confidence,
 missing_fields, ambiguities, temporal candidates, and dependencies. The answer
 may correct a person, date, item type, or request that incomplete data be kept.
+Do not introduce missing optional amounts, descriptions, topics, people, dates,
+or times merely because the user did not provide them.
 Do not create records or execute tools.
 
 Current draft: {draft_json}
@@ -89,14 +99,14 @@ Answer source: {answer_source}
 
 
 def build_text_routing_prompt(context: DraftInputContext) -> str:
-    return f"""{build_system_prompt(context)}
+    return f"""Classify Telegram text as exactly one mode. Return only the strict
+routing schema and never execute tools or database actions.
 
-Classify the Telegram text as exactly one mode:
 - new_draft: information or actions that should become a new note and draft;
 - management: a request to modify one existing work item;
 - search: a question or request to find and inspect existing records.
 
-Management examples include completing, cancelling, reopening, rescheduling,
+Management includes completing, cancelling, reopening, rescheduling,
 marking a waiting result as received, adding a note, changing a topic, or
 adding/replacing a person. Extract a concise record_query and target type when
 stated. Set contextual_reference=true only for references such as "эта задача"
@@ -104,7 +114,7 @@ or "this item". Never execute the requested action. If a date is ambiguous,
 preserve it as an ambiguous temporal candidate. Return only the strict routing
 schema.
 
-Search examples include questions about remaining work for a person, waiting
+Search includes questions about remaining work for a person, waiting
 records, follow-ups for a topic, overdue records, open questions, or everything
 for a topic. Convert them into deterministic filters. Use canonical work item
 types and statuses. Resolve relative date boundaries against the reference
@@ -114,4 +124,12 @@ results and do not claim to have searched the database. Leave statuses empty to
 search only open records. Set include_all_statuses=true only when the user
 explicitly asks for everything; otherwise include closed states only when they
 are named. Exactly one payload must match the selected mode.
+
+For new_draft, split independent items and preserve exact temporal phrases. A
+date without time uses 23:59:59 in the user's timezone and is a day-level due
+date, not a reason to request a reminder time. Never invent people, topics,
+dates, database results, or completed actions. Optional amounts, descriptions,
+topics, people, dates, and times must not be reported as blocking missing data.
+
+{build_reference_context(context)}
 """

@@ -353,13 +353,14 @@ async def test_planner_timeline_and_settings_workflow(
                 set(event)
                 == {
                     "id",
+                    "entity_kind",
+                    "entity_id",
                     "event_type",
                     "occurred_at",
-                    "work_item_id",
                     "title",
                     "work_item_type",
                     "status",
-                    "topic",
+                    "topics",
                     "people",
                 }
                 for event in timeline.json()["items"]

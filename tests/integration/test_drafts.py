@@ -230,6 +230,43 @@ async def test_draft_claim_is_idempotent_and_user_isolated(
 
 
 @pytest.mark.integration
+async def test_stale_draft_update_claim_can_be_reclaimed(
+    database_session: AsyncSession,
+) -> None:
+    owner, note = await make_source_note(
+        database_session,
+        telegram_user_id=510_103,
+        update_id=610_104,
+    )
+    now = datetime(2026, 7, 22, 12, tzinfo=UTC)
+    draft = await create_parsing_draft(
+        database_session,
+        user_id=owner.id,
+        source_note_id=note.id,
+        ttl_hours=24,
+        now=now,
+    )
+    draft.status = "needs_clarification"
+    draft.processing_update_id = 710_101
+    draft.processing_started_at = now - timedelta(minutes=6)
+    await database_session.flush()
+
+    claim, claimed = await claim_update(
+        database_session,
+        draft_id=draft.id,
+        user_id=owner.id,
+        update_id=710_102,
+        ttl_hours=24,
+        now=now,
+    )
+
+    assert claim == "claimed"
+    assert claimed is not None
+    assert claimed.processing_update_id == 710_102
+    assert claimed.processing_started_at == now
+
+
+@pytest.mark.integration
 async def test_expiration_and_confirmation_are_status_only(
     database_session: AsyncSession,
 ) -> None:

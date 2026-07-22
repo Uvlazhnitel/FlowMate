@@ -20,8 +20,11 @@ from flowmate.db.models import (
     DraftItemPerson,
     DraftSession,
     Meeting,
+    MeetingEvent,
+    MeetingParticipant,
     MeetingReview,
     MeetingReviewItem,
+    MeetingTopic,
     Note,
     NoteLink,
     Person,
@@ -56,6 +59,16 @@ TimelineEventType = Literal[
     "waiting_received",
     "planner_status_changed",
     "archived",
+    "meeting_created",
+    "meeting_started",
+    "meeting_ended",
+    "meeting_cancelled",
+    "meeting_review_generated",
+    "meeting_review_failed",
+    "meeting_clarification_answered",
+    "meeting_converted",
+    "meeting_completed",
+    "meeting_agenda_updated",
 ]
 
 
@@ -236,7 +249,7 @@ async def list_inbox(
                 continue
             source = note_by_id.get(draft.source_note_id)
             payload = await serialize_draft(
-                session, draft, source_content=source.content if source else ""
+                session, draft, source_content=(source.content or "") if source else ""
             )
             payload["status"] = effective_status
             payload["reasons"] = sorted(reasons)
@@ -285,7 +298,7 @@ async def list_inbox(
                             "id": note.id,
                             "kind": "note",
                             "reasons": ["unstructured_note"],
-                            "excerpt": note.content[:500],
+                            "excerpt": (note.content or "")[:500],
                             "source": note.source,
                             "created_at": note.created_at,
                         },
@@ -560,6 +573,10 @@ async def list_timeline(
     validate_pagination(limit, offset)
     if limit > 100:
         raise ValueError("limit must not exceed 100")
+    include_work_items = event_type is None or not event_type.startswith("meeting_")
+    include_meetings = work_item_type is None and (
+        event_type is None or event_type.startswith("meeting_")
+    )
     statement = (
         select(WorkItemEvent, WorkItem, Topic)
         .join(WorkItem, WorkItem.id == WorkItemEvent.work_item_id)
@@ -596,18 +613,80 @@ async def list_timeline(
         statement = statement.where(WorkItemEvent.event_type == "reminder_snoozed")
     elif event_type is not None:
         statement = statement.where(WorkItemEvent.event_type == event_type)
-    rows = list(
-        (
-            await session.execute(
-                statement.order_by(
-                    WorkItemEvent.created_at.desc(), WorkItemEvent.id.desc()
+    fetch_limit = offset + limit + 1
+    work_rows = (
+        list(
+            (
+                await session.execute(
+                    statement.order_by(
+                        WorkItemEvent.created_at.desc(), WorkItemEvent.id.desc()
+                    ).limit(fetch_limit)
                 )
-                .offset(offset)
-                .limit(limit + 1)
-            )
-        ).all()
+            ).all()
+        )
+        if include_work_items
+        else []
     )
-    item_ids = {item.id for _, item, _ in rows[:limit]}
+
+    meeting_statement = (
+        select(MeetingEvent, Meeting)
+        .join(Meeting, Meeting.id == MeetingEvent.meeting_id)
+        .where(MeetingEvent.user_id == user_id, Meeting.user_id == user_id)
+    )
+    if start is not None:
+        meeting_statement = meeting_statement.where(MeetingEvent.created_at >= start)
+    if end is not None:
+        meeting_statement = meeting_statement.where(MeetingEvent.created_at < end)
+    if topic_id is not None:
+        meeting_statement = meeting_statement.where(
+            exists().where(
+                MeetingTopic.meeting_id == Meeting.id,
+                MeetingTopic.topic_id == topic_id,
+                MeetingTopic.user_id == user_id,
+            )
+        )
+    if person_id is not None:
+        meeting_statement = meeting_statement.where(
+            exists().where(
+                MeetingParticipant.meeting_id == Meeting.id,
+                MeetingParticipant.person_id == person_id,
+                MeetingParticipant.user_id == user_id,
+            )
+        )
+    if event_type is not None and event_type.startswith("meeting_"):
+        meeting_statement = meeting_statement.where(
+            MeetingEvent.event_type == event_type.removeprefix("meeting_")
+        )
+    meeting_rows = (
+        list(
+            (
+                await session.execute(
+                    meeting_statement.order_by(
+                        MeetingEvent.created_at.desc(), MeetingEvent.id.desc()
+                    ).limit(fetch_limit)
+                )
+            ).all()
+        )
+        if include_meetings
+        else []
+    )
+
+    combined = [
+        (event.created_at, event.id, "work_item", event, item, topic)
+        for event, item, topic in work_rows
+    ] + [
+        (event.created_at, event.id, "meeting", event, meeting, None)
+        for event, meeting in meeting_rows
+    ]
+    combined.sort(key=lambda value: (value[0], value[1]), reverse=True)
+    rows = combined[offset : offset + limit + 1]
+    visible = rows[:limit]
+    item_ids = {
+        entity.id for _, _, kind, _, entity, _ in visible if kind == "work_item"
+    }
+    meeting_ids = {
+        entity.id for _, _, kind, _, entity, _ in visible if kind == "meeting"
+    }
     people: dict[UUID, list[dict[str, object]]] = {item_id: [] for item_id in item_ids}
     if item_ids:
         person_rows = await session.execute(
@@ -621,23 +700,76 @@ async def list_timeline(
         )
         for item_id, linked_id, name in person_rows:
             people[item_id].append({"id": linked_id, "display_name": name})
+    meeting_people: dict[UUID, list[dict[str, object]]] = {
+        meeting_id: [] for meeting_id in meeting_ids
+    }
+    meeting_topics: dict[UUID, list[dict[str, object]]] = {
+        meeting_id: [] for meeting_id in meeting_ids
+    }
+    if meeting_ids:
+        participant_rows = await session.execute(
+            select(MeetingParticipant.meeting_id, Person.id, Person.display_name)
+            .join(Person, Person.id == MeetingParticipant.person_id)
+            .where(
+                MeetingParticipant.user_id == user_id,
+                MeetingParticipant.meeting_id.in_(meeting_ids),
+                Person.user_id == user_id,
+            )
+            .order_by(Person.display_name, Person.id)
+        )
+        for meeting_id, linked_id, name in participant_rows:
+            meeting_people[meeting_id].append({"id": linked_id, "display_name": name})
+        topic_rows = await session.execute(
+            select(MeetingTopic.meeting_id, Topic.id, Topic.name)
+            .join(Topic, Topic.id == MeetingTopic.topic_id)
+            .where(
+                MeetingTopic.user_id == user_id,
+                MeetingTopic.meeting_id.in_(meeting_ids),
+                Topic.user_id == user_id,
+            )
+            .order_by(Topic.name, Topic.id)
+        )
+        for meeting_id, linked_id, name in topic_rows:
+            meeting_topics[meeting_id].append({"id": linked_id, "name": name})
+
+    serialized: list[dict[str, object]] = []
+    for _, _, kind, event, entity, topic in visible:
+        if kind == "work_item":
+            serialized.append(
+                {
+                    "id": event.id,
+                    "entity_kind": "work_item",
+                    "entity_id": entity.id,
+                    "event_type": _public_event_type(event, entity),
+                    "occurred_at": event.created_at,
+                    "title": entity.title,
+                    "work_item_type": entity.type,
+                    "status": entity.status,
+                    "topics": (
+                        [{"id": topic.id, "name": topic.name}]
+                        if topic is not None
+                        else []
+                    ),
+                    "people": people[entity.id],
+                }
+            )
+        else:
+            serialized.append(
+                {
+                    "id": event.id,
+                    "entity_kind": "meeting",
+                    "entity_id": entity.id,
+                    "event_type": f"meeting_{event.event_type}",
+                    "occurred_at": event.created_at,
+                    "title": entity.title,
+                    "work_item_type": None,
+                    "status": event.new_status,
+                    "topics": meeting_topics[entity.id],
+                    "people": meeting_people[entity.id],
+                }
+            )
     return PageResult(
-        items=[
-            {
-                "id": event.id,
-                "event_type": _public_event_type(event, item),
-                "occurred_at": event.created_at,
-                "work_item_id": item.id,
-                "title": item.title,
-                "work_item_type": item.type,
-                "status": item.status,
-                "topic": (
-                    {"id": topic.id, "name": topic.name} if topic is not None else None
-                ),
-                "people": people[item.id],
-            }
-            for event, item, topic in rows[:limit]
-        ],
+        items=serialized,
         limit=limit,
         offset=offset,
         has_more=len(rows) > limit,

@@ -32,6 +32,7 @@ from flowmate.reminders.preferences import (
     NotificationDefaults,
     get_effective_notification_preferences,
 )
+from flowmate.stabilization.audit import record_audit_event
 
 router = APIRouter(prefix="/api/v1/auth", tags=["pwa-auth"])
 
@@ -140,6 +141,13 @@ async def request_login_code(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Login code could not be delivered",
         ) from error
+    await record_audit_event(
+        session,
+        actor_kind="pwa",
+        action="auth.login_code_requested",
+        outcome="success",
+        entity_kind="authentication",
+    )
     return LoginCodeResponse(expires_in_seconds=settings.pwa_login_code_ttl_seconds)
 
 
@@ -180,6 +188,15 @@ async def create_pwa_session(
         created.user.id,
         NotificationDefaults.from_settings(settings),
     )
+    await record_audit_event(
+        session,
+        actor_kind="pwa",
+        action="auth.session_created",
+        outcome="success",
+        user_id=created.user.id,
+        entity_kind="pwa_session",
+        entity_id=created.session.id,
+    )
     return PwaUserResponse(
         id=created.user.id,
         display_name=created.user.display_name,
@@ -213,9 +230,18 @@ async def logout_pwa_session(
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
-    _: Annotated[PwaIdentity, Depends(require_csrf)],
+    identity: Annotated[PwaIdentity, Depends(require_csrf)],
 ) -> None:
     token = request.cookies.get(SESSION_COOKIE_NAME)
     assert token is not None
     await revoke_session(session, token)
+    await record_audit_event(
+        session,
+        actor_kind="pwa",
+        action="auth.session_revoked",
+        outcome="success",
+        user_id=identity.user.id,
+        entity_kind="pwa_session",
+        entity_id=identity.session.id,
+    )
     clear_auth_cookies(response, settings)

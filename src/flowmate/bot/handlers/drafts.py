@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.errors import AIError
+from flowmate.ai.prompt_versions import REFINEMENT_PROMPT_VERSION
 from flowmate.ai.schemas import (
     DependencyCandidate,
     DependencyRelation,
@@ -40,6 +41,7 @@ from flowmate.db.drafts import (
 from flowmate.db.models import DraftSession
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.drafts.questions import ClarificationQuestion, next_clarification_question
+from flowmate.stabilization.jobs import enqueue_ai_job
 from flowmate.task_engine.conversion import (
     DraftConversionError,
     DraftConversionService,
@@ -368,6 +370,17 @@ async def refine_draft(
         return
     current_question = claimed_draft.current_question or DRAFT_CHANGE_QUESTION
     current = load_analysis(claimed_draft)
+    await enqueue_ai_job(
+        db_session,
+        user_id=user_id,
+        job_kind="draft_refine",
+        entity_id=claimed_draft.id,
+        operation_key=f"telegram:{update_id}",
+        prompt_name="refinement",
+        prompt_version=REFINEMENT_PROMPT_VERSION,
+        input_text=answer,
+        input_source=answer_source.value,
+    )
     await db_session.commit()
 
     try:

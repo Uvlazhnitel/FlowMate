@@ -3,7 +3,7 @@ revision ?= -1
 TEST_DATABASE_URL ?= postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test
 export TEST_DATABASE_URL
 
-.PHONY: help setup sync format format-check lint typecheck test test-unit test-integration check web-setup web-dev web-format web-format-check web-lint web-typecheck web-test web-build migrate migration downgrade migration-current migration-history api bot scheduler up up-all up-worker down logs ps test-db-up test-db-down clean
+.PHONY: help setup sync format format-check lint typecheck test test-unit test-integration check web-setup web-dev web-format web-format-check web-lint web-typecheck web-test web-build migrate migration downgrade migration-current migration-history api bot scheduler maintenance-once ai-eval backup restore-check reminder-retry up up-all up-worker down logs ps test-db-up test-db-down clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "FlowMate commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -94,6 +94,23 @@ bot: ## Run the Telegram bot locally
 
 scheduler: ## Run the reminder scheduler locally
 	uv run python -m flowmate.scheduler
+
+maintenance-once: ## Run database cleanup once
+	uv run python -m flowmate.maintenance cleanup
+
+ai-eval: ## Run offline anonymized AI regression evaluation
+	uv run python -m flowmate.ai.eval
+
+backup: ## Create and rotate a compressed PostgreSQL backup
+	sh scripts/backup_postgres.sh
+
+restore-check: ## Restore backup into an isolated *_restore_test database
+	@test -n "$(backup)" || (echo 'Usage: make restore-check backup=backups/file.dump' >&2; exit 2)
+	sh scripts/restore_postgres.sh "$(backup)"
+
+reminder-retry: ## Manually retry a delivery_unknown reminder
+	@test -n "$(id)" || (echo 'Usage: make reminder-retry id=UUID' >&2; exit 2)
+	uv run python -m flowmate.maintenance retry-reminder "$(id)"
 
 up: ## Build and start PostgreSQL, API, and PWA
 	docker compose up -d --build postgres api web

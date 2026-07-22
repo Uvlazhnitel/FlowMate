@@ -3,14 +3,16 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from flowmate.ai.prompt_versions import DRAFT_PROMPT_VERSION
 from flowmate.ai.schemas import DraftAnalysisResult
 from flowmate.db.drafts import replace_draft_analysis, transition_draft
 from flowmate.db.models import (
     DraftItemPerson,
+    DraftItemRecord,
     DraftSession,
     Meeting,
     MeetingNote,
@@ -22,6 +24,7 @@ from flowmate.db.models import (
 )
 from flowmate.drafts.questions import next_clarification_question
 from flowmate.meetings.enums import MeetingStatus
+from flowmate.stabilization.jobs import enqueue_ai_job
 from flowmate.task_engine.remaining import (
     DraftItemEdit,
     edit_draft_item,
@@ -155,6 +158,7 @@ async def create_capture(
             session, meeting, timezone=timezone, captured_at=captured_at
         ),
         status="parsing",
+        prompt_version=DRAFT_PROMPT_VERSION,
         expires_at=captured_at + timedelta(hours=draft_ttl_hours),
         updated_at=captured_at,
     )
@@ -167,6 +171,17 @@ async def create_capture(
             MeetingNote(user_id=user_id, meeting_id=meeting.id, note_id=note.id)
         )
     await session.flush()
+    await enqueue_ai_job(
+        session,
+        user_id=user_id,
+        job_kind="meeting_capture_parse",
+        entity_id=capture.id,
+        operation_key="initial",
+        prompt_name="draft",
+        prompt_version=DRAFT_PROMPT_VERSION,
+        input_source=note.source,
+        now=captured_at,
+    )
     return capture, True
 
 
@@ -179,31 +194,41 @@ def _unique_name_map(values: list[dict[str, Any]]) -> dict[str, UUID]:
     return {name: ids[0] for name, ids in grouped.items() if len(ids) == 1}
 
 
-async def _resolve_exact_context(session: AsyncSession, capture: DraftSession) -> None:
+async def resolve_capture_item_context(
+    session: AsyncSession, capture: DraftSession, item: DraftItemRecord
+) -> None:
     people = _unique_name_map(list(capture.capture_context.get("participants", [])))
     topics = _unique_name_map(list(capture.capture_context.get("topics", [])))
-    for item in capture.items:
-        selected_people = {
-            people[name.strip().casefold()]
-            for name in item.people_candidates
-            if name.strip().casefold() in people
-        }
-        for person_id in selected_people:
-            session.add(
-                DraftItemPerson(
-                    user_id=capture.user_id,
-                    draft_item_id=item.id,
-                    person_id=person_id,
-                )
+    await session.execute(
+        delete(DraftItemPerson).where(DraftItemPerson.draft_item_id == item.id)
+    )
+    selected_people = {
+        people[name.strip().casefold()]
+        for name in item.people_candidates
+        if name.strip().casefold() in people
+    }
+    for person_id in selected_people:
+        session.add(
+            DraftItemPerson(
+                user_id=capture.user_id,
+                draft_item_id=item.id,
+                person_id=person_id,
             )
-        selected_topics = {
-            topics[name.strip().casefold()]
-            for name in item.topic_candidates
-            if name.strip().casefold() in topics
-        }
-        if len(selected_topics) == 1:
-            item.selected_topic_id = next(iter(selected_topics))
+        )
+    selected_topics = {
+        topics[name.strip().casefold()]
+        for name in item.topic_candidates
+        if name.strip().casefold() in topics
+    }
+    item.selected_topic_id = (
+        next(iter(selected_topics)) if len(selected_topics) == 1 else None
+    )
     await session.flush()
+
+
+async def _resolve_exact_context(session: AsyncSession, capture: DraftSession) -> None:
+    for item in capture.items:
+        await resolve_capture_item_context(session, capture, item)
 
 
 async def save_capture_analysis(
@@ -271,7 +296,9 @@ async def serialize_capture(
         )
     )
     payload = await serialize_draft(
-        session, capture, source_content=note.content if note is not None else ""
+        session,
+        capture,
+        source_content=(note.content or "") if note is not None else "",
     )
     return {
         **payload,
@@ -282,7 +309,10 @@ async def serialize_capture(
         "confidence": capture.overall_confidence,
         "suggested_question": capture.current_question,
         "source_type": note.source if note is not None else "text",
-        "source_text": note.content if note is not None else "",
+        "source_text": note.content if note is not None else None,
+        "source_redacted": bool(
+            note is not None and note.transcript_redacted_at is not None
+        ),
     }
 
 

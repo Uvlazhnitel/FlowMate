@@ -3,6 +3,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from flowmate.ai.errors import AIError, AIInvalidResponseError, AITimeoutError
+from flowmate.ai.prompt_versions import SNOOZE_PROMPT_VERSION
 from flowmate.ai.provider import SnoozeTimeProvider
 from flowmate.ai.schemas import SnoozeTimeParseResult
 from flowmate.reminders.timezone import resolve_local_datetime
@@ -40,6 +41,7 @@ class SnoozeParsingService:
         if self._provider is None:
             raise SnoozeParsingError("natural-language snooze parsing is unavailable")
         prompt = (
+            f"Prompt version: {SNOOZE_PROMPT_VERSION}. "
             "Resolve exactly one future reminder time. Return the configured strict "
             "schema only. Do not infer a value when the phrase is materially "
             "ambiguous. "

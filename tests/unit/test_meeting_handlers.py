@@ -11,14 +11,19 @@ from aiogram.types import Chat, InlineKeyboardMarkup, Message, Update, User, Voi
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.schemas import DraftSource
+from flowmate.ai.service import DraftParsingService
 from flowmate.bot.handlers.meeting_capture import (
     capture_keyboard,
     meeting_text_capture,
     meeting_voice_capture,
 )
-from flowmate.bot.handlers.meeting_review import format_review_summary, review_keyboard
+from flowmate.bot.handlers.meeting_review import (
+    format_review_summary,
+    meeting_review_reply,
+    review_keyboard,
+)
 from flowmate.bot.handlers.meetings import setup_keyboard, type_keyboard
-from flowmate.db.models import DraftSession, Meeting, Note
+from flowmate.db.models import DraftSession, Meeting, MeetingReview, Note
 from flowmate.meetings.enums import MeetingType
 from flowmate.reminders.preferences import NotificationDefaults
 from flowmate.speech.service import TranscriptionService
@@ -322,3 +327,72 @@ async def test_duplicate_voice_capture_skips_download() -> None:
     answer_call = answer.await_args
     assert answer_call is not None
     assert answer_call.args[0] == "✅ Записал. Пункт №4."
+
+
+@pytest.mark.asyncio
+async def test_voice_meeting_review_clarification_uses_structured_service() -> None:
+    meeting, _ = make_capture()
+    message = make_message(
+        text=None,
+        voice=Voice(
+            file_id="review-voice",
+            file_unique_id="review-voice-unique",
+            duration=2,
+            file_size=5,
+        ),
+    )
+    provider = CapturingSpeechProvider()
+    transcription = TranscriptionService(
+        provider,
+        TemporaryAudioFileService(),
+        timeout_seconds=1,
+        max_file_size_bytes=100,
+    )
+    review = MeetingReview(
+        id=uuid4(),
+        user_id=meeting.user_id,
+        meeting_id=meeting.id,
+        status="review_required",
+        current_item_id=uuid4(),
+        current_question="Какой срок?",
+    )
+    bot = MagicMock(spec=Bot)
+
+    async def download(_: object, destination: Path, timeout: int) -> None:
+        destination.write_bytes(b"audio")
+
+    bot.download = AsyncMock(side_effect=download)
+    session = MagicMock(spec=AsyncSession)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    parsing_service = cast(DraftParsingService, MagicMock())
+    answer_review = AsyncMock(return_value=review)
+    with (
+        patch.object(Message, "answer", new_callable=AsyncMock),
+        patch(
+            "flowmate.bot.handlers.meeting_review.answer_review_item",
+            new=answer_review,
+        ),
+        patch(
+            "flowmate.bot.handlers.meeting_review._next_question",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        await meeting_review_reply(
+            message,
+            cast(Bot, bot),
+            Update(update_id=7005, message=message),
+            cast(AsyncSession, session),
+            review,
+            transcription,
+            parsing_service,
+        )
+
+    assert provider.audio_path is not None
+    assert not provider.audio_path.exists()
+    call = answer_review.await_args
+    assert call is not None
+    assert call.args[4] == "Голосовой пункт"
+    assert call.kwargs["answer_source"] is DraftSource.VOICE
+    assert call.kwargs["parsing_service"] is parsing_service
+    session.commit.assert_awaited_once()

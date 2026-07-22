@@ -8,6 +8,7 @@ from flowmate.ai.schemas import (
 )
 
 
+@runtime_checkable
 class AIProvider(Protocol):
     async def parse(self, *, system_prompt: str, user_text: str) -> DraftParseResult:
         """Parse user text into a validated draft without side effects."""

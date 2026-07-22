@@ -15,6 +15,11 @@ from flowmate.db.models.note import Note
 from flowmate.db.models.preferences import UserNotificationPreferences
 from flowmate.db.models.pwa_auth import PwaLoginCode, PwaSession
 from flowmate.db.models.reminder import Reminder
+from flowmate.db.models.stabilization import (
+    AIProcessingJob,
+    AuditEvent,
+    TelegramOperationReceipt,
+)
 from flowmate.db.models.task_engine import (
     NoteLink,
     Person,
@@ -28,6 +33,8 @@ from flowmate.db.models.task_engine import (
 from flowmate.db.models.user import User
 
 __all__ = [
+    "AIProcessingJob",
+    "AuditEvent",
     "DraftItemPerson",
     "DraftItemRecord",
     "DraftSession",
@@ -47,6 +54,7 @@ __all__ = [
     "PwaLoginCode",
     "PwaSession",
     "Reminder",
+    "TelegramOperationReceipt",
     "Topic",
     "User",
     "UserNotificationPreferences",

@@ -4,10 +4,11 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 
 from flowmate.api.app import create_app
+from flowmate.auth.dependencies import require_pwa_origin
 from flowmate.core.config import Settings
 from tests.conftest import started_app
 
@@ -221,6 +222,41 @@ async def test_cors_rejects_unconfigured_origin() -> None:
 
     assert response.status_code == 400
     assert "Access-Control-Allow-Origin" not in response.headers
+
+
+@pytest.mark.parametrize(
+    ("origin", "expected_status"),
+    [
+        ("https://homeserver.tail25398e.ts.net:8443", 204),
+        ("http://127.0.0.1:18080", 403),
+        ("https://attacker.example.com", 403),
+    ],
+)
+async def test_write_origin_uses_exact_tailscale_public_origin(
+    origin: str,
+    expected_status: int,
+) -> None:
+    app = create_test_app(
+        pwa_public_origin="https://homeserver.tail25398e.ts.net:8443",
+        cors_origins="",
+    )
+
+    @app.post(
+        "/origin-check",
+        status_code=204,
+        dependencies=[Depends(require_pwa_origin)],
+    )
+    async def origin_check() -> None:
+        return None
+
+    response = await request(
+        "/origin-check",
+        app=app,
+        method="POST",
+        headers={"Origin": origin},
+    )
+
+    assert response.status_code == expected_status
 
 
 def test_openapi_follows_debug_setting() -> None:

@@ -7,8 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from flowmate.ai.provider import MeetingReviewProvider
-from flowmate.ai.schemas import DraftItemType
+from flowmate.ai.errors import AIError
+from flowmate.ai.provider import AIProvider, MeetingReviewProvider
+from flowmate.ai.schemas import DraftItemType, DraftSource
+from flowmate.ai.service import DraftParsingService
 from flowmate.api.dependencies import get_session
 from flowmate.auth.dependencies import PwaIdentity, require_csrf, require_pwa_session
 from flowmate.core.config import Settings, get_settings
@@ -158,6 +160,24 @@ async def _timezone(
 def _review_provider(request: Request) -> MeetingReviewProvider | None:
     value: object | None = getattr(request.app.state, "meeting_review_provider", None)
     return value if isinstance(value, MeetingReviewProvider) else None
+
+
+def _draft_parsing_service(
+    request: Request, settings: Settings, timezone: ZoneInfo
+) -> DraftParsingService | None:
+    value: object | None = getattr(request.app.state, "meeting_review_provider", None)
+    if not isinstance(value, AIProvider):
+        return None
+    return DraftParsingService(
+        value,
+        timezone=timezone,
+        active_workspace=settings.app_active_workspace,
+        timeout_seconds=settings.ai_timeout_seconds,
+        high_confidence_threshold=settings.ai_high_confidence_threshold,
+        clarification_confidence_threshold=(
+            settings.ai_clarification_confidence_threshold
+        ),
+    )
 
 
 @router.get("/active")
@@ -507,9 +527,16 @@ async def meeting_review_clarification(
     meeting_id: UUID,
     item_id: UUID,
     payload: ReviewClarificationRequest,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_csrf)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
+    service = _draft_parsing_service(
+        request, settings, await _timezone(session, identity, settings)
+    )
+    if service is None:
+        raise HTTPException(status_code=503, detail="AI parsing is not configured")
     try:
         review = await answer_review_item(
             session,
@@ -517,8 +544,14 @@ async def meeting_review_clarification(
             meeting_id,
             item_id,
             payload.answer,
+            parsing_service=service,
+            answer_source=DraftSource.TEXT,
             expected_revision=payload.expected_revision,
         )
+    except AIError as error:
+        raise HTTPException(
+            status_code=502, detail="Clarification could not be parsed"
+        ) from error
     except MeetingReviewError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return {"review": await serialize_review(session, review)}

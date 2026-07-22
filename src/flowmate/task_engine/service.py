@@ -20,6 +20,7 @@ from flowmate.db.models import (
     WorkItemRelation,
 )
 from flowmate.reminders.sync import ReminderPolicy, sync_work_item_reminders
+from flowmate.stabilization.audit import record_audit_event
 from flowmate.task_engine.enums import (
     NoteTargetType,
     WorkItemEventType,
@@ -645,6 +646,19 @@ async def append_work_item_event(
     )
     session.add(event)
     await session.flush()
+    await record_audit_event(
+        session,
+        actor_kind="telegram" if telegram_update_id is not None else "system",
+        action=f"work_item.{parsed_type.value}",
+        outcome="success",
+        user_id=user_id,
+        entity_kind="work_item",
+        entity_id=work_item_id,
+        correlation_id=str(telegram_update_id)
+        if telegram_update_id is not None
+        else None,
+        safe_metadata={"status": parsed_type.value},
+    )
     return event
 
 

@@ -39,6 +39,6 @@ def test_note_model_shape() -> None:
         "notes_telegram_update_id_key",
         "ck_notes_source_update_consistency",
         "ck_notes_source",
-        "ck_notes_content_not_blank",
+        "ck_notes_content_or_redacted",
     } <= {constraint.name for constraint in table.constraints}
     assert "ix_notes_user_id_created_at" in {index.name for index in table.indexes}

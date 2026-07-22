@@ -123,6 +123,7 @@ def apply_exact_temporal_answer(
                 **item.model_dump(),
                 "due_date_candidate": candidate,
                 "reminder_candidate": None,
+                "missing_fields": remove_temporal_ambiguities(item.missing_fields),
                 "ambiguities": remove_temporal_ambiguities(item.ambiguities),
             }
         )
@@ -195,7 +196,9 @@ class DraftParsingService:
                 clarification_threshold=self._clarification_confidence_threshold,
             )
 
-        context = self._build_context(current.context.source)
+        context = current.context.model_copy(
+            update={"current_datetime": self._clock(ZoneInfo(current.context.timezone))}
+        )
         system_prompt = build_refinement_prompt(
             context,
             analysis_to_parse_result(current),

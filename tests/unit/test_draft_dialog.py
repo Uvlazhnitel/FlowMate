@@ -13,7 +13,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.errors import AIProviderError
-from flowmate.ai.schemas import DraftSource, TemporalCandidate, TemporalStatus
+from flowmate.ai.schemas import (
+    DraftItemType,
+    DraftSource,
+    TemporalCandidate,
+    TemporalStatus,
+)
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.filters import ActiveDraftFilter
 from flowmate.bot.handlers.clarification import active_draft_message
@@ -131,7 +136,7 @@ def make_callback(draft_id: UUID, action: str) -> tuple[CallbackQuery, Update]:
     return callback, Update(update_id=500, callback_query=callback)
 
 
-def test_question_planner_asks_one_critical_question() -> None:
+def test_question_planner_ignores_optional_missing_fields() -> None:
     analysis = make_analysis_result(
         make_parse_result(
             [
@@ -143,9 +148,41 @@ def test_question_planner_asks_one_critical_question() -> None:
 
     question = next_clarification_question(analysis)
 
+    assert question is None
+
+
+def test_question_planner_asks_for_unknown_type() -> None:
+    analysis = make_analysis_result(
+        make_parse_result([make_draft_item(type=DraftItemType.UNKNOWN)])
+    )
+
+    question = next_clarification_question(analysis)
+
     assert question is not None
-    assert "due date" in question.text
-    assert question.context == {"item_number": 1, "field": "missing_field"}
+    assert question.context == {"item_number": 1, "field": "type"}
+
+
+def test_question_planner_uses_confirmation_for_medium_confidence() -> None:
+    analysis = make_analysis_result(
+        make_parse_result(
+            [
+                make_draft_item(
+                    title="Скинуть деньги за Польшу",
+                    missing_fields=["сумма"],
+                    confidence=0.7,
+                )
+            ]
+        )
+    )
+
+    question = next_clarification_question(analysis)
+
+    assert question is not None
+    assert question.context == {"item_number": 1, "field": "confidence"}
+    assert [option.label for option in question.options] == [
+        "Сохранить как есть",
+        "Изменить",
+    ]
 
 
 @pytest.mark.asyncio
@@ -237,6 +274,7 @@ async def test_exact_date_refinement_bypasses_ai_and_replaces_month_end() -> Non
                 make_draft_item(
                     due_date_candidate=month_end,
                     reminder_candidate=reminder,
+                    missing_fields=["Уточнить срок"],
                     ambiguities=["Неясно, когда напомнить"],
                 )
             ],
@@ -262,6 +300,7 @@ async def test_exact_date_refinement_bypasses_ai_and_replaces_month_end() -> Non
         2026, 8, 7, 23, 59, 59, tzinfo=ZoneInfo("Europe/Riga")
     )
     assert result.items[0].item.reminder_candidate is None
+    assert result.items[0].item.missing_fields == []
     assert result.ambiguities == []
 
 
@@ -361,6 +400,10 @@ async def test_refinement_database_failure_releases_claimed_update() -> None:
             "flowmate.bot.handlers.drafts.clear_processing_update",
             new=clear_processing,
         ),
+        patch(
+            "flowmate.bot.handlers.drafts.enqueue_ai_job",
+            new=AsyncMock(),
+        ),
         patch.object(Message, "answer", new_callable=AsyncMock) as answer,
     ):
         await refine_draft(
@@ -411,6 +454,10 @@ async def test_voice_answer_refines_existing_draft() -> None:
         ),
         patch(
             "flowmate.bot.handlers.drafts.show_draft",
+            new=AsyncMock(),
+        ),
+        patch(
+            "flowmate.bot.handlers.drafts.enqueue_ai_job",
             new=AsyncMock(),
         ),
         patch.object(Message, "answer", new_callable=AsyncMock),

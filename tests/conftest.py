@@ -1,4 +1,5 @@
 import asyncio
+import socket
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from os import environ, getenv
@@ -24,6 +25,8 @@ TEST_DATABASE_URL = getenv(
 )
 
 APPLICATION_TABLES = (
+    "ai_processing_jobs",
+    "audit_events",
     "users",
     "notes",
     "draft_sessions",
@@ -51,6 +54,7 @@ APPLICATION_TABLES = (
     "meeting_review_items",
     "meeting_work_items",
     "meeting_agenda_entries",
+    "telegram_operation_receipts",
 )
 
 UNIT_ENVIRONMENT_VARIABLES = (
@@ -89,6 +93,14 @@ UNIT_ENVIRONMENT_VARIABLES = (
     "DRAFT_TTL_HOURS",
     "WORK_ITEM_ACTION_TTL_MINUTES",
     "SCHEDULER_INTERVAL_SECONDS",
+    "MAINTENANCE_INTERVAL_SECONDS",
+    "AI_RECOVERY_INTERVAL_SECONDS",
+    "AI_RECOVERY_LEASE_SECONDS",
+    "AI_RECOVERY_MAX_ATTEMPTS",
+    "TERMINAL_TRANSCRIPT_RETENTION_DAYS",
+    "UNRESOLVED_TRANSCRIPT_RETENTION_DAYS",
+    "EXPIRED_RECORD_RETENTION_DAYS",
+    "TEMPORARY_AUDIO_MAX_AGE_SECONDS",
     "REMINDER_BATCH_SIZE",
     "REMINDER_MAX_ATTEMPTS",
     "REMINDER_RETRY_DELAY_SECONDS",
@@ -124,6 +136,22 @@ def isolate_test_environment(
         yield
     finally:
         get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def block_external_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_connect = socket.socket.connect
+
+    def guarded_connect(
+        instance: socket.socket, address: tuple[str, int] | str
+    ) -> object:
+        if isinstance(address, tuple):
+            host = address[0]
+            if host not in {"localhost", "127.0.0.1", "::1"}:
+                raise RuntimeError(f"external network is disabled in tests: {host}")
+        return original_connect(instance, address)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
 
 
 def validate_test_database_url(database_url: str) -> None:

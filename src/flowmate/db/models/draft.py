@@ -100,6 +100,9 @@ class DraftSession(Base):
         JSONB, nullable=False, default=dict, server_default="{}"
     )
     overall_confidence: Mapped[float | None] = mapped_column(Float)
+    prompt_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="draft-v2", server_default="legacy-v1"
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     analysis_payload: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
@@ -118,6 +121,9 @@ class DraftSession(Base):
         JSONB, nullable=False, default=list, server_default="[]"
     )
     processing_update_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

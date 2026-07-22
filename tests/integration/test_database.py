@@ -250,7 +250,7 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
     assert {constraint["name"] for constraint in check_constraints} >= {
         "ck_users_telegram_user_id_positive"
     }
-    assert revision == "0018_meeting_review_completion"
+    assert revision == "0020_stage8_stabilization"
 
 
 def test_pwa_auth_migration_from_0012(migrated_database: None) -> None:
@@ -382,7 +382,8 @@ async def test_notes_schema_matches_metadata(database_engine: AsyncEngine) -> No
         )
 
     assert columns["user_id"]["nullable"] is False
-    assert columns["content"]["nullable"] is False
+    assert columns["content"]["nullable"] is True
+    assert columns["transcript_redacted_at"]["nullable"] is True
     assert columns["source"]["nullable"] is False
     assert columns["telegram_update_id"]["nullable"] is True
     assert columns["source_draft_item_id"]["nullable"] is True
@@ -392,7 +393,7 @@ async def test_notes_schema_matches_metadata(database_engine: AsyncEngine) -> No
         "uq_notes_source_draft_item_id",
     }
     assert {constraint["name"] for constraint in check_constraints} >= {
-        "ck_notes_content_not_blank",
+        "ck_notes_content_or_redacted",
         "ck_notes_source",
         "ck_notes_source_update_consistency",
     }
@@ -577,6 +578,11 @@ async def test_meeting_capture_schema_constraints(database_engine: AsyncEngine) 
                 "draft_sessions"
             )
         )
+        meeting_event_indexes = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_indexes(
+                "meeting_events"
+            )
+        )
 
     assert columns["meeting_id"]["nullable"] is True
     assert columns["capture_sequence"]["nullable"] is True
@@ -593,4 +599,7 @@ async def test_meeting_capture_schema_constraints(database_engine: AsyncEngine) 
     assert {index["name"] for index in indexes} >= {
         "ix_draft_sessions_meeting_capture",
         "uq_draft_sessions_user_open",
+    }
+    assert {index["name"] for index in meeting_event_indexes} >= {
+        "ix_meeting_events_user_created_id"
     }

@@ -300,15 +300,7 @@ describe("Meetings", () => {
       ],
       agenda: [],
       results: [],
-      timeline: [
-        {
-          id: "event-1",
-          event_type: "review_generated",
-          previous_status: "processing",
-          new_status: "review_required",
-          created_at: "2026-07-22T10:00:00Z",
-        },
-      ],
+      timeline: [],
     };
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path = pathOf(input);
@@ -329,6 +321,8 @@ describe("Meetings", () => {
         return Promise.resolve(
           jsonResponse({ items: [capture], limit: 20, offset: 0, has_more: false }),
         );
+      if (path.endsWith("/review/agenda") && init?.method === "POST")
+        return Promise.resolve(jsonResponse({ detail: "failed" }, 500));
       if (init?.method === "POST") return Promise.resolve(jsonResponse({ review }));
       return Promise.resolve(
         jsonResponse({ items: [], limit: 20, offset: 0, has_more: false }),
@@ -343,6 +337,12 @@ describe("Meetings", () => {
     expect(screen.getByRole("heading", { name: "Решения" })).toBeVisible();
     expect(screen.getByText("Вариант A подтверждён?")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Timeline" })).toBeVisible();
+    expect(screen.getByText("История встречи пока пуста")).toBeVisible();
+    await user.type(screen.getByPlaceholderText("Новый пункт повестки"), "Риски запуска");
+    await user.click(screen.getByRole("button", { name: "Добавить" }));
+    expect(
+      await screen.findByText("Изменение не сохранено. Обновите данные и повторите."),
+    ).toBeVisible();
     await user.click(screen.getByRole("button", { name: "В Planner Queue" }));
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(

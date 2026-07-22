@@ -26,6 +26,7 @@ from flowmate.db.models import (
     WorkItem,
 )
 from flowmate.reminders.sync import ReminderPolicy
+from flowmate.stabilization.audit import record_audit_event
 from flowmate.task_engine.enums import (
     NoteTargetType,
     PlannerStatus,
@@ -252,6 +253,16 @@ class DraftConversionService:
         )
         if selected_item_ids is None:
             await transition_draft(session, draft, "confirmed")
+        await record_audit_event(
+            session,
+            actor_kind="system",
+            action="draft.converted",
+            outcome="success",
+            user_id=user_id,
+            entity_kind="draft",
+            entity_id=draft.id,
+            safe_metadata={"count": len(records)},
+        )
         return DraftConversionResult(
             draft_id=draft.id,
             work_items=tuple(work_items),

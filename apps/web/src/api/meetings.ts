@@ -31,7 +31,8 @@ export interface MeetingCaptureData {
   review_status: "pending" | "edited" | "removed";
   revision: number;
   source_type: "text" | "voice";
-  source_text: string;
+  source_text: string | null;
+  source_redacted: boolean;
   context: {
     timezone: string;
     captured_at: string;

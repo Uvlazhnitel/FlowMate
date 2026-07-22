@@ -124,6 +124,12 @@ class Reminder(Base):
     processing_token: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), nullable=True
     )
+    delivery_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    delivery_unknown_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

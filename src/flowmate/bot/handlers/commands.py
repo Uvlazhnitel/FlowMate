@@ -75,7 +75,11 @@ from flowmate.bot.handlers.work_items import (
     work_item_callback,
     work_item_selection_callback,
 )
-from flowmate.bot.middleware import AllowedUserMiddleware, DatabaseSessionMiddleware
+from flowmate.bot.middleware import (
+    AllowedUserMiddleware,
+    DatabaseSessionMiddleware,
+    PersistentUpdateMiddleware,
+)
 from flowmate.db.drafts import get_active_draft_for_user, transition_draft
 from flowmate.db.health import database_is_ready
 from flowmate.db.users import get_or_create_telegram_user, get_user_by_telegram_id
@@ -190,6 +194,8 @@ def create_router(
     router.callback_query.outer_middleware(
         DatabaseSessionMiddleware(session_factory, engine)
     )
+    router.message.outer_middleware(PersistentUpdateMiddleware())
+    router.callback_query.outer_middleware(PersistentUpdateMiddleware())
     router.message.register(start_command, Command("start"))
     router.message.register(menu_command, Command("menu"))
     router.message.register(help_command, Command("help"))

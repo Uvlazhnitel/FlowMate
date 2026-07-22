@@ -154,7 +154,10 @@ def format_work_item_details(details: WorkItemDetails, timezone: ZoneInfo) -> st
     if details.notes:
         lines.extend(
             ["", "Заметки:"]
-            + [f"• {card_preview(note.content, 260)}" for note in details.notes]
+            + [
+                f"• {card_preview(note.content or '[транскрипция очищена]', 260)}"
+                for note in details.notes
+            ]
         )
     if details.events:
         lines.extend(

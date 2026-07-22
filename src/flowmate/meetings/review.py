@@ -10,14 +10,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from flowmate.ai.analysis import classify_readiness
+from flowmate.ai.prompt_versions import MEETING_REVIEW_PROMPT_VERSION
 from flowmate.ai.provider import MeetingReviewProvider
 from flowmate.ai.schemas import (
     DraftItem,
     DraftItemAssessment,
     DraftItemType,
     DraftReadiness,
+    DraftSource,
     MeetingReviewParseResult,
 )
+from flowmate.ai.service import DraftParsingService
+from flowmate.db.drafts import load_analysis
 from flowmate.db.models import (
     DraftItemRecord,
     DraftSession,
@@ -33,7 +37,10 @@ from flowmate.db.models import (
     WorkItem,
     WorkItemPerson,
 )
+from flowmate.meetings.capture import resolve_capture_item_context
 from flowmate.meetings.enums import MeetingEventType, MeetingStatus
+from flowmate.stabilization.audit import record_audit_event
+from flowmate.stabilization.jobs import complete_entity_ai_jobs, enqueue_ai_job
 from flowmate.task_engine.conversion import DraftConversionService
 from flowmate.task_engine.enums import (
     PlannerStatus,
@@ -85,7 +92,9 @@ async def get_review(
         MeetingReview.user_id == user_id, MeetingReview.meeting_id == meeting_id
     )
     if for_update:
-        statement = statement.with_for_update()
+        statement = statement.with_for_update().execution_options(
+            populate_existing=True
+        )
     return (await session.scalars(statement)).first()
 
 
@@ -201,10 +210,22 @@ async def ensure_review(
     review = await get_review(session, user_id, meeting_id, for_update=True)
     if review is None:
         review = MeetingReview(
-            user_id=user_id, meeting_id=meeting_id, status="processing"
+            user_id=user_id,
+            meeting_id=meeting_id,
+            status="processing",
+            prompt_version=MEETING_REVIEW_PROMPT_VERSION,
         )
         session.add(review)
         await session.flush()
+        await enqueue_ai_job(
+            session,
+            user_id=user_id,
+            job_kind="meeting_review_generate",
+            entity_id=meeting_id,
+            operation_key="initial",
+            prompt_name="meeting_review",
+            prompt_version=MEETING_REVIEW_PROMPT_VERSION,
+        )
     return review
 
 
@@ -288,12 +309,16 @@ async def _review_snapshot(
 
 
 def build_review_prompt() -> str:
-    return """Create a concise structured meeting review from the supplied captures.
+    return f"""Prompt version: {MEETING_REVIEW_PROMPT_VERSION}.
+Create a concise structured meeting review from the supplied captures.
 Use only supplied capture_id, draft_item_id and agenda work_item_id values. Every
 proposal must reference its source capture. Preserve unresolved uncertainty and
 never claim to create, update, complete or send records. Split independent next
-actions. Decisions may reference related proposal numbers. Return only the
-requested schema; do not include technical logs or raw provider metadata."""
+actions. Amounts, descriptions, topics, people, dates, and times are optional
+unless the capture explicitly makes them essential. Do not turn absent optional
+details into clarification questions. Decisions may reference related proposal
+numbers. Return only the requested schema; do not include technical logs or raw
+provider metadata."""
 
 
 def _record_from_item(
@@ -455,6 +480,12 @@ async def _store_review_result(
         )
     )
     await session.flush()
+    await complete_entity_ai_jobs(
+        session,
+        entity_id=meeting.id,
+        job_kinds=("meeting_review_generate",),
+        now=now,
+    )
     return review
 
 
@@ -748,10 +779,12 @@ async def answer_review_item(
     item_id: UUID,
     answer: str,
     *,
+    parsing_service: DraftParsingService,
+    answer_source: DraftSource,
     expected_revision: int | None = None,
     telegram_update_id: int | None = None,
 ) -> MeetingReview:
-    review = await get_review(session, user_id, meeting_id, for_update=True)
+    review = await get_review(session, user_id, meeting_id)
     if review is None or review.status != "review_required":
         raise MeetingReviewError("review is not editable")
     if expected_revision is not None and review_revision(review) != expected_revision:
@@ -773,11 +806,121 @@ async def answer_review_item(
         raise MeetingReviewError("review item is not awaiting clarification")
     if not normalized:
         raise MeetingReviewError("clarification answer is empty")
-    assessment = DraftItemAssessment.model_validate(item.raw_payload)
-    if assessment.item.type is DraftItemType.UNKNOWN:
-        raise MeetingReviewError("item type must be selected in the meeting review")
+    if item.source_capture_id is None or item.source_draft_item_id is None:
+        raise MeetingReviewError("review item has no editable capture source")
+    source_capture_id = item.source_capture_id if item is not None else None
+    capture = await session.scalar(
+        select(DraftSession)
+        .options(selectinload(DraftSession.items))
+        .where(
+            DraftSession.id == item.source_capture_id,
+            DraftSession.user_id == user_id,
+            DraftSession.meeting_id == meeting_id,
+        )
+    )
+    if capture is None:
+        raise MeetingReviewError("source capture not found")
+    record = next(
+        (value for value in capture.items if value.id == item.source_draft_item_id),
+        None,
+    )
+    if record is None:
+        raise MeetingReviewError("source draft item not found")
+    try:
+        original_analysis = load_analysis(capture)
+    except ValueError as error:
+        raise MeetingReviewError("source capture is invalid") from error
+    if record.position > len(original_analysis.items):
+        raise MeetingReviewError("source draft item position is invalid")
+    original_payload = record.raw_payload
+    review_assessment = DraftItemAssessment.model_validate_json(
+        json.dumps(item.raw_payload)
+    )
+    current_items = list(original_analysis.items)
+    current_items[record.position - 1] = review_assessment
+    current_analysis = original_analysis.model_copy(update={"items": current_items})
+    question = item.clarification_question or f"Уточните пункт: {item.title}"
+    refined = await parsing_service.refine(
+        current_analysis,
+        normalized,
+        answer_source=answer_source,
+        question=question,
+    )
+    if len(refined.items) != len(current_analysis.items):
+        raise MeetingReviewError("clarification response changed the capture structure")
+    assessment = refined.items[record.position - 1]
+
+    review = await get_review(session, user_id, meeting_id, for_update=True)
+    if review is None or review.status != "review_required":
+        raise MeetingReviewError("review is not editable")
+    if expected_revision is not None and review_revision(review) != expected_revision:
+        raise MeetingReviewError("review is stale")
+    item = await session.scalar(
+        select(MeetingReviewItem)
+        .where(
+            MeetingReviewItem.id == item_id,
+            MeetingReviewItem.user_id == user_id,
+            MeetingReviewItem.review_id == review.id,
+            MeetingReviewItem.status == "clarification_required",
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    capture = await session.scalar(
+        select(DraftSession)
+        .options(selectinload(DraftSession.items))
+        .where(
+            DraftSession.id == source_capture_id,
+            DraftSession.user_id == user_id,
+            DraftSession.meeting_id == meeting_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if item is None or capture is None:
+        raise MeetingReviewError("review item changed during clarification")
+    record = next(
+        (value for value in capture.items if value.id == item.source_draft_item_id),
+        None,
+    )
+    if record is None or record.raw_payload != original_payload:
+        raise MeetingReviewError("source draft item changed during clarification")
+    _record_from_item(record, assessment.item, assessment)
+    await resolve_capture_item_context(session, capture, record)
+    payload_items = list((capture.analysis_payload or {}).get("items", []))
+    if record.position > len(payload_items):
+        raise MeetingReviewError("source capture payload is invalid")
+    payload_items[record.position - 1] = assessment.model_dump(mode="json")
+    capture.analysis_payload = {
+        **(capture.analysis_payload or {}),
+        "items": payload_items,
+    }
+    capture.status = (
+        "ready"
+        if all(value.readiness == DraftReadiness.READY.value for value in capture.items)
+        else "needs_clarification"
+    )
+    capture.capture_review_status = "edited"
+    capture.updated_at = review_now()
+    item.title = record.title
+    item.raw_payload = record.raw_payload
+    item.category = {
+        DraftItemType.TASK: "task",
+        DraftItemType.FOLLOW_UP: "follow_up",
+        DraftItemType.WAITING: "waiting",
+        DraftItemType.QUESTION: "unresolved_question",
+        DraftItemType.NOTE: "note",
+        DraftItemType.DECISION: "decision",
+        DraftItemType.AGENDA_ITEM: "agenda_item",
+        DraftItemType.UNKNOWN: "note",
+    }[assessment.item.type]
     item.clarification_answer = normalized
-    item.status = "ready"
+    item.status = (
+        "ready"
+        if assessment.readiness is DraftReadiness.READY
+        and assessment.item.type is not DraftItemType.UNKNOWN
+        else "clarification_required"
+    )
     review.current_item_id = None
     review.current_question = None
     review.current_question_context = None
@@ -1116,6 +1259,17 @@ async def confirm_review(
             )
         )
     await session.flush()
+    await record_audit_event(
+        session,
+        actor_kind="pwa" if client_action_id is not None else "telegram",
+        action="meeting.converted",
+        outcome="success",
+        user_id=user_id,
+        entity_kind="meeting",
+        entity_id=meeting_id,
+        correlation_id=str(client_action_id or telegram_update_id),
+        safe_metadata={"count": len(converted_ids) + len(note_ids)},
+    )
     return ReviewConfirmation(
         tuple(converted_ids),
         tuple(note_ids),
