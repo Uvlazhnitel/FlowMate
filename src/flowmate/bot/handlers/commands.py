@@ -184,8 +184,12 @@ def create_router(
     router = Router(name="flowmate")
     router.message.outer_middleware(AllowedUserMiddleware(allowed_user_ids))
     router.callback_query.outer_middleware(AllowedUserMiddleware(allowed_user_ids))
-    router.message.middleware(DatabaseSessionMiddleware(session_factory, engine))
-    router.callback_query.middleware(DatabaseSessionMiddleware(session_factory, engine))
+    # Filters query persistent dialog state, so the session must exist before
+    # aiogram evaluates them rather than only around the selected handler.
+    router.message.outer_middleware(DatabaseSessionMiddleware(session_factory, engine))
+    router.callback_query.outer_middleware(
+        DatabaseSessionMiddleware(session_factory, engine)
+    )
     router.message.register(start_command, Command("start"))
     router.message.register(menu_command, Command("menu"))
     router.message.register(help_command, Command("help"))

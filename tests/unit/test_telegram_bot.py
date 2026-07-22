@@ -696,3 +696,25 @@ def test_dispatcher_registers_message_and_callback_updates() -> None:
     dispatcher = create_dispatcher(settings, session_factory, engine)
 
     assert dispatcher.resolve_used_update_types() == ["callback_query", "message"]
+
+
+def test_dispatcher_injects_database_session_before_filters() -> None:
+    settings = Settings(
+        _env_file=None,
+        telegram_allowed_user_ids=frozenset({123}),
+        telegram_bot_token="123456:test-token",
+    )
+    session_factory = cast(
+        async_sessionmaker[AsyncSession], MagicMock(spec=async_sessionmaker)
+    )
+    engine = cast(AsyncEngine, MagicMock())
+
+    dispatcher = create_dispatcher(settings, session_factory, engine)
+    router = dispatcher.sub_routers[0]
+    message_outer = vars(router.message.outer_middleware)["_middlewares"]
+    callback_outer = vars(router.callback_query.outer_middleware)["_middlewares"]
+
+    assert any(isinstance(value, DatabaseSessionMiddleware) for value in message_outer)
+    assert any(isinstance(value, DatabaseSessionMiddleware) for value in callback_outer)
+    assert vars(router.message.middleware)["_middlewares"] == []
+    assert vars(router.callback_query.middleware)["_middlewares"] == []
