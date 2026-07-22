@@ -1,6 +1,7 @@
 import asyncio
+import re
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from flowmate.ai.analysis import analysis_to_parse_result, build_analysis_result
@@ -14,19 +15,125 @@ from flowmate.ai.provider import AIProvider, TextRoutingProvider
 from flowmate.ai.schemas import (
     DraftAnalysisResult,
     DraftInputContext,
+    DraftItem,
     DraftParseResult,
     DraftSource,
     ManagementIntent,
     MeetingDraftContext,
     SearchIntent,
     TelegramTextParseResult,
+    TemporalCandidate,
+    TemporalStatus,
 )
 
 Clock = Callable[[ZoneInfo], datetime]
 
+MONTHS = {
+    "января": 1,
+    "февраля": 2,
+    "марта": 3,
+    "апреля": 4,
+    "мая": 5,
+    "июня": 6,
+    "июля": 7,
+    "августа": 8,
+    "сентября": 9,
+    "октября": 10,
+    "ноября": 11,
+    "декабря": 12,
+}
+EXACT_LOCAL_DATE = re.compile(
+    r"(?<!\d)(?P<day>[0-3]?\d)(?:[.]\s*(?P<number_month>0?[1-9]|1[0-2])"
+    r"|\s+(?P<word_month>" + "|".join(MONTHS) + r"))"
+    r"(?:[.]?\s*(?P<year>20\d{2}))?(?!\d)",
+    re.IGNORECASE,
+)
+TEMPORAL_AMBIGUITY_MARKERS = (
+    "дат",
+    "врем",
+    "когда",
+    "напомин",
+    "срок",
+    *MONTHS,
+)
+
 
 def current_time(timezone: ZoneInfo) -> datetime:
     return datetime.now(timezone)
+
+
+def parse_exact_local_date(
+    value: str, context: DraftInputContext
+) -> TemporalCandidate | None:
+    match = EXACT_LOCAL_DATE.search(value.strip())
+    if match is None:
+        return None
+    month = (
+        int(match.group("number_month"))
+        if match.group("number_month")
+        else MONTHS[match.group("word_month").casefold()]
+    )
+    current = context.current_datetime.astimezone(ZoneInfo(context.timezone))
+    year = int(match.group("year")) if match.group("year") else current.year
+    try:
+        local_date = date(year, month, int(match.group("day")))
+        if match.group("year") is None and local_date < current.date():
+            local_date = date(year + 1, month, int(match.group("day")))
+    except ValueError:
+        return None
+    return TemporalCandidate(
+        original_phrase=match.group(0).strip(),
+        normalized_value=datetime.combine(
+            local_date,
+            time(23, 59, 59),
+            tzinfo=ZoneInfo(context.timezone),
+        ),
+        status=TemporalStatus.RESOLVED,
+        explanation=None,
+        time_was_explicit=False,
+    )
+
+
+def remove_temporal_ambiguities(values: list[str]) -> list[str]:
+    return [
+        value
+        for value in values
+        if not any(marker in value.casefold() for marker in TEMPORAL_AMBIGUITY_MARKERS)
+    ]
+
+
+def apply_exact_temporal_answer(
+    current: DraftAnalysisResult,
+    answer: str,
+    question: str,
+) -> DraftParseResult | None:
+    question_key = question.casefold()
+    if "напомин" not in question_key and "срок" not in question_key:
+        return None
+    candidate = parse_exact_local_date(answer, current.context)
+    if candidate is None:
+        return None
+    parsed = analysis_to_parse_result(current)
+    items = list(parsed.draft_items)
+    for index, item in enumerate(items):
+        if item.reminder_candidate is None and item.due_date_candidate is None:
+            continue
+        items[index] = DraftItem.model_validate(
+            {
+                **item.model_dump(),
+                "due_date_candidate": candidate,
+                "reminder_candidate": None,
+                "ambiguities": remove_temporal_ambiguities(item.ambiguities),
+            }
+        )
+        return DraftParseResult.model_validate(
+            {
+                **parsed.model_dump(),
+                "draft_items": items,
+                "ambiguities": remove_temporal_ambiguities(parsed.ambiguities),
+            }
+        )
+    return None
 
 
 class DraftParsingService:
@@ -78,6 +185,15 @@ class DraftParsingService:
         normalized = answer_text.strip()
         if not normalized:
             raise AIInvalidResponseError("clarification answer must not be empty")
+
+        exact_temporal = apply_exact_temporal_answer(current, normalized, question)
+        if exact_temporal is not None:
+            return build_analysis_result(
+                exact_temporal,
+                context=current.context,
+                high_threshold=self._high_confidence_threshold,
+                clarification_threshold=self._clarification_confidence_threshold,
+            )
 
         context = self._build_context(current.context.source)
         system_prompt = build_refinement_prompt(

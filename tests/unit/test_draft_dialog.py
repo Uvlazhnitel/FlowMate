@@ -13,7 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.errors import AIProviderError
-from flowmate.ai.schemas import DraftSource
+from flowmate.ai.schemas import DraftSource, TemporalCandidate, TemporalStatus
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.filters import ActiveDraftFilter
 from flowmate.bot.handlers.clarification import active_draft_message
@@ -35,7 +35,12 @@ from flowmate.task_engine.conversion import (
     DraftConversionService,
     conversion_summary,
 )
-from tests.ai_factories import make_analysis_result, make_draft_item, make_parse_result
+from tests.ai_factories import (
+    make_analysis_result,
+    make_context,
+    make_draft_item,
+    make_parse_result,
+)
 
 
 def make_session() -> AsyncSession:
@@ -197,6 +202,67 @@ async def test_refinement_sends_existing_draft_context_to_provider() -> None:
     assert "Original" in call.kwargs["system_prompt"]
     assert "Кто отвечает?" in call.kwargs["system_prompt"]
     assert "complete updated draft" in call.kwargs["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_exact_date_refinement_bypasses_ai_and_replaces_month_end() -> None:
+    provider = MagicMock()
+    provider.parse = AsyncMock()
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("Europe/Riga"),
+        active_workspace="personal",
+        timeout_seconds=2,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=lambda _: datetime(2026, 7, 22, 12, tzinfo=UTC),
+    )
+    month_end = TemporalCandidate(
+        original_phrase="в августе",
+        normalized_value=datetime(2026, 8, 31, 23, 59, 59, tzinfo=UTC),
+        status=TemporalStatus.RESOLVED,
+        explanation="Конец августа",
+        time_was_explicit=False,
+    )
+    reminder = TemporalCandidate(
+        original_phrase="в августе",
+        normalized_value=None,
+        status=TemporalStatus.AMBIGUOUS,
+        explanation="Нужно уточнить дату напоминания",
+        time_was_explicit=False,
+    )
+    current = make_analysis_result(
+        make_parse_result(
+            [
+                make_draft_item(
+                    due_date_candidate=month_end,
+                    reminder_candidate=reminder,
+                    ambiguities=["Неясно, когда напомнить"],
+                )
+            ],
+            ambiguities=["Нужно уточнить дату"],
+        ),
+        context=make_context(
+            timezone="Europe/Riga",
+            current_datetime=datetime(2026, 7, 22, 12, tzinfo=UTC),
+        ),
+    )
+
+    result = await service.refine(
+        current,
+        "7 августа",
+        answer_source=DraftSource.TEXT,
+        question="Уточните напоминание.",
+    )
+
+    provider.parse.assert_not_awaited()
+    due = result.items[0].item.due_date_candidate
+    assert due is not None
+    assert due.normalized_value == datetime(
+        2026, 8, 7, 23, 59, 59, tzinfo=ZoneInfo("Europe/Riga")
+    )
+    assert result.items[0].item.reminder_candidate is None
+    assert result.ambiguities == []
 
 
 @pytest.mark.asyncio
