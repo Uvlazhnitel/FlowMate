@@ -201,7 +201,7 @@ class DraftItem(StrictDraftModel):
 
     @field_validator("reminder_candidate")
     @classmethod
-    def reject_resolved_reminder_without_time(
+    def defer_reminder_without_explicit_time(
         cls,
         value: TemporalCandidate | None,
     ) -> TemporalCandidate | None:
@@ -210,7 +210,15 @@ class DraftItem(StrictDraftModel):
             and value.status is TemporalStatus.RESOLVED
             and not value.time_was_explicit
         ):
-            raise ValueError("reminder without an explicit time must be ambiguous")
+            # Structured-output schemas cannot express this cross-field rule, so
+            # preserve the useful draft while routing the missing time to clarification.
+            return value.model_copy(
+                update={
+                    "normalized_value": None,
+                    "status": TemporalStatus.AMBIGUOUS,
+                    "explanation": "Reminder time was not explicit.",
+                }
+            )
         return value
 
 

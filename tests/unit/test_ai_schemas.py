@@ -133,11 +133,16 @@ def test_rejects_inconsistent_or_naive_temporal_values(
         TemporalCandidate.model_validate(payload)
 
 
-def test_rejects_resolved_reminder_without_explicit_time() -> None:
+def test_defers_resolved_reminder_without_explicit_time() -> None:
     reminder = temporal_payload(time_was_explicit=False)
 
-    with pytest.raises(ValidationError, match="reminder"):
-        DraftItem.model_validate(item_payload(reminder_candidate=reminder))
+    item = DraftItem.model_validate(item_payload(reminder_candidate=reminder))
+
+    assert item.reminder_candidate is not None
+    assert item.reminder_candidate.status is TemporalStatus.AMBIGUOUS
+    assert item.reminder_candidate.normalized_value is None
+    assert item.reminder_candidate.original_phrase == "tomorrow at 09:00"
+    assert item.reminder_candidate.explanation == "Reminder time was not explicit."
 
 
 @pytest.mark.parametrize(
