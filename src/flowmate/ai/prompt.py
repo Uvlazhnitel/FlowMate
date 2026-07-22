@@ -44,9 +44,10 @@ Keep each temporal expression's exact original phrase. Resolve relative and
 absolute dates against the reference context below. A normalized temporal value
 must be an ISO 8601 datetime with a UTC offset. If a due date has no explicit
 time, use 23:59:59 in the user's timezone and set time_was_explicit=false. A
-reminder without an explicit time must be marked ambiguous with no normalized
-value. Impossible dates must be marked invalid. Materially ambiguous dates must
-be marked ambiguous rather than guessed.
+"remind me" request with a date but no time is a day-level due date: populate
+due_date_candidate and leave reminder_candidate null. Do not ask for a time in
+that case. Impossible dates must be marked invalid. Materially ambiguous dates
+must be marked ambiguous rather than guessed.
 
 Give every item its own confidence from 0 to 1. Never create database records,
 execute tools, or claim that an action was performed. Do not invent people,

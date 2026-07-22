@@ -8,7 +8,6 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
-    field_validator,
     model_validator,
 )
 
@@ -199,27 +198,26 @@ class DraftItem(StrictDraftModel):
     dependencies: list[DependencyCandidate]
     confidence: float = Field(ge=0.0, le=1.0)
 
-    @field_validator("reminder_candidate")
-    @classmethod
-    def defer_reminder_without_explicit_time(
-        cls,
-        value: TemporalCandidate | None,
-    ) -> TemporalCandidate | None:
+    @model_validator(mode="after")
+    def normalize_day_level_reminder(self) -> Self:
+        value = self.reminder_candidate
         if (
             value is not None
             and value.status is TemporalStatus.RESOLVED
             and not value.time_was_explicit
         ):
-            # Structured-output schemas cannot express this cross-field rule, so
-            # preserve the useful draft while routing the missing time to clarification.
-            return value.model_copy(
+            # A date-only "remind me" request is a day-level deadline. The daily
+            # digest provides the early notification without inventing an exact time.
+            due_date = self.due_date_candidate
+            if due_date is None or due_date.status is not TemporalStatus.RESOLVED:
+                due_date = value
+            return self.model_copy(
                 update={
-                    "normalized_value": None,
-                    "status": TemporalStatus.AMBIGUOUS,
-                    "explanation": "Reminder time was not explicit.",
+                    "due_date_candidate": due_date,
+                    "reminder_candidate": None,
                 }
             )
-        return value
+        return self
 
 
 class DraftParseResult(StrictDraftModel):
