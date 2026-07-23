@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy import case, func, select
@@ -20,6 +21,9 @@ OPEN_STATUSES = tuple(
     )
 )
 
+PersonScope = Literal["work", "recent", "all"]
+PEOPLE_RECENT_DAYS = 90
+
 
 @dataclass(frozen=True, slots=True)
 class TopicCount:
@@ -30,9 +34,11 @@ class TopicCount:
 @dataclass(frozen=True, slots=True)
 class PersonCount:
     person: Person
+    open_item_count: int
     follow_up_count: int
     waiting_count: int
     question_count: int
+    last_activity: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,11 +222,20 @@ async def list_person_counts(
     session: AsyncSession,
     user_id: UUID,
     *,
+    scope: PersonScope = "work",
+    query: str | None = None,
+    now: datetime | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> list[PersonCount]:
     validate_pagination(limit, offset)
+    if scope not in {"work", "recent", "all"}:
+        raise ValueError("invalid people scope")
+    current_time = now or datetime.now(UTC)
+    if current_time.tzinfo is None or current_time.utcoffset() is None:
+        raise ValueError("people directory clock must be timezone-aware")
     base_filter = WorkItem.status.in_(OPEN_STATUSES)
+    open_items = func.count(WorkItem.id).filter(base_filter)
     follow_ups = func.count(WorkItem.id).filter(
         base_filter, WorkItem.type == WorkItemType.FOLLOW_UP.value
     )
@@ -230,8 +245,20 @@ async def list_person_counts(
     questions = func.count(WorkItem.id).filter(
         base_filter, WorkItem.type == WorkItemType.QUESTION.value
     )
+    last_work_activity = func.max(WorkItem.updated_at)
+    last_activity = func.greatest(
+        Person.updated_at,
+        func.coalesce(last_work_activity, Person.updated_at),
+    )
     statement = (
-        select(Person, follow_ups, waiting, questions)
+        select(
+            Person,
+            open_items,
+            follow_ups,
+            waiting,
+            questions,
+            last_activity,
+        )
         .outerjoin(
             WorkItemPerson,
             (WorkItemPerson.person_id == Person.id)
@@ -244,8 +271,23 @@ async def list_person_counts(
         )
         .where(Person.user_id == user_id, Person.is_active.is_(True))
         .group_by(Person.id)
-        .order_by(
-            (follow_ups + waiting + questions).desc(),
+    )
+    normalized_query = query.strip() if query else ""
+    if normalized_query:
+        statement = statement.where(Person.display_name.ilike(f"%{normalized_query}%"))
+    if scope == "work":
+        statement = statement.having(open_items > 0)
+    elif scope == "recent":
+        cutoff = current_time - timedelta(days=PEOPLE_RECENT_DAYS)
+        statement = statement.having(
+            (open_items > 0)
+            | (last_work_activity >= cutoff)
+            | (Person.updated_at >= cutoff)
+        )
+    statement = (
+        statement.order_by(
+            open_items.desc(),
+            last_activity.desc(),
             Person.display_name,
             Person.id,
         )
@@ -254,8 +296,22 @@ async def list_person_counts(
     )
     rows = await session.execute(statement)
     return [
-        PersonCount(person, follow_up_count, waiting_count, question_count)
-        for person, follow_up_count, waiting_count, question_count in rows
+        PersonCount(
+            person,
+            open_item_count,
+            follow_up_count,
+            waiting_count,
+            question_count,
+            activity,
+        )
+        for (
+            person,
+            open_item_count,
+            follow_up_count,
+            waiting_count,
+            question_count,
+            activity,
+        ) in rows
     ]
 
 

@@ -28,7 +28,7 @@ from flowmate.task_engine.action_sessions import (
     get_active_action_session,
 )
 from flowmate.task_engine.details import get_work_item_details
-from flowmate.task_engine.enums import WorkItemAction
+from flowmate.task_engine.enums import WorkItemAction, WorkItemType
 from flowmate.task_engine.intents import (
     AmbiguousManagementCandidateError,
     find_intent_targets,
@@ -138,10 +138,115 @@ async def test_management_lists_and_aggregate_counts(
     ]
     person_counts = await list_person_counts(database_session, user.id)
     assert (
+        person_counts[0].open_item_count,
         person_counts[0].follow_up_count,
         person_counts[0].waiting_count,
         person_counts[0].question_count,
-    ) == (1, 1, 1)
+    ) == (3, 1, 1, 1)
+
+
+@pytest.mark.integration
+async def test_people_directory_scopes_and_recent_boundary(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, 630_101)
+    other = await create_telegram_user(database_session, 630_102)
+    now = datetime(2026, 7, 23, 12, tzinfo=UTC)
+    open_names: set[str] = set()
+    for index, item_type in enumerate(WorkItemType):
+        person = await create_person(
+            database_session,
+            user.id,
+            f"Open {item_type.value}",
+        )
+        item = await create_work_item(
+            database_session,
+            user.id,
+            item_type=item_type,
+            title=f"Open item {index}",
+        )
+        await link_person_to_work_item(database_session, user.id, item.id, person.id)
+        open_names.add(person.display_name)
+
+    recent = await create_person(database_session, user.id, "Recent person")
+    recent.updated_at = now - timedelta(days=90)
+    stale = await create_person(database_session, user.id, "Stale person")
+    stale.updated_at = now - timedelta(days=90, seconds=1)
+    completed = await create_person(database_session, user.id, "Completed person")
+    completed_item = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Completed task",
+        status="done",
+        completed_at=now,
+    )
+    await link_person_to_work_item(
+        database_session,
+        user.id,
+        completed_item.id,
+        completed.id,
+    )
+    inactive = await create_person(database_session, user.id, "Inactive person")
+    inactive.is_active = False
+    inactive_item = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Inactive person's task",
+    )
+    await link_person_to_work_item(
+        database_session,
+        user.id,
+        inactive_item.id,
+        inactive.id,
+    )
+    foreign = await create_person(database_session, other.id, "Foreign person")
+    foreign_item = await create_work_item(
+        database_session,
+        other.id,
+        item_type="task",
+        title="Foreign task",
+    )
+    await link_person_to_work_item(
+        database_session,
+        other.id,
+        foreign_item.id,
+        foreign.id,
+    )
+    await database_session.flush()
+
+    work = await list_person_counts(database_session, user.id, now=now, limit=20)
+    assert {value.person.display_name for value in work} == open_names
+    assert all(value.open_item_count == 1 for value in work)
+
+    recent_values = await list_person_counts(
+        database_session,
+        user.id,
+        scope="recent",
+        now=now,
+        limit=20,
+    )
+    assert {value.person.display_name for value in recent_values} == {
+        *open_names,
+        "Completed person",
+        "Recent person",
+    }
+
+    all_values = await list_person_counts(
+        database_session,
+        user.id,
+        scope="all",
+        query="person",
+        now=now,
+        limit=1,
+    )
+    assert len(all_values) == 1
+    assert all_values[0].person.display_name in {
+        "Completed person",
+        "Recent person",
+        "Stale person",
+    }
 
 
 @pytest.mark.integration

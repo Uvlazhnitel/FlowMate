@@ -1,7 +1,7 @@
 # ruff: noqa: RUF001
 import shlex
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -34,6 +34,7 @@ from flowmate.task_engine.action_sessions import (
 from flowmate.task_engine.enums import WorkItemAction, WorkItemStatus, WorkItemType
 from flowmate.task_engine.queries import (
     PersonCount,
+    PersonScope,
     TopicCount,
     WorkItemListEntry,
     enrich_work_item_list,
@@ -81,6 +82,12 @@ VIEW_HEADINGS = {
     "p": "👥 Люди",
     "o": "🗂 Активные темы",
     "s": "🔍 Результаты поиска",
+}
+
+PEOPLE_SCOPE_LABELS: dict[PersonScope, str] = {
+    "work": "В работе",
+    "recent": "Недавние",
+    "all": "Все",
 }
 
 
@@ -202,8 +209,8 @@ def format_person_entry(value: PersonCount, index: int) -> str:
     )
     return (
         f"{index}. {display_name}\n"
-        f"   Follow-up: {value.follow_up_count}; ожидания: {value.waiting_count}; "
-        f"вопросы: {value.question_count}"
+        f"   Открытых: {value.open_item_count}; follow-up: {value.follow_up_count}; "
+        f"ожидания: {value.waiting_count}; вопросы: {value.question_count}"
     )
 
 
@@ -237,6 +244,7 @@ def list_keyboard(
     has_next: bool,
     item_ids: list[UUID],
     search_session_id: UUID | None = None,
+    people_scope: PersonScope | None = None,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -247,9 +255,22 @@ def list_keyboard(
         ]
         for index, item_id in enumerate(item_ids, start=1)
     ]
+    if view == "p":
+        active_scope = people_scope or "work"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(f"• {label}" if scope == active_scope else label),
+                    callback_data=f"ls:p:{scope}:0",
+                )
+                for scope, label in PEOPLE_SCOPE_LABELS.items()
+            ]
+        )
     navigation: list[InlineKeyboardButton] = []
     callback_prefix = (
-        f"lq:{search_session_id}" if search_session_id is not None else f"ls:{view}"
+        f"lq:{search_session_id}"
+        if search_session_id is not None
+        else (f"ls:p:{people_scope or 'work'}" if view == "p" else f"ls:{view}")
     )
     if page > 0:
         navigation.append(
@@ -271,19 +292,31 @@ def list_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def parse_list_callback(data: str | None) -> tuple[str, int] | None:
+def parse_list_callback(
+    data: str | None,
+) -> tuple[str, int, PersonScope | None] | None:
     if data is None:
         return None
     parts = data.split(":")
-    if len(parts) != 3 or parts[0] != "ls" or parts[1] not in VIEW_HEADINGS:
+    if parts[:1] != ["ls"] or len(parts) not in {3, 4}:
         return None
+    if parts[1] not in VIEW_HEADINGS:
+        return None
+    scope: PersonScope | None = None
+    page_part = parts[-1]
+    if len(parts) == 4:
+        if parts[1] != "p" or parts[2] not in PEOPLE_SCOPE_LABELS:
+            return None
+        scope = parts[2]
+    elif parts[1] == "p":
+        scope = "work"
     try:
-        page = int(parts[2])
+        page = int(page_part)
     except ValueError:
         return None
     if not 0 <= page <= MAX_PAGE or parts[1] == "s":
         return None
-    return parts[1], page
+    return parts[1], page, scope
 
 
 def parse_search_callback(data: str | None) -> tuple[UUID, int] | None:
@@ -424,12 +457,28 @@ async def _directory_page(
     *,
     view: str,
     page: int,
+    people_scope: PersonScope = "work",
 ) -> NavigationPage:
     offset = page * PAGE_SIZE
     limit = PAGE_SIZE + 1
     if view == "p":
-        people = await list_person_counts(session, user_id, limit=limit, offset=offset)
-        empty = "Людей пока нет."
+        people = await list_person_counts(
+            session,
+            user_id,
+            scope=people_scope,
+            now=datetime.now(UTC),
+            limit=limit,
+            offset=offset,
+        )
+        empty = (
+            "Людей с открытой работой пока нет."
+            if people_scope == "work"
+            else (
+                "За последние 90 дней активности не было."
+                if people_scope == "recent"
+                else "Людей пока нет."
+            )
+        )
         has_next = len(people) > PAGE_SIZE
         page_people = people[:PAGE_SIZE]
         page_has_values = bool(page_people)
@@ -459,13 +508,15 @@ async def _directory_page(
         raise ExpiredListError
     if page > 0 and not page_has_values:
         raise ExpiredListError
+    scope_label = f" · {PEOPLE_SCOPE_LABELS[people_scope]}" if view == "p" else ""
     return NavigationPage(
-        text=f"{VIEW_HEADINGS[view]} · страница {page + 1}\n\n{body}",
+        text=f"{VIEW_HEADINGS[view]}{scope_label} · страница {page + 1}\n\n{body}",
         keyboard=list_keyboard(
             view=view,
             page=page,
             has_next=has_next,
             item_ids=[],
+            people_scope=people_scope if view == "p" else None,
         ),
     )
 
@@ -477,9 +528,16 @@ async def build_navigation_page(
     view: str,
     page: int,
     timezone: ZoneInfo,
+    people_scope: PersonScope = "work",
 ) -> NavigationPage:
     if view in {"p", "o"}:
-        return await _directory_page(session, user_id, view=view, page=page)
+        return await _directory_page(
+            session,
+            user_id,
+            view=view,
+            page=page,
+            people_scope=people_scope,
+        )
     return await _work_item_page(
         session,
         user_id,
@@ -928,7 +986,7 @@ async def list_callback(
     if user is None:
         await callback_query.answer(EXPIRED_LIST_MESSAGE, show_alert=True)
         return
-    view, page = parsed
+    view, page, people_scope = parsed
     try:
         value = await build_navigation_page(
             db_session,
@@ -936,6 +994,7 @@ async def list_callback(
             view=view,
             page=page,
             timezone=app_timezone,
+            people_scope=people_scope or "work",
         )
         await send_navigation_page(message, value, edit=True)
         await callback_query.answer()

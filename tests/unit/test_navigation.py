@@ -1,3 +1,4 @@
+# ruff: noqa: RUF001
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
@@ -74,10 +75,15 @@ async def test_menu_command_shows_main_keyboard() -> None:
 
 
 def test_list_callback_parsing_rejects_invalid_pages_and_views() -> None:
-    assert parse_list_callback("ls:t:0") == ("t", 0)
-    assert parse_list_callback("ls:t:999") == ("t", 999)
+    assert parse_list_callback("ls:t:0") == ("t", 0, None)
+    assert parse_list_callback("ls:t:999") == ("t", 999, None)
+    assert parse_list_callback("ls:p:0") == ("p", 0, "work")
+    assert parse_list_callback("ls:p:recent:2") == ("p", 2, "recent")
+    assert parse_list_callback("ls:p:all:0") == ("p", 0, "all")
     assert parse_list_callback("ls:t:-1") is None
     assert parse_list_callback("ls:s:0") is None
+    assert parse_list_callback("ls:t:all:0") is None
+    assert parse_list_callback("ls:p:archived:0") is None
     assert parse_list_callback("ls:private:0") is None
     assert parse_list_callback("ls:t:not-a-page") is None
 
@@ -137,6 +143,31 @@ def test_page_keyboard_handles_first_middle_and_last_page() -> None:
     ]
     assert [button.text for button in last.inline_keyboard[-2]] == ["Назад"]
     assert first.inline_keyboard[-1][0].callback_data == "nav:menu"
+
+
+def test_people_keyboard_has_scopes_and_scoped_pagination() -> None:
+    keyboard = list_keyboard(
+        view="p",
+        page=1,
+        has_next=True,
+        item_ids=[],
+        people_scope="recent",
+    )
+
+    assert [button.text for button in keyboard.inline_keyboard[0]] == [
+        "В работе",
+        "• Недавние",
+        "Все",
+    ]
+    assert [button.callback_data for button in keyboard.inline_keyboard[0]] == [
+        "ls:p:work:0",
+        "ls:p:recent:0",
+        "ls:p:all:0",
+    ]
+    assert [button.callback_data for button in keyboard.inline_keyboard[1]] == [
+        "ls:p:recent:0",
+        "ls:p:recent:2",
+    ]
 
 
 def test_user_text_is_normalized_and_truncated() -> None:

@@ -60,7 +60,7 @@ export function MeetingDetailPage({
   });
   const people = useQuery({
     queryKey: [...operationsKeys.all, "meeting-detail-people"],
-    queryFn: () => getPeople("", 0),
+    queryFn: () => getPeople("", 0, "all"),
   });
   const topics = useQuery({
     queryKey: [...operationsKeys.all, "meeting-detail-topics"],

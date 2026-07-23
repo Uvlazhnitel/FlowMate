@@ -45,6 +45,7 @@ from flowmate.task_engine.operational import (
     list_today_section,
     list_topics_summary,
 )
+from flowmate.task_engine.queries import PersonScope
 
 router = APIRouter(prefix="/api/v1", tags=["pwa-operations"])
 
@@ -250,6 +251,7 @@ async def people(
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_pwa_session)],
     q: str | None = None,
+    scope: PersonScope = "work",
     limit: Annotated[int, Query(ge=1, le=50)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> dict[str, object]:
@@ -257,7 +259,9 @@ async def people(
         await list_people_summary(
             session,
             identity.user.id,
+            scope=scope,
             query=q,
+            now=_clock(),
             limit=limit,
             offset=offset,
         )

@@ -167,4 +167,64 @@ describe("operational screens", () => {
       ),
     );
   });
+
+  it("filters the people directory through URL scopes and resets pagination", async () => {
+    const person = {
+      id: "962ef4d1-cce0-4f4a-9085-2917115f61b9",
+      display_name: "Анна",
+      role: "Владелец",
+      open_item_count: 2,
+      follow_up_count: 1,
+      waiting_count: 1,
+      question_count: 0,
+      last_activity: "2026-07-21T08:00:00Z",
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/api/v1/people")) return Promise.resolve(page([person]));
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderApplication("/people?scope=all&page=2");
+
+    expect(await screen.findByText("Анна")).toBeVisible();
+    expect(screen.getByText("2 открытых")).toBeVisible();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/scope=all.*offset=40/),
+        expect.anything(),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "В работе" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/scope=work.*offset=0/),
+        expect.anything(),
+      ),
+    );
+    expect(screen.getByRole("button", { name: "В работе" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("shows a scope-specific empty state for recent people", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (requestPath(input).includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApplication("/people?scope=recent");
+
+    expect(
+      await screen.findByText("За последние 90 дней активности с людьми не было."),
+    ).toBeVisible();
+  });
 });

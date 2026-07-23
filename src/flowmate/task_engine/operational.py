@@ -21,7 +21,12 @@ from flowmate.reminders.sync import ACTIVE_REMINDER_STATUSES
 from flowmate.reminders.timezone import resolve_local_datetime
 from flowmate.task_engine.enums import WorkItemPriority, WorkItemStatus, WorkItemType
 from flowmate.task_engine.management import work_item_revision
-from flowmate.task_engine.queries import OPEN_STATUSES, validate_pagination
+from flowmate.task_engine.queries import (
+    OPEN_STATUSES,
+    PersonScope,
+    list_person_counts,
+    validate_pagination,
+)
 
 TodaySection = Literal["overdue", "due_today", "follow_ups", "waiting", "questions"]
 TopicSection = Literal["active", "people", "notes", "decisions", "history"]
@@ -505,64 +510,34 @@ async def list_people_summary(
     session: AsyncSession,
     user_id: UUID,
     *,
+    scope: PersonScope,
     query: str | None,
+    now: datetime,
     limit: int,
     offset: int,
 ) -> PageResult:
     validate_pagination(limit, offset)
-    base = WorkItem.status.in_(OPEN_STATUSES)
-    last_activity = func.max(WorkItem.updated_at)
-    statement = (
-        select(
-            Person,
-            func.count(WorkItem.id).filter(
-                base, WorkItem.type == WorkItemType.FOLLOW_UP.value
-            ),
-            func.count(WorkItem.id).filter(
-                base, WorkItem.type == WorkItemType.WAITING.value
-            ),
-            func.count(WorkItem.id).filter(
-                base, WorkItem.type == WorkItemType.QUESTION.value
-            ),
-            last_activity,
-        )
-        .outerjoin(
-            WorkItemPerson,
-            (WorkItemPerson.person_id == Person.id)
-            & (WorkItemPerson.user_id == user_id),
-        )
-        .outerjoin(
-            WorkItem,
-            (WorkItem.id == WorkItemPerson.work_item_id)
-            & (WorkItem.user_id == user_id),
-        )
-        .where(Person.user_id == user_id, Person.is_active.is_(True))
-        .group_by(Person.id)
-    )
-    if query:
-        statement = statement.where(Person.display_name.ilike(f"%{query.strip()}%"))
-    rows = list(
-        (
-            await session.execute(
-                statement.order_by(
-                    last_activity.desc().nulls_last(), Person.display_name, Person.id
-                )
-                .offset(offset)
-                .limit(limit + 1)
-            )
-        ).all()
+    rows = await list_person_counts(
+        session,
+        user_id,
+        scope=scope,
+        query=query,
+        now=now,
+        limit=limit + 1,
+        offset=offset,
     )
     values = [
         {
-            "id": person.id,
-            "display_name": person.display_name,
-            "role": person.role,
-            "follow_up_count": follow_ups,
-            "waiting_count": waiting,
-            "question_count": questions,
-            "last_activity": activity or person.updated_at,
+            "id": value.person.id,
+            "display_name": value.person.display_name,
+            "role": value.person.role,
+            "open_item_count": value.open_item_count,
+            "follow_up_count": value.follow_up_count,
+            "waiting_count": value.waiting_count,
+            "question_count": value.question_count,
+            "last_activity": value.last_activity,
         }
-        for person, follow_ups, waiting, questions, activity in rows[:limit]
+        for value in rows[:limit]
     ]
     return PageResult(values, limit, offset, len(rows) > limit)
 

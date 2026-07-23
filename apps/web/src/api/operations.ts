@@ -79,11 +79,14 @@ export interface PersonSummary {
   id: string;
   display_name: string;
   role: string | null;
+  open_item_count: number;
   follow_up_count: number;
   waiting_count: number;
   question_count: number;
   last_activity: string;
 }
+
+export type PeopleScope = "work" | "recent" | "all";
 
 export interface NamedEntry {
   id: string;
@@ -184,9 +187,9 @@ export const getTopicContent = <T>(id: string, section: string, offset: number) 
     query(`/api/v1/topics/${id}/content`, { section, limit: 20, offset }),
   );
 
-export const getPeople = (q: string, offset: number) =>
+export const getPeople = (q: string, offset: number, scope: PeopleScope = "work") =>
   apiRequest<PageResponse<PersonSummary>>(
-    query("/api/v1/people", { q, limit: 20, offset }),
+    query("/api/v1/people", { q, scope, limit: 20, offset }),
   );
 
 export const getPerson = (id: string) =>

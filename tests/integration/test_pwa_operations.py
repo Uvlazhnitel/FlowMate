@@ -90,6 +90,7 @@ async def test_operational_views_actions_and_user_isolation(
                 assert user is not None
                 topic = await create_topic(session, user.id, "Launch")
                 person = await create_person(session, user.id, "Anna", role="Owner")
+                one_off = await create_person(session, user.id, "One-off contact")
                 overdue = await create_work_item(
                     session,
                     user.id,
@@ -133,6 +134,7 @@ async def test_operational_views_actions_and_user_isolation(
                 overdue_id = overdue.id
                 topic_id = topic.id
                 person_id = person.id
+                one_off_id = one_off.id
                 agenda_id = agenda.id
                 foreign_topic_id = foreign_topic.id
                 foreign_person_id = foreign_person.id
@@ -176,6 +178,29 @@ async def test_operational_views_actions_and_user_isolation(
             assert len(topic_history.json()["items"]) == 3
             people = await client.get("/api/v1/people")
             assert people.json()["items"][0]["display_name"] == "Anna"
+            assert people.json()["items"][0]["open_item_count"] == 2
+            assert all(item["id"] != str(one_off_id) for item in people.json()["items"])
+            all_people = await client.get("/api/v1/people?scope=all")
+            assert {item["display_name"] for item in all_people.json()["items"]} == {
+                "Anna",
+                "One-off contact",
+            }
+            first_people_page = await client.get("/api/v1/people?scope=all&limit=1")
+            second_people_page = await client.get(
+                "/api/v1/people?scope=all&limit=1&offset=1"
+            )
+            assert first_people_page.json()["has_more"] is True
+            assert second_people_page.json()["has_more"] is False
+            assert (
+                first_people_page.json()["items"][0]["id"]
+                != second_people_page.json()["items"][0]["id"]
+            )
+            assert not (await client.get("/api/v1/people?scope=all&q=One-off")).json()[
+                "has_more"
+            ]
+            assert (
+                await client.get("/api/v1/people?scope=archived")
+            ).status_code == 422
             person_details = await client.get(f"/api/v1/people/{person_id}")
             assert person_details.json()["role"] == "Owner"
             person_follow_ups = await client.get(

@@ -379,7 +379,7 @@ export function MeetingsPage({
   });
   const people = useQuery({
     queryKey: [...operationsKeys.all, "meeting-people", personSearch],
-    queryFn: () => getPeople(personSearch, 0),
+    queryFn: () => getPeople(personSearch, 0, "all"),
   });
   const topics = useQuery({
     queryKey: [...operationsKeys.all, "meeting-topics", topicSearch],

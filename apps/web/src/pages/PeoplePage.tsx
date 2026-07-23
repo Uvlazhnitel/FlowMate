@@ -2,10 +2,24 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { getPeople, operationsKeys } from "../api/operations";
+import { getPeople, operationsKeys, type PeopleScope } from "../api/operations";
 import { OperationalLayout } from "../components/OperationalLayout";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { formatRelative, type DateTimePreferences } from "../lib/dates";
+
+const scopes: { value: PeopleScope; label: string }[] = [
+  { value: "work", label: "В работе" },
+  { value: "recent", label: "Недавние" },
+  { value: "all", label: "Все" },
+];
+
+function peopleSearchParams(q: string, scope: PeopleScope, page = 0) {
+  return {
+    ...(q ? { q } : {}),
+    scope,
+    ...(page ? { page: String(page) } : {}),
+  };
+}
 
 export function PeoplePage({
   dateTimePreferences,
@@ -14,10 +28,14 @@ export function PeoplePage({
 }) {
   const [params, setParams] = useSearchParams();
   const q = params.get("q") ?? "";
+  const requestedScope = params.get("scope");
+  const scope: PeopleScope = scopes.some(({ value }) => value === requestedScope)
+    ? (requestedScope as PeopleScope)
+    : "work";
   const page = Number(params.get("page") ?? 0);
   const query = useQuery({
-    queryKey: [...operationsKeys.all, "people", q, page],
-    queryFn: () => getPeople(q, page * 20),
+    queryKey: [...operationsKeys.all, "people", scope, q, page],
+    queryFn: () => getPeople(q, page * 20, scope),
   });
   if (query.isPending) return <LoadingState label="Загружаем людей" />;
   if (query.isError)
@@ -35,16 +53,34 @@ export function PeoplePage({
           aria-label="Поиск людей"
           placeholder="Имя или роль"
           value={q}
-          onChange={(event) =>
-            setParams(event.target.value ? { q: event.target.value } : {})
-          }
+          onChange={(event) => setParams(peopleSearchParams(event.target.value, scope))}
         />
       }
     >
+      <div className="section-tabs" role="navigation" aria-label="Фильтр людей">
+        {scopes.map(({ value, label }) => (
+          <button
+            className={scope === value ? "section-tab section-tab--active" : "section-tab"}
+            aria-pressed={scope === value}
+            key={value}
+            onClick={() => setParams(peopleSearchParams(q, value))}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       {!query.data.items.length ? (
         <EmptyState
-          title="Люди не найдены"
-          description="Измените запрос или создайте связь через Telegram."
+          title={q ? "Люди не найдены" : "В этом списке пока никого нет"}
+          description={
+            q
+              ? "Измените запрос или выберите другой раздел."
+              : scope === "work"
+                ? "Люди появятся здесь, когда с ними будет связана открытая работа."
+                : scope === "recent"
+                  ? "За последние 90 дней активности с людьми не было."
+                  : "Создайте связь через Telegram или настройки."
+          }
         />
       ) : (
         <div className="directory-grid directory-grid--people">
@@ -64,6 +100,7 @@ export function PeoplePage({
                 </div>
               </div>
               <div className="metric-row">
+                <span>{person.open_item_count} открытых</span>
                 <span>{person.follow_up_count} follow-up</span>
                 <span>{person.waiting_count} ожиданий</span>
                 <span>{person.question_count} вопросов</span>
@@ -82,14 +119,14 @@ export function PeoplePage({
         <button
           className="button button--secondary"
           disabled={page === 0}
-          onClick={() => setParams({ ...(q ? { q } : {}), page: String(page - 1) })}
+          onClick={() => setParams(peopleSearchParams(q, scope, page - 1))}
         >
           Назад
         </button>
         <button
           className="button button--secondary"
           disabled={!query.data.has_more}
-          onClick={() => setParams({ ...(q ? { q } : {}), page: String(page + 1) })}
+          onClick={() => setParams(peopleSearchParams(q, scope, page + 1))}
         >
           Дальше
         </button>
