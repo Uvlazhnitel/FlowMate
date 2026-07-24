@@ -23,6 +23,7 @@ from flowmate.bot.handlers.voice import (
     SPEECH_UNAVAILABLE_MESSAGE,
     TRANSCRIPTION_FAILED_MESSAGE,
 )
+from flowmate.bot.menu import answer_with_main_menu
 from flowmate.db.drafts import (
     DraftStatus,
     claim_update,
@@ -105,7 +106,7 @@ async def handle_control_phrase(
                 type(error).__name__,
             )
             response = DRAFT_CONVERSION_FAILED_MESSAGE
-    await message.answer(response)
+    await answer_with_main_menu(message, response)
     return True
 
 

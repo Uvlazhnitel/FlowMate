@@ -528,7 +528,11 @@ async def test_control_phrase_closes_same_draft_idempotently(
 
     assert draft.status == status
     assert draft.processed_update_ids == []
-    answer.assert_awaited_once_with(response)
+    answer.assert_awaited_once()
+    response_call = answer.await_args
+    assert response_call is not None
+    assert response_call.args == (response,)
+    assert response_call.kwargs["reply_markup"].is_persistent is True
 
 
 @pytest.mark.asyncio

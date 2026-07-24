@@ -10,9 +10,7 @@ from aiogram.types import (
     ForceReply,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
     Message,
-    ReplyKeyboardMarkup,
     Update,
 )
 from sqlalchemy.exc import SQLAlchemyError
@@ -21,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowmate.ai.schemas import SearchIntent
 from flowmate.bot.formatting import split_plain_text
 from flowmate.bot.handlers.work_items import OPEN_LABELS, STATUS_LABELS, send_details
+from flowmate.bot.menu import main_menu_keyboard, restore_main_menu
 from flowmate.db.drafts import get_active_draft_for_user
 from flowmate.db.models import WorkItem, WorkItemActionSession
 from flowmate.db.users import get_user_by_telegram_id
@@ -55,17 +54,6 @@ from flowmate.task_engine.search import (
     search_work_items,
 )
 
-RECORD_BUTTON = "🎙 Записать"
-TODAY_BUTTON = "📅 Сегодня"
-TASKS_BUTTON = "✅ Задачи"
-FOLLOW_UPS_BUTTON = "🔁 Follow-up"
-WAITING_BUTTON = "⏳ Ждём"
-QUESTIONS_BUTTON = "❓ Вопросы"
-PEOPLE_BUTTON = "👥 Люди"
-TOPICS_BUTTON = "🗂 Темы"
-SEARCH_BUTTON = "🔍 Поиск"
-SETTINGS_BUTTON = "⚙️ Настройки"
-
 PAGE_SIZE = 5
 MAX_PAGE = 999
 MAX_TITLE_LENGTH = 120
@@ -99,24 +87,6 @@ class ExpiredListError(ValueError):
 class NavigationPage:
     text: str
     keyboard: InlineKeyboardMarkup
-
-
-def main_menu_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=RECORD_BUTTON), KeyboardButton(text=TODAY_BUTTON)],
-            [KeyboardButton(text=TASKS_BUTTON), KeyboardButton(text=FOLLOW_UPS_BUTTON)],
-            [
-                KeyboardButton(text=WAITING_BUTTON),
-                KeyboardButton(text=QUESTIONS_BUTTON),
-            ],
-            [KeyboardButton(text=PEOPLE_BUTTON), KeyboardButton(text=TOPICS_BUTTON)],
-            [KeyboardButton(text=SEARCH_BUTTON), KeyboardButton(text=SETTINGS_BUTTON)],
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="Отправьте текст или голосовое сообщение",
-    )
 
 
 async def menu_command(message: Message) -> None:
@@ -970,6 +940,7 @@ async def complete_search_action(
         action_session,
         timezone=timezone,
     )
+    await restore_main_menu(message)
 
 
 async def list_callback(

@@ -37,19 +37,8 @@ from flowmate.bot.handlers.meetings import (
     meeting_title_reply,
 )
 from flowmate.bot.handlers.navigation import (
-    FOLLOW_UPS_BUTTON,
-    PEOPLE_BUTTON,
-    QUESTIONS_BUTTON,
-    RECORD_BUTTON,
-    SEARCH_BUTTON,
-    SETTINGS_BUTTON,
-    TASKS_BUTTON,
-    TODAY_BUTTON,
-    TOPICS_BUTTON,
-    WAITING_BUTTON,
     followups_command,
     list_callback,
-    main_menu_keyboard,
     menu_callback,
     menu_command,
     people_command,
@@ -76,6 +65,21 @@ from flowmate.bot.handlers.work_items import (
     work_item_selection_callback,
 )
 from flowmate.bot.handlers.workspaces import workspace_callback, workspace_command
+from flowmate.bot.menu import (
+    FOLLOW_UPS_BUTTON,
+    PEOPLE_BUTTON,
+    QUESTIONS_BUTTON,
+    RECORD_BUTTON,
+    SEARCH_BUTTON,
+    SETTINGS_BUTTON,
+    TASKS_BUTTON,
+    TODAY_BUTTON,
+    TOPICS_BUTTON,
+    WAITING_BUTTON,
+    WORKSPACE_BUTTON,
+    answer_with_main_menu,
+    main_menu_keyboard,
+)
 from flowmate.bot.middleware import (
     AllowedUserMiddleware,
     DatabaseSessionMiddleware,
@@ -152,7 +156,7 @@ async def draft_command(message: Message, db_session: AsyncSession) -> None:
         else None
     )
     if draft is None:
-        await message.answer(DRAFT_NOT_FOUND_MESSAGE)
+        await answer_with_main_menu(message, DRAFT_NOT_FOUND_MESSAGE)
         return
     if draft.status == "parsing" or draft.analysis_payload is None:
         await message.answer("Черновик ещё анализируется.")
@@ -173,7 +177,7 @@ async def cancel_command(message: Message, db_session: AsyncSession) -> None:
     if action_session is not None:
         await finish_action_session(db_session, action_session, status="cancelled")
         await db_session.commit()
-        await message.answer("Текущее действие отменено.")
+        await answer_with_main_menu(message, "Текущее действие отменено.")
         return
     draft = (
         await get_active_draft_for_user(db_session, user.id)
@@ -181,11 +185,11 @@ async def cancel_command(message: Message, db_session: AsyncSession) -> None:
         else None
     )
     if draft is None:
-        await message.answer(DRAFT_NOT_FOUND_MESSAGE)
+        await answer_with_main_menu(message, DRAFT_NOT_FOUND_MESSAGE)
         return
     await transition_draft(db_session, draft, "cancelled")
     await db_session.commit()
-    await message.answer(DRAFT_CANCELLED_MESSAGE)
+    await answer_with_main_menu(message, DRAFT_CANCELLED_MESSAGE)
 
 
 def create_router(
@@ -241,6 +245,7 @@ def create_router(
     router.message.register(topics_command, F.text == TOPICS_BUTTON)
     router.message.register(search_command, F.text == SEARCH_BUTTON)
     router.message.register(reminders_settings_command, F.text == SETTINGS_BUTTON)
+    router.message.register(workspace_command, F.text == WORKSPACE_BUTTON)
     router.callback_query.register(workspace_callback, F.data.startswith("ws:"))
     router.message.register(
         meeting_title_reply,

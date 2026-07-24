@@ -13,6 +13,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowmate.ai.schemas import SearchIntent, SearchWorkItemType
 from flowmate.bot.handlers.commands import cancel_command
 from flowmate.bot.handlers.navigation import (
+    NavigationPage,
+    execute_search_intent,
+    list_keyboard,
+    menu_command,
+    normalize_display_text,
+    parse_list_callback,
+    parse_search_callback,
+    parse_search_expression,
+    send_navigation_page,
+)
+from flowmate.bot.menu import (
     FOLLOW_UPS_BUTTON,
     PEOPLE_BUTTON,
     QUESTIONS_BUTTON,
@@ -23,16 +34,8 @@ from flowmate.bot.handlers.navigation import (
     TODAY_BUTTON,
     TOPICS_BUTTON,
     WAITING_BUTTON,
-    NavigationPage,
-    execute_search_intent,
-    list_keyboard,
+    WORKSPACE_BUTTON,
     main_menu_keyboard,
-    menu_command,
-    normalize_display_text,
-    parse_list_callback,
-    parse_search_callback,
-    parse_search_expression,
-    send_navigation_page,
 )
 from flowmate.db.models import WorkItem
 
@@ -47,7 +50,7 @@ def make_message() -> Message:
     )
 
 
-def test_main_menu_has_persistent_two_column_layout() -> None:
+def test_main_menu_has_persistent_layout_and_workspace_button() -> None:
     keyboard = main_menu_keyboard()
 
     assert keyboard.is_persistent is True
@@ -57,6 +60,7 @@ def test_main_menu_has_persistent_two_column_layout() -> None:
         [WAITING_BUTTON, QUESTIONS_BUTTON],
         [PEOPLE_BUTTON, TOPICS_BUTTON],
         [SEARCH_BUTTON, SETTINGS_BUTTON],
+        [WORKSPACE_BUTTON],
     ]
 
 
@@ -223,7 +227,11 @@ async def test_cancel_command_cancels_active_search_action() -> None:
         status="cancelled",
     )
     session.commit.assert_awaited_once()
-    answer.assert_awaited_once_with("Текущее действие отменено.")
+    answer.assert_awaited_once()
+    call = answer.await_args
+    assert call is not None
+    assert call.args == ("Текущее действие отменено.",)
+    assert call.kwargs["reply_markup"].is_persistent is True
 
 
 def make_search_intent(*, confidence: float = 0.95) -> SearchIntent:

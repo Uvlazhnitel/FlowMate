@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.provider import MeetingReviewProvider
 from flowmate.bot.handlers.meeting_review import send_review_summary
+from flowmate.bot.menu import answer_with_main_menu, restore_main_menu
 from flowmate.db.models import Meeting, MeetingSetupSession, Person, Topic
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.meetings.enums import MeetingType
@@ -269,6 +270,7 @@ async def meeting_title_reply(
     await message.answer(
         await _setup_summary(db_session, meeting_setup), reply_markup=setup_keyboard()
     )
+    await restore_main_menu(message)
 
 
 async def _selection_keyboard(
@@ -425,7 +427,7 @@ async def meeting_callback(
             )
         elif data == "mt:abort":
             await finish_setup(db_session, setup, status="cancelled")
-            await message.answer("Настройка встречи отменена.")
+            await answer_with_main_menu(message, "Настройка встречи отменена.")
         elif data == "mt:confirm":
             now = meeting_now()
             meeting_type = MeetingType(str(setup.context["type"]))
@@ -466,7 +468,9 @@ async def meeting_callback(
             await finish_setup(
                 db_session, setup, status="completed", meeting_id=meeting.id
             )
-            await message.answer("Meeting Mode активен.\n" + format_meeting(meeting))
+            await answer_with_main_menu(
+                message, "Meeting Mode активен.\n" + format_meeting(meeting)
+            )
         await db_session.commit()
         await callback.answer()
     except (ValueError, KeyError, ActiveMeetingExistsError, SQLAlchemyError):

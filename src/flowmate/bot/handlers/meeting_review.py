@@ -20,6 +20,7 @@ from flowmate.ai.errors import AIError
 from flowmate.ai.provider import MeetingReviewProvider
 from flowmate.ai.schemas import DraftSource
 from flowmate.ai.service import DraftParsingService
+from flowmate.bot.menu import restore_main_menu
 from flowmate.db.models import MeetingReview, MeetingReviewItem
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.meetings.review import (
@@ -160,7 +161,7 @@ async def _next_question(
         review.current_question = None
         review.current_question_message_id = None
         await session.flush()
-        await message.answer("Критических уточнений больше нет.")
+        await restore_main_menu(message, "Критических уточнений больше нет.")
         return False
     question = item.clarification_question or f"Уточните пункт: {item.title}"
     prompt = await message.answer(question, reply_markup=ForceReply(selective=True))
@@ -208,6 +209,7 @@ async def meeting_review_callback(
             refreshed = await get_review(db_session, user.id, meeting_id)
             if refreshed is not None:
                 await send_review_summary(message, db_session, refreshed)
+            await restore_main_menu(message, "Итог встречи сохранён.")
             await callback.answer()
             return
         else:

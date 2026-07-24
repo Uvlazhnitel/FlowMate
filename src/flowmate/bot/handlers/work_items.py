@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.errors import AIError
 from flowmate.ai.schemas import ManagementAction, ManagementIntent, TemporalStatus
+from flowmate.bot.menu import answer_with_main_menu
 from flowmate.db.drafts import get_active_draft_for_user
 from flowmate.db.models import WorkItem, WorkItemActionSession
 from flowmate.db.users import get_user_by_telegram_id
@@ -406,6 +407,30 @@ async def send_details(
     return True
 
 
+async def refresh_work_item_card(
+    message: Message,
+    session: AsyncSession,
+    user_id: UUID,
+    item: WorkItem,
+    timezone: ZoneInfo,
+) -> None:
+    try:
+        await send_details(message, session, user_id, item, timezone, edit=True)
+        return
+    except TelegramAPIError:
+        logger.warning(
+            "telegram_work_item_card_edit_failed item_id=%s category=telegram",
+            item.id,
+        )
+    try:
+        await send_details(message, session, user_id, item, timezone)
+    except TelegramAPIError:
+        logger.error(
+            "telegram_work_item_card_send_failed item_id=%s category=telegram",
+            item.id,
+        )
+
+
 def parse_work_item_callback(data: str | None) -> tuple[str, UUID, str | None] | None:
     if data is None:
         return None
@@ -552,6 +577,7 @@ async def work_item_callback(
     notification_defaults: NotificationDefaults,
     reminder_policy: ReminderPolicy | None = None,
 ) -> None:
+    callback_acknowledged = False
     parsed = parse_work_item_callback(callback_query.data)
     message = callback_query.message
     telegram_user = callback_query.from_user
@@ -680,6 +706,27 @@ async def work_item_callback(
             )
             await callback_query.answer("Жду ответ.")
             return
+        mutating_actions = {
+            "c",
+            "x",
+            "o",
+            "a",
+            "g",
+            "f",
+            "rt",
+            "rm",
+            "rw",
+            "z15",
+            "z1",
+            "z3",
+            "zt",
+            "zd",
+        }
+        if action not in mutating_actions:
+            await callback_query.answer("Действие недоступно.")
+            return
+        await callback_query.answer("Обрабатываю…")
+        callback_acknowledged = True
         update_id = event_update.update_id
         preferences = await get_effective_notification_preferences(
             db_session, user.id, notification_defaults
@@ -798,21 +845,39 @@ async def work_item_callback(
             )
             result = None
             response = "Напоминание отложено." if changed else "Уже выполнено."
-        else:
-            await callback_query.answer("Действие недоступно.")
-            return
         await db_session.commit()
-        await send_details(message, db_session, user.id, item, app_timezone, edit=True)
-        await callback_query.answer(
-            response if result is None or result.changed else "Действие уже выполнено."
+        await refresh_work_item_card(
+            message,
+            db_session,
+            user.id,
+            item,
+            app_timezone,
+        )
+        await answer_with_main_menu(
+            message,
+            response if result is None or result.changed else "Действие уже выполнено.",
         )
     except (StaleWorkItemError, StaleReminderError):
         await db_session.rollback()
-        await send_details(message, db_session, user.id, item, app_timezone, edit=True)
-        await callback_query.answer("Карточка обновлена.", show_alert=True)
+        await refresh_work_item_card(
+            message,
+            db_session,
+            user.id,
+            item,
+            app_timezone,
+        )
+        if callback_acknowledged:
+            await answer_with_main_menu(message, "Карточка обновлена.")
+        else:
+            await callback_query.answer("Карточка обновлена.", show_alert=True)
     except (InvalidWorkItemTransitionError, ValueError):
         await db_session.rollback()
-        await callback_query.answer("Это действие сейчас недоступно.", show_alert=True)
+        if callback_acknowledged:
+            await answer_with_main_menu(message, "Это действие сейчас недоступно.")
+        else:
+            await callback_query.answer(
+                "Это действие сейчас недоступно.", show_alert=True
+            )
     except SQLAlchemyError:
         await db_session.rollback()
         logger.error(
@@ -820,7 +885,12 @@ async def work_item_callback(
             telegram_user.id,
             action,
         )
-        await callback_query.answer("Не удалось выполнить действие.", show_alert=True)
+        if callback_acknowledged:
+            await answer_with_main_menu(message, "Не удалось выполнить действие.")
+        else:
+            await callback_query.answer(
+                "Не удалось выполнить действие.", show_alert=True
+            )
 
 
 async def action_session_message(
@@ -1032,7 +1102,7 @@ async def action_session_message(
                         "telegram_work_item_card_refresh_failed user_id=%s",
                         message.from_user.id if message.from_user else 0,
                     )
-        await message.answer(response)
+        await answer_with_main_menu(message, response)
     except AmbiguousManagementCandidateError as error:
         await db_session.rollback()
         message_text = (

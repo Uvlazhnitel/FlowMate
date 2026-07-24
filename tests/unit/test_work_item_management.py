@@ -7,6 +7,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +28,7 @@ from flowmate.bot.handlers.work_items import (
     next_working_day,
     parse_user_datetime,
     parse_work_item_callback,
+    refresh_work_item_card,
     reschedule_options_keyboard,
     start_input_session,
     work_item_callback,
@@ -244,6 +246,15 @@ async def test_complete_callback_commits_and_refreshes_card() -> None:
         morning_digest_time=time(9),
         default_snooze_minutes=60,
     )
+    events: list[str] = []
+
+    async def acknowledge(*_: object, **__: object) -> None:
+        events.append("acknowledged")
+
+    async def complete(*_: object, **__: object) -> SimpleNamespace:
+        events.append("completed")
+        return SimpleNamespace(changed=True)
+
     with (
         patch(
             "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
@@ -267,13 +278,18 @@ async def test_complete_callback_commits_and_refreshes_card() -> None:
         ),
         patch(
             "flowmate.bot.handlers.work_items.complete_work_item",
-            new=AsyncMock(return_value=SimpleNamespace(changed=True)),
+            new=AsyncMock(side_effect=complete),
         ) as complete,
         patch(
             "flowmate.bot.handlers.work_items.send_details",
             new=AsyncMock(return_value=True),
         ) as refresh,
-        patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
+        patch.object(
+            CallbackQuery,
+            "answer",
+            new=AsyncMock(side_effect=acknowledge),
+        ) as answer,
+        patch.object(Message, "answer", new_callable=AsyncMock) as message_answer,
     ):
         await work_item_callback(
             callback,
@@ -295,7 +311,13 @@ async def test_complete_callback_commits_and_refreshes_card() -> None:
     refresh_call = refresh.await_args
     assert refresh_call is not None
     assert refresh_call.kwargs["edit"] is True
-    answer.assert_awaited_once_with("Запись завершена.")
+    answer.assert_awaited_once_with("Обрабатываю…")
+    assert events == ["acknowledged", "completed"]
+    message_answer.assert_awaited_once()
+    response_call = message_answer.await_args
+    assert response_call is not None
+    assert response_call.args == ("Запись завершена.",)
+    assert response_call.kwargs["reply_markup"].is_persistent is True
 
 
 @pytest.mark.asyncio
@@ -335,6 +357,7 @@ async def test_stale_callback_only_refreshes_current_card() -> None:
             new=AsyncMock(return_value=True),
         ) as refresh,
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
+        patch.object(Message, "answer", new_callable=AsyncMock) as message_answer,
     ):
         await work_item_callback(
             callback,
@@ -348,7 +371,38 @@ async def test_stale_callback_only_refreshes_current_card() -> None:
     cast(AsyncMock, session.commit).assert_not_awaited()
     cast(AsyncMock, session.rollback).assert_awaited_once()
     refresh.assert_awaited_once()
-    answer.assert_awaited_once_with("Карточка обновлена.", show_alert=True)
+    answer.assert_awaited_once_with("Обрабатываю…")
+    message_answer.assert_awaited_once()
+    response_call = message_answer.await_args
+    assert response_call is not None
+    assert response_call.args == ("Карточка обновлена.",)
+    assert response_call.kwargs["reply_markup"].is_persistent is True
+
+
+@pytest.mark.asyncio
+async def test_card_refresh_sends_new_card_when_edit_fails() -> None:
+    details = make_details()
+    message = make_message("card")
+    session = MagicMock(spec=AsyncSession)
+    telegram_error = TelegramAPIError(
+        method=MagicMock(),
+        message="message cannot be edited",
+    )
+    with patch(
+        "flowmate.bot.handlers.work_items.send_details",
+        new=AsyncMock(side_effect=(telegram_error, True)),
+    ) as send:
+        await refresh_work_item_card(
+            message,
+            cast(AsyncSession, session),
+            details.item.user_id,
+            details.item,
+            ZoneInfo("UTC"),
+        )
+
+    assert send.await_count == 2
+    assert send.await_args_list[0].kwargs["edit"] is True
+    assert "edit" not in send.await_args_list[1].kwargs
 
 
 @pytest.mark.asyncio

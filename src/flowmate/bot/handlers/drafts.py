@@ -28,6 +28,7 @@ from flowmate.ai.schemas import (
 )
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.formatting import split_plain_text
+from flowmate.bot.menu import restore_main_menu
 from flowmate.db.drafts import (
     claim_update,
     clear_processing_update,
@@ -60,7 +61,6 @@ DRAFT_NOT_FOUND_MESSAGE = "Активный черновик не найден."
 DRAFT_BUSY_MESSAGE = "Предыдущий ответ ещё обрабатывается."
 DRAFT_REPLY_REQUIRED_MESSAGE = "Ответьте на текущее уточнение через Reply."
 DRAFT_CHANGE_QUESTION = "Что изменить в черновике?"
-NEXT_CAPTURE_MESSAGE = "Можно записать следующий пункт."
 
 ITEM_TYPE_LABELS = {
     DraftItemType.TASK: "задача",
@@ -84,17 +84,6 @@ TEMPORAL_STATUS_LABELS = {
 }
 
 logger = logging.getLogger(__name__)
-
-
-async def restore_main_menu(message: Message) -> None:
-    # Import locally to keep draft and navigation handlers independently importable.
-    from flowmate.bot.handlers.navigation import main_menu_keyboard
-
-    await message.answer(
-        NEXT_CAPTURE_MESSAGE,
-        parse_mode=None,
-        reply_markup=main_menu_keyboard(),
-    )
 
 
 async def mark_draft_failed_safely(
@@ -429,6 +418,8 @@ async def refine_draft(
         return
 
     await show_draft(message, claimed_draft, db_session)
+    if question is None:
+        await restore_main_menu(message)
 
 
 def parse_callback_data(data: str | None) -> tuple[str, UUID, int | None] | None:
