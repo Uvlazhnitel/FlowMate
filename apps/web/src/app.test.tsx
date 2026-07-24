@@ -78,6 +78,36 @@ afterEach(() => {
 });
 
 describe("protected application", () => {
+  it("switches between Personal and Work from the application shell", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = requestPath(input);
+      if (path.includes("/api/v1/auth/me")) {
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      }
+      if (path.includes("/api/v1/workspace")) {
+        return Promise.resolve(
+          jsonResponse({ ...authenticatedUser, active_workspace: "work" }),
+        );
+      }
+      return Promise.resolve(emptyOperationalResponse(path));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApplication("/dashboard");
+    await screen.findByRole("heading", { name: "Обзор" });
+    const workButton = screen.getAllByRole("button", { name: "Работа" }).at(0);
+    expect(workButton).toBeDefined();
+    if (workButton === undefined) return;
+    await userEvent.click(workButton);
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) => requestPath(input) === "/api/v1/workspace"),
+      ).toBe(true);
+    });
+    expect(workButton).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("shows a loading state while the session is being checked", async () => {
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => undefined)));
 

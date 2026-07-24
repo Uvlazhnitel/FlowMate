@@ -356,6 +356,48 @@ h2 {
   background: rgba(255, 255, 255, 0.11);
   box-shadow: inset 3px 0 var(--coral);
 }
+.workspace-switcher {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 18px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.workspace-switcher button {
+  min-height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.66);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.workspace-switcher button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.workspace-switcher .workspace-switcher__active {
+  background: var(--paper-strong);
+  color: var(--forest);
+  font-weight: 750;
+}
+.workspace-switcher__error,
+.workspace-switcher__mobile-error {
+  margin: 8px 2px 0;
+  color: #ffd1c4;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.workspace-switcher__mobile-error {
+  margin: 0;
+  padding: 8px 20px;
+  background: #8c382b;
+  color: white;
+}
 .profile-chip {
   margin-top: auto;
   display: flex;
@@ -1051,6 +1093,10 @@ h2 {
     justify-content: space-between;
     background: var(--forest);
     color: white;
+  }
+  .mobile-header .workspace-switcher {
+    width: min(42vw, 180px);
+    margin: 0;
   }
   .mobile-nav {
     position: fixed;

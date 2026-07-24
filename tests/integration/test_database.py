@@ -250,7 +250,8 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
     assert {constraint["name"] for constraint in check_constraints} >= {
         "ck_users_telegram_user_id_positive"
     }
-    assert revision == "0020_stage8_stabilization"
+    assert columns["active_workspace"]["nullable"] is False
+    assert revision == "0021_workspace_separation"
 
 
 def test_pwa_auth_migration_from_0012(migrated_database: None) -> None:
@@ -308,12 +309,12 @@ async def test_reminder_schema_has_delivery_constraints(
         "ck_reminders_managed_reference",
     }
     assert {constraint["name"] for constraint in uniques} >= {
-        "uq_reminders_user_deduplication_key",
-        "uq_reminders_user_digest_local_date",
+        "uq_reminders_user_workspace_deduplication_key",
+        "uq_reminders_user_workspace_digest_local_date",
     }
     assert {index["name"] for index in indexes} >= {
         "ix_reminders_status_scheduled_at",
-        "ix_reminders_user_status",
+        "ix_reminders_user_workspace_status",
         "ix_reminders_work_item_id",
         "ix_reminders_work_item_status_kind",
     }
@@ -401,7 +402,9 @@ async def test_notes_schema_matches_metadata(database_engine: AsyncEngine) -> No
         "fk_notes_source_draft_item_id_draft_items",
         "fk_notes_user_id_users",
     }
-    assert {index["name"] for index in indexes} >= {"ix_notes_user_id_created_at"}
+    assert {index["name"] for index in indexes} >= {
+        "ix_notes_user_workspace_created_at"
+    }
 
 
 @pytest.mark.integration
@@ -436,7 +439,7 @@ async def test_draft_schema_has_state_and_ownership_constraints(
     }
     assert {index["name"] for index in session_indexes} >= {
         "ix_draft_sessions_expires_at",
-        "ix_draft_sessions_user_status",
+        "ix_draft_sessions_user_workspace_status",
         "uq_draft_sessions_user_open",
     }
     assert {constraint["name"] for constraint in item_checks} >= {
@@ -524,8 +527,8 @@ async def test_task_engine_schema_has_core_constraints(
         "uq_work_items_source_draft_item_id"
     }
     assert {index["name"] for index in topic_indexes} >= {
-        "ix_topics_user_active",
-        "uq_topics_user_normalized_name",
+        "ix_topics_user_workspace_active",
+        "uq_topics_user_workspace_normalized_name",
     }
     assert {constraint["name"] for constraint in note_link_checks} >= {
         "ck_note_links_one_target"

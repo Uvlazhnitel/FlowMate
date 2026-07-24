@@ -7,6 +7,7 @@ export interface AuthenticatedUser {
   default_snooze_minutes: number;
   date_display_format: "day_month_year" | "year_month_day";
   time_display_format: "24h" | "12h";
+  active_workspace: "personal" | "work";
 }
 
 export interface LoginCodeResponse {
@@ -33,4 +34,13 @@ export function getCurrentUser(): Promise<AuthenticatedUser> {
 
 export function logout(): Promise<void> {
   return apiRequest<void>("/api/v1/auth/session", { method: "DELETE" });
+}
+
+export function setWorkspace(
+  workspace: AuthenticatedUser["active_workspace"],
+): Promise<AuthenticatedUser> {
+  return apiRequest<AuthenticatedUser>("/api/v1/workspace", {
+    method: "PUT",
+    body: JSON.stringify({ workspace }),
+  });
 }

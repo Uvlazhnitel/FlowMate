@@ -91,7 +91,11 @@ async def _lock_owner(session: AsyncSession, settings: Settings) -> User:
     configured = _configured_settings(settings)
     telegram_user_id = configured.pwa_telegram_user_id
     assert telegram_user_id is not None
-    user, _ = await get_or_create_telegram_user(session, telegram_user_id)
+    user, _ = await get_or_create_telegram_user(
+        session,
+        telegram_user_id,
+        active_workspace=configured.app_active_workspace,
+    )
     locked = await session.scalar(
         select(User).where(User.id == user.id).with_for_update()
     )

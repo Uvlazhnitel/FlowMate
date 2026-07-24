@@ -171,9 +171,13 @@ class AIRecoveryProcessor:
                 timezone=timezone,
                 current_datetime=draft.created_at,
                 meeting=meeting_context,
+                active_workspace=draft.workspace,
             )
         analysis = await self._parsing_service.parse(
-            note.content, source=source, context=context
+            note.content,
+            source=source,
+            context=context,
+            active_workspace=draft.workspace,
         )
         await replace_draft_analysis(
             session,

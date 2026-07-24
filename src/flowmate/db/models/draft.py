@@ -21,12 +21,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from flowmate.db.base import Base
+from flowmate.workspaces import WORKSPACE_VALUES, WorkspaceScoped
 
 OPEN_DRAFT_STATUSES = ("parsing", "needs_clarification", "ready")
 DRAFT_STATUSES = (*OPEN_DRAFT_STATUSES, "confirmed", "cancelled", "expired", "failed")
 
 
-class DraftSession(Base):
+class DraftSession(WorkspaceScoped, Base):
     __tablename__ = "draft_sessions"
     __table_args__ = (
         CheckConstraint(
@@ -34,10 +35,19 @@ class DraftSession(Base):
             name="ck_draft_sessions_status",
         ),
         CheckConstraint(
+            f"workspace IN {WORKSPACE_VALUES!r}",
+            name="ck_draft_sessions_workspace",
+        ),
+        CheckConstraint(
             "expires_at > created_at",
             name="ck_draft_sessions_expiration",
         ),
-        Index("ix_draft_sessions_user_status", "user_id", "status"),
+        Index(
+            "ix_draft_sessions_user_workspace_status",
+            "user_id",
+            "workspace",
+            "status",
+        ),
         Index("ix_draft_sessions_expires_at", "expires_at"),
         Index(
             "uq_draft_sessions_user_open",

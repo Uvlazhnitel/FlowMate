@@ -86,6 +86,7 @@ async def _meeting_context(
     return {
         "meeting_id": str(meeting.id),
         "meeting_type": meeting.type,
+        "workspace": meeting.workspace,
         "timezone": timezone,
         "captured_at": captured_at.isoformat(),
         "participants": [
@@ -142,6 +143,8 @@ async def create_capture(
     )
     if meeting is None:
         raise CaptureConflictError("active meeting not found")
+    if note.workspace != meeting.workspace:
+        raise ValueError("note not found")
     last_sequence = await session.scalar(
         select(func.max(DraftSession.capture_sequence)).where(
             DraftSession.meeting_id == meeting.id,

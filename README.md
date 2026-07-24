@@ -128,6 +128,10 @@ for stable unified Timeline pagination.
 Migration `0020_stage8_stabilization` adds persistent Telegram receipts,
 PostgreSQL-backed AI recovery jobs, safe audit events, prompt versions,
 transcript redaction metadata, and an explicit unknown-delivery reminder state.
+Migration `0021_workspace_separation` persists `personal` and `work` on users,
+topics, work items, notes, drafts, meetings, reminders, and dialog sessions.
+Existing data is assigned to `personal`; topic names are unique within each
+workspace rather than across the whole user account.
 
 ## PWA and Login
 
@@ -152,6 +156,24 @@ items through the existing Task Engine and reminder services.
 Text or voice clarification answers update only the referenced structured
 capture item and its review projection. Failed parsing leaves that item pending;
 successful confirmation remains atomic and idempotent.
+
+### Work and Personal
+
+FlowMate has two database-backed spaces: `Личное` (`personal`) and `Работа`
+(`work`). Select the current space in the PWA shell or with Telegram command
+`/workspace`. Dashboard, Today, Topics, Agenda, Inbox, Planner Queue, Timeline,
+Meetings, notes, search, and new captures use only that space. People and
+notification preferences are shared, while each person's operational counts
+and history are calculated for the current space.
+
+Draft conversion keeps the draft's space, and meeting results keep the
+meeting's space. Reminders retain their record's space and continue to fire
+after switching; daily digests are generated separately and include the space
+name. Switching is rejected while a meeting, draft, clarification, setup, or
+free-form action is active so a reply cannot cross contexts. Existing final
+records cannot yet be moved between spaces. `APP_ACTIVE_WORKSPACE` accepts only
+`personal` or `work` and is used as the default for a newly created user; the
+database value becomes authoritative afterwards.
 
 Typical Telegram flow:
 

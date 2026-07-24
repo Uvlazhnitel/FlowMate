@@ -163,12 +163,16 @@ class DraftParsingService:
         *,
         source: DraftSource,
         context: DraftInputContext | None = None,
+        active_workspace: str | None = None,
     ) -> DraftAnalysisResult:
         normalized = user_text.strip()
         if not normalized:
             raise AIInvalidResponseError("note text must not be empty")
 
-        parse_context = context or self._build_context(source)
+        parse_context = context or self._build_context(
+            source,
+            active_workspace=active_workspace,
+        )
         return await self._parse_with_prompt(
             user_text=normalized,
             system_prompt=build_system_prompt(parse_context),
@@ -214,11 +218,16 @@ class DraftParsingService:
     async def parse_text(
         self,
         user_text: str,
+        *,
+        active_workspace: str | None = None,
     ) -> DraftAnalysisResult | ManagementIntent | SearchIntent:
         normalized = user_text.strip()
         if not normalized:
             raise AIInvalidResponseError("note text must not be empty")
-        context = self._build_context(DraftSource.TEXT)
+        context = self._build_context(
+            DraftSource.TEXT,
+            active_workspace=active_workspace,
+        )
         if not isinstance(self._provider, TextRoutingProvider):
             raise AIInvalidResponseError("AI provider does not support text routing")
         try:
@@ -248,11 +257,16 @@ class DraftParsingService:
             clarification_threshold=self._clarification_confidence_threshold,
         )
 
-    def _build_context(self, source: DraftSource) -> DraftInputContext:
+    def _build_context(
+        self,
+        source: DraftSource,
+        *,
+        active_workspace: str | None = None,
+    ) -> DraftInputContext:
         return DraftInputContext(
             current_datetime=self._clock(self._timezone),
             timezone=self._timezone.key,
-            active_workspace=self._active_workspace,
+            active_workspace=active_workspace or self._active_workspace,
             channel="telegram",
             source=source,
         )
@@ -264,11 +278,12 @@ class DraftParsingService:
         timezone: ZoneInfo,
         current_datetime: datetime,
         meeting: MeetingDraftContext,
+        active_workspace: str | None = None,
     ) -> DraftInputContext:
         return DraftInputContext(
             current_datetime=current_datetime.astimezone(timezone),
             timezone=timezone.key,
-            active_workspace=self._active_workspace,
+            active_workspace=active_workspace or self._active_workspace,
             channel="telegram",
             source=source,
             meeting=meeting,

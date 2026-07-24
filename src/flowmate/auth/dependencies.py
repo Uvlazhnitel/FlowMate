@@ -14,6 +14,7 @@ from flowmate.auth.pwa import (
 )
 from flowmate.core.config import Settings, get_settings
 from flowmate.db.models import PwaSession, User
+from flowmate.workspaces import activate_workspace
 
 
 class PwaSessionExpired(HTTPException):
@@ -54,6 +55,11 @@ async def require_pwa_session(
         )
     except InvalidPwaSessionError as error:
         raise PwaSessionExpired from error
+    activate_workspace(
+        session,
+        user_id=user.id,
+        workspace=user.active_workspace,
+    )
     return PwaIdentity(session=pwa_session, user=user)
 
 

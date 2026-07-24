@@ -18,13 +18,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from flowmate.db.base import Base
 from flowmate.reminders.enums import ReminderScheduleKind, ReminderStatus, ReminderType
+from flowmate.workspaces import WORKSPACE_VALUES, WorkspaceScoped
 
 REMINDER_TYPES = tuple(value.value for value in ReminderType)
 REMINDER_STATUSES = tuple(value.value for value in ReminderStatus)
 REMINDER_SCHEDULE_KINDS = tuple(value.value for value in ReminderScheduleKind)
 
 
-class Reminder(Base):
+class Reminder(WorkspaceScoped, Base):
     __tablename__ = "reminders"
     __table_args__ = (
         CheckConstraint(
@@ -38,6 +39,10 @@ class Reminder(Base):
         CheckConstraint(
             f"schedule_kind IN {REMINDER_SCHEDULE_KINDS!r}",
             name="ck_reminders_schedule_kind",
+        ),
+        CheckConstraint(
+            f"workspace IN {WORKSPACE_VALUES!r}",
+            name="ck_reminders_workspace",
         ),
         CheckConstraint(
             "schedule_kind = 'manual' OR reference_at IS NOT NULL",
@@ -57,17 +62,24 @@ class Reminder(Base):
         ),
         UniqueConstraint(
             "user_id",
+            "workspace",
             "deduplication_key",
-            name="uq_reminders_user_deduplication_key",
+            name="uq_reminders_user_workspace_deduplication_key",
         ),
         UniqueConstraint(
             "user_id",
+            "workspace",
             "type",
             "digest_local_date",
-            name="uq_reminders_user_digest_local_date",
+            name="uq_reminders_user_workspace_digest_local_date",
         ),
         Index("ix_reminders_status_scheduled_at", "status", "scheduled_at"),
-        Index("ix_reminders_user_status", "user_id", "status"),
+        Index(
+            "ix_reminders_user_workspace_status",
+            "user_id",
+            "workspace",
+            "status",
+        ),
         Index("ix_reminders_work_item_id", "work_item_id"),
         Index(
             "ix_reminders_work_item_status_kind",

@@ -19,6 +19,7 @@ SAFE_METADATA_KEYS = {
     "prompt_version",
     "reason",
     "status",
+    "workspace",
 }
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 

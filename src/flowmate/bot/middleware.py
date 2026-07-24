@@ -7,11 +7,13 @@ from aiogram.types import CallbackQuery, Message, TelegramObject, Update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from flowmate.db.session import session_scope
+from flowmate.db.users import get_user_by_telegram_id
 from flowmate.stabilization.idempotency import (
     claim_telegram_update,
     complete_telegram_update,
     fail_telegram_update,
 )
+from flowmate.workspaces import activate_workspace
 
 Handler = Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]]
 
@@ -65,6 +67,29 @@ class DatabaseSessionMiddleware(BaseMiddleware):
             data["db_session"] = session
             data["db_engine"] = self.engine
             return await handler(event, data)
+
+
+class WorkspaceContextMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Handler,
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        session = data.get("db_session")
+        telegram_user = (
+            event.from_user if isinstance(event, Message | CallbackQuery) else None
+        )
+        if isinstance(session, AsyncSession) and telegram_user is not None:
+            user = await get_user_by_telegram_id(session, telegram_user.id)
+            if user is not None:
+                activate_workspace(
+                    session,
+                    user_id=user.id,
+                    workspace=user.active_workspace,
+                )
+                data["flowmate_user"] = user
+        return await handler(event, data)
 
 
 class PersistentUpdateMiddleware(BaseMiddleware):

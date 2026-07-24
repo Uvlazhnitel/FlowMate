@@ -16,9 +16,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from flowmate.db.base import Base
+from flowmate.workspaces import WORKSPACE_VALUES, WorkspaceScoped
 
 
-class Note(Base):
+class Note(WorkspaceScoped, Base):
     __tablename__ = "notes"
     __table_args__ = (
         UniqueConstraint(
@@ -49,10 +50,20 @@ class Note(Base):
             "inbox_disposition IN ('pending', 'kept', 'archived')",
             name="ck_notes_inbox_disposition",
         ),
-        Index("ix_notes_user_id_created_at", "user_id", "created_at"),
+        CheckConstraint(
+            f"workspace IN {WORKSPACE_VALUES!r}",
+            name="ck_notes_workspace",
+        ),
         Index(
-            "ix_notes_user_inbox_disposition",
+            "ix_notes_user_workspace_created_at",
             "user_id",
+            "workspace",
+            "created_at",
+        ),
+        Index(
+            "ix_notes_user_workspace_inbox_disposition",
+            "user_id",
+            "workspace",
             "inbox_disposition",
             "created_at",
         ),

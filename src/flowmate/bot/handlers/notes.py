@@ -35,6 +35,7 @@ from flowmate.db.users import get_or_create_telegram_user, get_user_by_telegram_
 from flowmate.meetings.service import link_note_to_active_meeting
 from flowmate.reminders.sync import ReminderPolicy
 from flowmate.task_engine.intents import management_update_was_processed
+from flowmate.workspaces import active_workspace
 
 NOTE_SAVED_MESSAGE = "Заметка сохранена."
 NOTE_ALREADY_SAVED_MESSAGE = "Заметка уже сохранена."
@@ -70,6 +71,7 @@ async def save_note_for_message(
     source: NoteSource,
     create_draft: bool = False,
     draft_ttl_hours: int = 24,
+    default_workspace: str = "personal",
 ) -> NoteSaveOutcome:
     telegram_user = message.from_user
     if telegram_user is None:
@@ -80,6 +82,7 @@ async def save_note_for_message(
             db_session,
             telegram_user.id,
             display_name=telegram_user.full_name[:255],
+            active_workspace=default_workspace,
         )
         note, created = await create_note_idempotently(
             db_session,
@@ -133,6 +136,7 @@ async def text_note(
     work_item_action_ttl_minutes: int = 30,
     app_timezone: ZoneInfo | None = None,
     reminder_policy: ReminderPolicy | None = None,
+    default_workspace: str = "personal",
 ) -> None:
     content = message.text.strip() if message.text is not None else ""
     if not content:
@@ -173,7 +177,15 @@ async def text_note(
     routed: DraftAnalysisResult | ManagementIntent | SearchIntent | None = None
     if draft_parsing_service is not None:
         try:
-            routed = await draft_parsing_service.parse_text(content)
+            workspace = active_workspace(db_session)
+            routed = (
+                await draft_parsing_service.parse_text(
+                    content,
+                    active_workspace=workspace,
+                )
+                if workspace is not None
+                else await draft_parsing_service.parse_text(content)
+            )
         except AIError as error:
             logger.warning(
                 "telegram_text_routing_failed user_id=%s category=%s",
@@ -230,6 +242,7 @@ async def text_note(
         source="text",
         create_draft=isinstance(routed, DraftAnalysisResult),
         draft_ttl_hours=draft_ttl_hours,
+        default_workspace=default_workspace,
     )
     if result.status == "failed":
         await message.answer(NOTE_SAVE_FAILED_MESSAGE)
@@ -252,6 +265,7 @@ async def text_note(
             draft=result.draft,
             draft_ttl_hours=draft_ttl_hours,
             precomputed_result=routed,
+            active_workspace=result.draft.workspace,
         )
     elif draft_parsing_service is not None and routed is None:
         await message.answer(NOTE_SAVED_MESSAGE)

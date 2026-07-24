@@ -48,6 +48,7 @@ async def voice_message(
     transcription_service: TranscriptionService | None,
     draft_parsing_service: DraftParsingService | None = None,
     draft_ttl_hours: int = 24,
+    default_workspace: str = "personal",
 ) -> None:
     voice = message.voice
     telegram_user = message.from_user
@@ -126,6 +127,7 @@ async def voice_message(
         source="voice",
         create_draft=draft_parsing_service is not None,
         draft_ttl_hours=draft_ttl_hours,
+        default_workspace=default_workspace,
     )
     if save_result.status == "failed":
         await message.answer(NOTE_SAVE_FAILED_MESSAGE)
@@ -150,4 +152,5 @@ async def voice_message(
         db_session=db_session,
         draft=save_result.draft,
         draft_ttl_hours=draft_ttl_hours,
+        active_workspace=save_result.draft.workspace,
     )

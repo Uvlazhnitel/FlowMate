@@ -116,10 +116,15 @@ async def test_daily_digest_is_unique_and_uses_current_work_items(
         defaults=DEFAULTS,
     )
 
-    assert len(values) == 1
-    assert values[0].digest_local_date is not None
-    assert values[0].digest_local_date.isoformat() == "2026-07-22"
-    assert values[0].schedule_timezone == "UTC"
+    assert len(values) == 2
+    assert {value.workspace for value in values} == {"personal", "work"}
+    assert all(value.digest_local_date is not None for value in values)
+    assert all(
+        value.digest_local_date is not None
+        and value.digest_local_date.isoformat() == "2026-07-22"
+        for value in values
+    )
+    assert all(value.schedule_timezone == "UTC" for value in values)
     assert snapshot.due_today == 1
     assert snapshot.questions == 1
     assert message is not None and "На сегодня: 1" in message

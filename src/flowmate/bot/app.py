@@ -55,6 +55,7 @@ def create_dispatcher(
             None,
             timeout_seconds=settings.ai_timeout_seconds,
         ),
+        default_workspace=settings.app_active_workspace,
     )
     dispatcher.include_router(
         create_router(settings.telegram_allowed_user_ids, session_factory, engine)

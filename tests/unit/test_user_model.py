@@ -41,4 +41,6 @@ def test_note_model_shape() -> None:
         "ck_notes_source",
         "ck_notes_content_or_redacted",
     } <= {constraint.name for constraint in table.constraints}
-    assert "ix_notes_user_id_created_at" in {index.name for index in table.indexes}
+    assert "ix_notes_user_workspace_created_at" in {
+        index.name for index in table.indexes
+    }

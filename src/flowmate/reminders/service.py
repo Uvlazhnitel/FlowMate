@@ -48,6 +48,7 @@ class ReminderDelivery:
     message: str | None
     user_id: UUID | None = None
     timezone: str = "UTC"
+    workspace: str = "personal"
 
 
 def validate_aware_datetime(value: datetime, field_name: str) -> None:
@@ -337,6 +338,7 @@ async def get_claimed_reminder_delivery(
                 and_(
                     WorkItem.id == Reminder.work_item_id,
                     WorkItem.user_id == Reminder.user_id,
+                    WorkItem.workspace == Reminder.workspace,
                 ),
             )
             .outerjoin(
@@ -344,6 +346,7 @@ async def get_claimed_reminder_delivery(
                 and_(
                     Topic.id == WorkItem.topic_id,
                     Topic.user_id == Reminder.user_id,
+                    Topic.workspace == Reminder.workspace,
                 ),
             )
             .where(
@@ -455,6 +458,7 @@ async def get_claimed_reminder_delivery(
         message=reminder.message,
         user_id=reminder.user_id,
         timezone=preferences.timezone,
+        workspace=reminder.workspace,
     )
 
 

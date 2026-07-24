@@ -29,6 +29,7 @@ from flowmate.task_engine.enums import (
     WorkItemStatus,
     WorkItemType,
 )
+from flowmate.workspaces import WORKSPACE_VALUES, WorkspaceScoped
 
 WORK_ITEM_TYPES = tuple(value.value for value in WorkItemType)
 WORK_ITEM_STATUSES = tuple(value.value for value in WorkItemStatus)
@@ -39,17 +40,22 @@ WORK_ITEM_ACTIONS = tuple(value.value for value in WorkItemAction)
 PLANNER_STATUSES = tuple(value.value for value in PlannerStatus)
 
 
-class Topic(Base):
+class Topic(WorkspaceScoped, Base):
     __tablename__ = "topics"
     __table_args__ = (
         CheckConstraint(
             "char_length(btrim(name)) > 0",
             name="ck_topics_name_not_blank",
         ),
-        Index("ix_topics_user_active", "user_id", "is_active"),
+        CheckConstraint(
+            f"workspace IN {WORKSPACE_VALUES!r}",
+            name="ck_topics_workspace",
+        ),
+        Index("ix_topics_user_workspace_active", "user_id", "workspace", "is_active"),
         Index(
-            "uq_topics_user_normalized_name",
+            "uq_topics_user_workspace_normalized_name",
             "user_id",
+            "workspace",
             text("lower(btrim(name))"),
             unique=True,
         ),
@@ -137,7 +143,7 @@ class Person(Base):
     )
 
 
-class WorkItem(Base):
+class WorkItem(WorkspaceScoped, Base):
     __tablename__ = "work_items"
     __table_args__ = (
         UniqueConstraint(
@@ -161,14 +167,23 @@ class WorkItem(Base):
             name="ck_work_items_planner_status",
         ),
         CheckConstraint(
+            f"workspace IN {WORKSPACE_VALUES!r}",
+            name="ck_work_items_workspace",
+        ),
+        CheckConstraint(
             "char_length(btrim(title)) > 0",
             name="ck_work_items_title_not_blank",
         ),
-        Index("ix_work_items_user_status", "user_id", "status"),
-        Index("ix_work_items_user_due_at", "user_id", "due_at"),
+        Index("ix_work_items_user_workspace_status", "user_id", "workspace", "status"),
+        Index("ix_work_items_user_workspace_due_at", "user_id", "workspace", "due_at"),
         Index("ix_work_items_topic_id", "topic_id"),
         Index("ix_work_items_source_note_id", "source_note_id"),
-        Index("ix_work_items_user_planner", "user_id", "planner_status"),
+        Index(
+            "ix_work_items_user_workspace_planner",
+            "user_id",
+            "workspace",
+            "planner_status",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -450,9 +465,13 @@ class WorkItemEvent(Base):
     )
 
 
-class WorkItemActionSession(Base):
+class WorkItemActionSession(WorkspaceScoped, Base):
     __tablename__ = "work_item_action_sessions"
     __table_args__ = (
+        CheckConstraint(
+            f"workspace IN {WORKSPACE_VALUES!r}",
+            name="ck_work_item_action_sessions_workspace",
+        ),
         CheckConstraint(
             f"action IN {WORK_ITEM_ACTIONS!r}",
             name="ck_work_item_action_sessions_action",

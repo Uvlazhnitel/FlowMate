@@ -53,6 +53,8 @@ async def create_parsing_draft(
         source_note_id=source_note_id,
         status="parsing",
         prompt_version=DRAFT_PROMPT_VERSION,
+        created_at=current,
+        updated_at=current,
         expires_at=expires_after(current, ttl_hours),
     )
     session.add(draft)

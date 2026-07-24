@@ -283,6 +283,7 @@ async def test_help_response() -> None:
         "Напоминания: /reminders, /quiet, /snooze. "
         "Встречи: /meeting, /meeting_status, /meeting_notes, /meeting_end, "
         "/meeting_review, /meeting_cancel. "
+        "Пространство: /workspace. "
         "Отправьте текст или голосовое сообщение, чтобы сохранить заметку."
     )
 

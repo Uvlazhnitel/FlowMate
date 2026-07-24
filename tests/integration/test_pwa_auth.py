@@ -374,6 +374,7 @@ async def test_all_pwa_routes_reject_unauthenticated_requests(
     ]
     write_requests: list[tuple[str, str, dict[str, object] | None]] = [
         ("DELETE", "/api/v1/auth/session", None),
+        ("PUT", "/api/v1/workspace", {"workspace": "work"}),
         (
             "POST",
             f"/api/v1/work-items/{identifier}/actions",

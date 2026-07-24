@@ -151,7 +151,7 @@ class Settings(BaseSettings):
         validation_alias="AI_TIMEOUT_SECONDS",
     )
     app_timezone: str = Field(default="UTC", validation_alias="APP_TIMEZONE")
-    app_active_workspace: str = Field(
+    app_active_workspace: Literal["personal", "work"] = Field(
         default="personal",
         validation_alias="APP_ACTIVE_WORKSPACE",
     )
@@ -370,12 +370,12 @@ class Settings(BaseSettings):
             raise ValueError("notification default times must not include timezone")
         return value.replace(second=0, microsecond=0)
 
-    @field_validator("app_active_workspace")
+    @field_validator("app_active_workspace", mode="before")
     @classmethod
     def validate_active_workspace(cls, value: str) -> str:
         normalized = value.strip()
-        if not normalized:
-            raise ValueError("active workspace must not be empty")
+        if normalized not in {"personal", "work"}:
+            raise ValueError("active workspace must be personal or work")
         return normalized
 
     @field_validator("app_port")

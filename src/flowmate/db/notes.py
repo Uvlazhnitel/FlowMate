@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.db.models import Note
+from flowmate.workspaces import Workspace, active_workspace
 
 NoteSource = Literal["text", "voice"]
 
@@ -47,6 +48,7 @@ async def create_note_idempotently(
             content=normalized,
             source=source,
             telegram_update_id=telegram_update_id,
+            workspace=active_workspace(session) or Workspace.PERSONAL.value,
         )
         .on_conflict_do_nothing(constraint="notes_telegram_update_id_key")
         .returning(Note)

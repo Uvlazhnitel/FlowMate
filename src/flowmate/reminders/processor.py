@@ -116,6 +116,7 @@ class ReminderProcessor:
                     delivery.reminder_type,
                     now=self._clock(),
                     defaults=self._notification_defaults,
+                    workspace=delivery.workspace,
                 )
                 if message is None:
                     await cancel_claimed_reminder(

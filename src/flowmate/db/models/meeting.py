@@ -21,17 +21,22 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from flowmate.db.base import Base
 from flowmate.meetings.enums import MeetingEventType, MeetingStatus, MeetingType
+from flowmate.workspaces import WORKSPACE_VALUES, WorkspaceScoped
 
 MEETING_TYPES = tuple(value.value for value in MeetingType)
 MEETING_STATUSES = tuple(value.value for value in MeetingStatus)
 MEETING_EVENT_TYPES = tuple(value.value for value in MeetingEventType)
 
 
-class Meeting(Base):
+class Meeting(WorkspaceScoped, Base):
     __tablename__ = "meetings"
     __table_args__ = (
         CheckConstraint(f"type IN {MEETING_TYPES!r}", name="ck_meetings_type"),
         CheckConstraint(f"status IN {MEETING_STATUSES!r}", name="ck_meetings_status"),
+        CheckConstraint(
+            f"workspace IN {WORKSPACE_VALUES!r}",
+            name="ck_meetings_workspace",
+        ),
         CheckConstraint("char_length(btrim(title)) > 0", name="ck_meetings_title"),
         CheckConstraint(
             "ended_at IS NULL OR started_at IS NULL OR ended_at >= started_at",
@@ -50,8 +55,18 @@ class Meeting(Base):
             "(started_at IS NOT NULL AND ended_at IS NOT NULL)",
             name="ck_meetings_completed_times",
         ),
-        Index("ix_meetings_user_status", "user_id", "status"),
-        Index("ix_meetings_user_started", "user_id", "started_at"),
+        Index(
+            "ix_meetings_user_workspace_status",
+            "user_id",
+            "workspace",
+            "status",
+        ),
+        Index(
+            "ix_meetings_user_workspace_started",
+            "user_id",
+            "workspace",
+            "started_at",
+        ),
         Index(
             "uq_meetings_user_active",
             "user_id",
@@ -214,9 +229,13 @@ class MeetingEvent(Base):
     )
 
 
-class MeetingSetupSession(Base):
+class MeetingSetupSession(WorkspaceScoped, Base):
     __tablename__ = "meeting_setup_sessions"
     __table_args__ = (
+        CheckConstraint(
+            f"workspace IN {WORKSPACE_VALUES!r}",
+            name="ck_meeting_setup_sessions_workspace",
+        ),
         CheckConstraint(
             "status IN ('open', 'completed', 'cancelled', 'expired')",
             name="ck_meeting_setup_sessions_status",

@@ -25,6 +25,7 @@ from flowmate.reminders.sync import ReminderPolicy, sync_work_item_reminders
 from flowmate.reminders.timezone import resolve_local_datetime
 from flowmate.task_engine.enums import WorkItemStatus, WorkItemType
 from flowmate.task_engine.queries import OPEN_STATUSES
+from flowmate.workspaces import WORKSPACE_LABELS, WORKSPACE_VALUES, Workspace
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +65,7 @@ async def build_digest_snapshot(
     *,
     now: datetime,
     preferences: EffectiveNotificationPreferences,
+    workspace: str = Workspace.PERSONAL.value,
 ) -> DigestSnapshot:
     timezone = preferences.zoneinfo
     local_now = now.astimezone(timezone)
@@ -79,6 +81,7 @@ async def build_digest_snapshot(
     ).astimezone(UTC)
     owned_open = (
         WorkItem.user_id == user_id,
+        WorkItem.workspace == workspace,
         WorkItem.status.in_(OPEN_STATUSES),
     )
     ordinary = WorkItem.type.not_in(
@@ -117,6 +120,7 @@ async def build_digest_snapshot(
             inbox=await _count(
                 session,
                 WorkItem.user_id == user_id,
+                WorkItem.workspace == workspace,
                 WorkItem.status == WorkItemStatus.INBOX.value,
             ),
         )
@@ -150,10 +154,13 @@ async def build_digest_snapshot(
 def format_digest_message(
     reminder_type: ReminderType,
     snapshot: DigestSnapshot,
+    *,
+    workspace: str = Workspace.PERSONAL.value,
 ) -> str:
+    workspace_label = WORKSPACE_LABELS[workspace]
     if reminder_type is ReminderType.MORNING_DIGEST:
         return (
-            "Доброе утро\n\n"
+            f"Доброе утро · {workspace_label}\n\n"
             f"🔴 Просрочено: {snapshot.overdue}\n"
             f"🟠 На сегодня: {snapshot.due_today}\n"
             f"🔁 Follow-up: {snapshot.follow_ups}\n"
@@ -162,7 +169,7 @@ def format_digest_message(
             f"📥 Входящие: {snapshot.inbox}"
         )
     return (
-        "Вечерний обзор\n\n"
+        f"Вечерний обзор · {workspace_label}\n\n"
         f"🟠 Не завершено сегодня: {snapshot.due_today}\n"
         f"🔁 Просроченные follow-up: {snapshot.follow_ups}\n"
         f"⏳ Требуют внимания: {snapshot.waiting}\n"
@@ -213,44 +220,48 @@ async def ensure_daily_digest_reminders(
                 preferences.evening_digest_time,
             ),
         )
-        for reminder_type, enabled, digest_time in definitions:
-            if not enabled:
-                continue
-            scheduled_at = resolve_local_datetime(
-                local_date, digest_time, preferences_zone.zoneinfo
-            ).astimezone(UTC)
-            statement = (
-                insert(Reminder)
-                .values(
-                    id=uuid4(),
-                    user_id=preferences.user_id,
-                    type=reminder_type.value,
-                    scheduled_at=scheduled_at,
-                    schedule_kind="manual",
-                    status=ReminderStatus.PENDING.value,
-                    deduplication_key=f"digest:{reminder_type.value}:{local_date}",
-                    digest_local_date=local_date,
-                    schedule_timezone=timezone,
-                )
-                .on_conflict_do_update(
-                    constraint="uq_reminders_user_digest_local_date",
-                    set_={
-                        "scheduled_at": scheduled_at,
-                        "schedule_timezone": timezone,
-                        "status": case(
-                            (Reminder.sent_at.is_not(None), Reminder.status),
-                            else_=ReminderStatus.PENDING.value,
+        for workspace in WORKSPACE_VALUES:
+            for reminder_type, enabled, digest_time in definitions:
+                if not enabled:
+                    continue
+                scheduled_at = resolve_local_datetime(
+                    local_date, digest_time, preferences_zone.zoneinfo
+                ).astimezone(UTC)
+                statement = (
+                    insert(Reminder)
+                    .values(
+                        id=uuid4(),
+                        user_id=preferences.user_id,
+                        workspace=workspace,
+                        type=reminder_type.value,
+                        scheduled_at=scheduled_at,
+                        schedule_kind="manual",
+                        status=ReminderStatus.PENDING.value,
+                        deduplication_key=(
+                            f"digest:{workspace}:{reminder_type.value}:{local_date}"
                         ),
-                        "cancelled_at": case(
-                            (Reminder.sent_at.is_not(None), Reminder.cancelled_at),
-                            else_=None,
-                        ),
-                    },
+                        digest_local_date=local_date,
+                        schedule_timezone=timezone,
+                    )
+                    .on_conflict_do_update(
+                        constraint=("uq_reminders_user_workspace_digest_local_date"),
+                        set_={
+                            "scheduled_at": scheduled_at,
+                            "schedule_timezone": timezone,
+                            "status": case(
+                                (Reminder.sent_at.is_not(None), Reminder.status),
+                                else_=ReminderStatus.PENDING.value,
+                            ),
+                            "cancelled_at": case(
+                                (Reminder.sent_at.is_not(None), Reminder.cancelled_at),
+                                else_=None,
+                            ),
+                        },
+                    )
+                    .returning(Reminder.id)
                 )
-                .returning(Reminder.id)
-            )
-            if (await session.scalar(statement)) is not None:
-                created += 1
+                if (await session.scalar(statement)) is not None:
+                    created += 1
     await session.flush()
     return created
 
@@ -262,6 +273,7 @@ async def prepare_digest_message(
     *,
     now: datetime,
     defaults: NotificationDefaults,
+    workspace: str = Workspace.PERSONAL.value,
 ) -> str | None:
     from flowmate.reminders.preferences import (
         get_effective_notification_preferences,
@@ -283,10 +295,11 @@ async def prepare_digest_message(
         reminder_type,
         now=now,
         preferences=preferences,
+        workspace=workspace,
     )
     if snapshot.empty and not preferences.send_empty_digests:
         return None
-    return format_digest_message(reminder_type, snapshot)
+    return format_digest_message(reminder_type, snapshot, workspace=workspace)
 
 
 async def cancel_future_digests(
@@ -308,6 +321,7 @@ async def cancel_future_digests(
                 Reminder.sent_at.is_(None),
             )
             .with_for_update()
+            .execution_options(include_all_workspaces=True)
         )
     )
     for value in values:

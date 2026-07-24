@@ -5,6 +5,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.db.models import User
+from flowmate.workspaces import Workspace, normalize_workspace
 
 
 def validate_telegram_user_id(telegram_user_id: int) -> None:
@@ -25,11 +26,13 @@ async def create_telegram_user(
     session: AsyncSession,
     telegram_user_id: int,
     display_name: str | None = None,
+    active_workspace: Workspace | str = Workspace.PERSONAL,
 ) -> User:
     validate_telegram_user_id(telegram_user_id)
     user = User(
         telegram_user_id=telegram_user_id,
         display_name=display_name,
+        active_workspace=normalize_workspace(active_workspace),
     )
     session.add(user)
     await session.flush()
@@ -40,6 +43,7 @@ async def get_or_create_telegram_user(
     session: AsyncSession,
     telegram_user_id: int,
     display_name: str | None = None,
+    active_workspace: Workspace | str = Workspace.PERSONAL,
 ) -> tuple[User, bool]:
     validate_telegram_user_id(telegram_user_id)
     statement = (
@@ -49,6 +53,7 @@ async def get_or_create_telegram_user(
             telegram_user_id=telegram_user_id,
             display_name=display_name,
             is_active=True,
+            active_workspace=normalize_workspace(active_workspace),
         )
         .on_conflict_do_nothing(constraint="users_telegram_user_id_key")
         .returning(User)

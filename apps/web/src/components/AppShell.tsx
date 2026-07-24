@@ -1,5 +1,6 @@
 import * as Avatar from "@radix-ui/react-avatar";
 import * as Tooltip from "@radix-ui/react-tooltip";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CalendarDays,
   CircleHelp,
@@ -16,7 +17,8 @@ import {
 import type { ComponentType } from "react";
 import { NavLink, Outlet, useMatch } from "react-router-dom";
 
-import type { AuthenticatedUser } from "../api/auth";
+import { sessionQueryKey, setWorkspace, type AuthenticatedUser } from "../api/auth";
+import { ApiError } from "../api/client";
 
 interface NavigationItem {
   to: string;
@@ -95,6 +97,43 @@ function NavigationLink({ item, mobile }: { item: NavigationItem; mobile: boolea
 export function AppShell({ user }: { user: AuthenticatedUser }) {
   const name = user.display_name?.trim() || "Владелец";
   const initials = name.slice(0, 2).toUpperCase();
+  const queryClient = useQueryClient();
+  const workspace = useMutation({
+    mutationFn: setWorkspace,
+    onSuccess: async (updatedUser) => {
+      queryClient.setQueryData(sessionQueryKey, updatedUser);
+      await queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey[0] !== sessionQueryKey[0],
+      });
+    },
+  });
+  const workspaceError =
+    workspace.error instanceof ApiError ? workspace.error.message : null;
+  const workspaceSwitcher = (
+    <div className="workspace-switcher" aria-label="Рабочее пространство">
+      {(
+        [
+          ["personal", "Личное"],
+          ["work", "Работа"],
+        ] as const
+      ).map(([value, label]) => (
+        <button
+          key={value}
+          type="button"
+          className={
+            user.active_workspace === value ? "workspace-switcher__active" : undefined
+          }
+          disabled={workspace.isPending}
+          aria-pressed={user.active_workspace === value}
+          onClick={() => {
+            if (user.active_workspace !== value) workspace.mutate(value);
+          }}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
   return (
     <Tooltip.Provider>
       <div className="app-shell">
@@ -104,13 +143,19 @@ export function AppShell({ user }: { user: AuthenticatedUser }) {
             <span>FlowMate</span>
           </div>
           <Navigation />
+          {workspaceSwitcher}
+          {workspaceError && (
+            <p className="workspace-switcher__error" role="alert">
+              {workspaceError}
+            </p>
+          )}
           <div className="profile-chip">
             <Avatar.Root className="avatar">
               <Avatar.Fallback>{initials}</Avatar.Fallback>
             </Avatar.Root>
             <div>
               <strong>{name}</strong>
-              <span>Личное пространство</span>
+              <span>{user.active_workspace === "personal" ? "Личное" : "Работа"}</span>
             </div>
           </div>
         </aside>
@@ -120,10 +165,16 @@ export function AppShell({ user }: { user: AuthenticatedUser }) {
               <span className="brand__mark">F</span>
               <span>FlowMate</span>
             </div>
+            {workspaceSwitcher}
             <Avatar.Root className="avatar">
               <Avatar.Fallback>{initials}</Avatar.Fallback>
             </Avatar.Root>
           </header>
+          {workspaceError && (
+            <p className="workspace-switcher__mobile-error" role="alert">
+              {workspaceError}
+            </p>
+          )}
           <Outlet context={user} />
         </main>
         <Navigation mobile />

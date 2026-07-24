@@ -64,6 +64,7 @@ async def _user_response(
         default_snooze_minutes=preferences.default_snooze_minutes,
         date_display_format=preferences.date_display_format,
         time_display_format=preferences.time_display_format,
+        active_workspace=identity.user.active_workspace,
     )
 
 
@@ -204,6 +205,7 @@ async def create_pwa_session(
         default_snooze_minutes=preferences.default_snooze_minutes,
         date_display_format=preferences.date_display_format,
         time_display_format=preferences.time_display_format,
+        active_workspace=created.user.active_workspace,
     )
 
 

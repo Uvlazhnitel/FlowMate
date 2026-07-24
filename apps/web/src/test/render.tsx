@@ -34,4 +34,5 @@ export const authenticatedUser = {
   default_snooze_minutes: 60,
   date_display_format: "day_month_year",
   time_display_format: "24h",
+  active_workspace: "personal",
 };

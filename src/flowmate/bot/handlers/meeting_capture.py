@@ -112,6 +112,7 @@ async def _analyze_capture(
             timezone=timezone,
             current_datetime=captured_at,
             meeting=_meeting_ai_context(capture),
+            active_workspace=capture.workspace,
         )
         analysis = await service.parse(content, source=source, context=context)
         await save_capture_analysis(

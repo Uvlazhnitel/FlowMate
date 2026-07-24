@@ -67,6 +67,73 @@ async def authenticated_client(
 
 
 @pytest.mark.integration
+async def test_pwa_workspace_switch_changes_operational_scope(
+    database_engine: AsyncEngine,
+) -> None:
+    sender = CapturingLoginCodeSender()
+    app = create_app(
+        settings=auth_settings(app_timezone="UTC"),
+        engine=database_engine,
+        login_code_sender=sender,
+    )
+    due_at = datetime.now(UTC) + timedelta(hours=1)
+    async with started_app(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            csrf = await authenticated_client(client, sender)
+            async with AsyncSession(database_engine) as session:
+                user = await session.scalar(
+                    select(User).where(User.telegram_user_id == TELEGRAM_USER_ID)
+                )
+                assert user is not None
+                session.add_all(
+                    [
+                        WorkItem(
+                            user_id=user.id,
+                            workspace="personal",
+                            type="task",
+                            title="Personal only",
+                            status="active",
+                            priority="normal",
+                            planner_status="needs_transfer",
+                            due_at=due_at,
+                        ),
+                        WorkItem(
+                            user_id=user.id,
+                            workspace="work",
+                            type="task",
+                            title="Work only",
+                            status="active",
+                            priority="normal",
+                            planner_status="needs_transfer",
+                            due_at=due_at,
+                        ),
+                    ]
+                )
+                await session.commit()
+
+            personal = await client.get("/api/v1/today?section=due_today")
+            assert [item["title"] for item in personal.json()["items"]] == [
+                "Personal only"
+            ]
+
+            switched = await client.put(
+                "/api/v1/workspace",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={"workspace": "work"},
+            )
+            assert switched.status_code == 200
+            assert switched.json()["active_workspace"] == "work"
+            assert (await client.get("/api/v1/auth/me")).json()[
+                "active_workspace"
+            ] == "work"
+            work = await client.get("/api/v1/today?section=due_today")
+            assert [item["title"] for item in work.json()["items"]] == ["Work only"]
+
+
+@pytest.mark.integration
 async def test_operational_views_actions_and_user_isolation(
     database_engine: AsyncEngine,
 ) -> None:

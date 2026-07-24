@@ -75,10 +75,12 @@ from flowmate.bot.handlers.work_items import (
     work_item_callback,
     work_item_selection_callback,
 )
+from flowmate.bot.handlers.workspaces import workspace_callback, workspace_command
 from flowmate.bot.middleware import (
     AllowedUserMiddleware,
     DatabaseSessionMiddleware,
     PersistentUpdateMiddleware,
+    WorkspaceContextMiddleware,
 )
 from flowmate.db.drafts import get_active_draft_for_user, transition_draft
 from flowmate.db.health import database_is_ready
@@ -89,7 +91,11 @@ from flowmate.task_engine.action_sessions import (
 )
 
 
-async def start_command(message: Message, db_session: AsyncSession) -> None:
+async def start_command(
+    message: Message,
+    db_session: AsyncSession,
+    default_workspace: str = "personal",
+) -> None:
     telegram_user = message.from_user
     if telegram_user is None:
         return
@@ -98,6 +104,7 @@ async def start_command(message: Message, db_session: AsyncSession) -> None:
         db_session,
         telegram_user.id,
         display_name=telegram_user.full_name[:255],
+        active_workspace=default_workspace,
     )
     user.display_name = telegram_user.full_name[:255]
     user.is_active = True
@@ -118,6 +125,7 @@ async def help_command(message: Message) -> None:
         "Встречи: /meeting, /meeting_status, /meeting_notes, /meeting_end, "
         "/meeting_review, "
         "/meeting_cancel. "
+        "Пространство: /workspace. "
         "Отправьте текст или голосовое сообщение, чтобы сохранить заметку."
     )
 
@@ -194,12 +202,15 @@ def create_router(
     router.callback_query.outer_middleware(
         DatabaseSessionMiddleware(session_factory, engine)
     )
+    router.message.outer_middleware(WorkspaceContextMiddleware())
+    router.callback_query.outer_middleware(WorkspaceContextMiddleware())
     router.message.outer_middleware(PersistentUpdateMiddleware())
     router.callback_query.outer_middleware(PersistentUpdateMiddleware())
     router.message.register(start_command, Command("start"))
     router.message.register(menu_command, Command("menu"))
     router.message.register(help_command, Command("help"))
     router.message.register(status_command, Command("status"))
+    router.message.register(workspace_command, Command("workspace"))
     router.message.register(notes_command, Command("notes"))
     router.message.register(draft_command, Command("draft"))
     router.message.register(cancel_command, Command("cancel"))
@@ -230,6 +241,7 @@ def create_router(
     router.message.register(topics_command, F.text == TOPICS_BUTTON)
     router.message.register(search_command, F.text == SEARCH_BUTTON)
     router.message.register(reminders_settings_command, F.text == SETTINGS_BUTTON)
+    router.callback_query.register(workspace_callback, F.data.startswith("ws:"))
     router.message.register(
         meeting_title_reply,
         MeetingTitleReplyFilter(),

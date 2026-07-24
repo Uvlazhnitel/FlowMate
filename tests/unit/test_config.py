@@ -176,7 +176,7 @@ def test_parses_ai_configuration() -> None:
         ai_model=" configured-ai-model ",
         ai_timeout_seconds=45,
         app_timezone="Europe/Riga",
-        app_active_workspace=" client-alpha ",
+        app_active_workspace=" work ",
         ai_high_confidence_threshold=0.85,
         ai_clarification_confidence_threshold=0.6,
     )
@@ -185,7 +185,7 @@ def test_parses_ai_configuration() -> None:
     assert settings.ai_model == "configured-ai-model"
     assert settings.ai_timeout_seconds == 45
     assert settings.app_timezone == "Europe/Riga"
-    assert settings.app_active_workspace == "client-alpha"
+    assert settings.app_active_workspace == "work"
     assert settings.ai_high_confidence_threshold == 0.85
     assert settings.ai_clarification_confidence_threshold == 0.6
 

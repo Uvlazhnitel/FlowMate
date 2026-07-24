@@ -297,9 +297,19 @@ async def analyze_note_content(
     draft: DraftSession,
     draft_ttl_hours: int,
     precomputed_result: DraftAnalysisResult | None = None,
+    active_workspace: str | None = None,
 ) -> None:
     try:
-        result = precomputed_result or await service.parse(content, source=source)
+        workspace = active_workspace or draft.workspace
+        result = precomputed_result or (
+            await service.parse(
+                content,
+                source=source,
+                active_workspace=workspace,
+            )
+            if workspace is not None
+            else await service.parse(content, source=source)
+        )
         question = next_clarification_question(result)
         await replace_draft_analysis(
             db_session,
