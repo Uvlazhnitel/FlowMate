@@ -243,7 +243,7 @@ async def list_today_section(
     limit: int,
     offset: int,
 ) -> PageResult:
-    start, end = local_day_bounds(now, preferences)
+    _, end = local_day_bounds(now, preferences)
     statement = select(WorkItem).where(
         WorkItem.user_id == user_id, WorkItem.status.in_(OPEN_STATUSES)
     )
@@ -267,12 +267,12 @@ async def list_today_section(
         ).order_by(WorkItem.due_at.asc().nulls_last(), WorkItem.created_at, WorkItem.id)
     elif section == "overdue":
         statement = statement.where(
-            WorkItem.type.not_in(semantic_types), WorkItem.due_at < start
+            WorkItem.type.not_in(semantic_types), WorkItem.due_at < now
         ).order_by(WorkItem.due_at, WorkItem.id)
     else:
         statement = statement.where(
             WorkItem.type.not_in(semantic_types),
-            WorkItem.due_at >= start,
+            WorkItem.due_at >= now,
             WorkItem.due_at < end,
         ).order_by(WorkItem.due_at, WorkItem.id)
     page = await _page(statement, session, limit, offset)
@@ -291,7 +291,7 @@ async def dashboard_snapshot(
     now: datetime,
     preferences: EffectiveNotificationPreferences,
 ) -> dict[str, object]:
-    start, end = local_day_bounds(now, preferences)
+    _, end = local_day_bounds(now, preferences)
     owned_open = (WorkItem.user_id == user_id, WorkItem.status.in_(OPEN_STATUSES))
     semantic_types = (
         WorkItemType.FOLLOW_UP.value,
@@ -307,12 +307,12 @@ async def dashboard_snapshot(
 
     summary = {
         "overdue": await count(
-            *owned_open, WorkItem.type.not_in(semantic_types), WorkItem.due_at < start
+            *owned_open, WorkItem.type.not_in(semantic_types), WorkItem.due_at < now
         ),
         "due_today": await count(
             *owned_open,
             WorkItem.type.not_in(semantic_types),
-            WorkItem.due_at >= start,
+            WorkItem.due_at >= now,
             WorkItem.due_at < end,
         ),
         "follow_ups": await count(
@@ -323,7 +323,7 @@ async def dashboard_snapshot(
         "waiting_overdue": await count(
             *owned_open,
             WorkItem.type == WorkItemType.WAITING.value,
-            WorkItem.due_at < start,
+            WorkItem.due_at < now,
         ),
         "questions": await count(
             *owned_open, WorkItem.type == WorkItemType.QUESTION.value
@@ -365,9 +365,9 @@ async def dashboard_snapshot(
         date = effective_date(item)
         if item.type == WorkItemType.FOLLOW_UP.value and date and date < end:
             category = 1
-        elif item.type == WorkItemType.WAITING.value and date and date < start:
+        elif item.type == WorkItemType.WAITING.value and date and date < now:
             category = 2
-        elif date and date < start:
+        elif date and date < now:
             category = 0
         elif date and date < end:
             category = 3

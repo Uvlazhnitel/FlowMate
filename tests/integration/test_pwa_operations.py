@@ -20,7 +20,11 @@ from flowmate.db.models import (
 from flowmate.db.users import create_telegram_user
 from flowmate.reminders.enums import ReminderStatus
 from flowmate.reminders.preferences import NotificationDefaults, effective_preferences
-from flowmate.task_engine.operational import TodaySection, list_today_section
+from flowmate.task_engine.operational import (
+    TodaySection,
+    dashboard_snapshot,
+    list_today_section,
+)
 from flowmate.task_engine.service import (
     create_person,
     create_topic,
@@ -605,8 +609,8 @@ async def test_today_grouping_respects_local_day_and_semantic_types(
             database_session,
             user.id,
             item_type="task",
-            title="Current local day",
-            due_at=local_midnight,
+            title="Later today",
+            due_at=now + timedelta(hours=1),
         ),
         "follow_ups": await create_work_item(
             database_session,
@@ -654,3 +658,44 @@ async def test_today_grouping_respects_local_day_and_semantic_types(
             offset=0,
         )
         assert [card.id for card in page.items] == [expected.id]
+
+    elapsed_today = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Elapsed earlier today",
+        due_at=now - timedelta(hours=1),
+    )
+    overdue_page = await list_today_section(
+        database_session,
+        user.id,
+        "overdue",
+        now=now,
+        preferences=preferences,
+        limit=20,
+        offset=0,
+    )
+    assert [card.id for card in overdue_page.items] == [
+        items["overdue"].id,
+        elapsed_today.id,
+    ]
+    due_today_page = await list_today_section(
+        database_session,
+        user.id,
+        "due_today",
+        now=now,
+        preferences=preferences,
+        limit=20,
+        offset=0,
+    )
+    assert [card.id for card in due_today_page.items] == [items["due_today"].id]
+
+    dashboard = await dashboard_snapshot(
+        database_session,
+        user.id,
+        now=now,
+        preferences=preferences,
+    )
+    summary = cast(dict[str, int], dashboard["summary"])
+    assert summary["overdue"] == 2
+    assert summary["due_today"] == 1
