@@ -1,4 +1,4 @@
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -95,9 +95,21 @@ describe("protected application", () => {
 
     renderApplication("/dashboard");
     await screen.findByRole("heading", { name: "Обзор" });
-    const workButton = screen.getAllByRole("button", { name: "Работа" }).at(0);
+    const switchers = screen.getAllByLabelText("Рабочее пространство");
+    expect(switchers).toHaveLength(2);
+    for (const switcher of switchers) {
+      expect(
+        within(switcher)
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+      ).toEqual(["Работа", "Личное"]);
+    }
+
+    const desktopSwitcher = switchers.at(0);
+    expect(desktopSwitcher).toBeDefined();
+    if (desktopSwitcher === undefined) return;
+    const workButton = within(desktopSwitcher).getByRole("button", { name: "Работа" });
     expect(workButton).toBeDefined();
-    if (workButton === undefined) return;
     await userEvent.click(workButton);
 
     await waitFor(() => {

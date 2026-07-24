@@ -113,8 +113,8 @@ export function AppShell({ user }: { user: AuthenticatedUser }) {
     <div className="workspace-switcher" aria-label="Рабочее пространство">
       {(
         [
-          ["personal", "Личное"],
           ["work", "Работа"],
+          ["personal", "Личное"],
         ] as const
       ).map(([value, label]) => (
         <button

@@ -13,6 +13,8 @@ from flowmate.workspace_service import (
 )
 from flowmate.workspaces import WORKSPACE_LABELS, Workspace
 
+WORKSPACE_DISPLAY_ORDER = (Workspace.WORK, Workspace.PERSONAL)
+
 
 def workspace_keyboard(active: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -26,7 +28,7 @@ def workspace_keyboard(active: str) -> InlineKeyboardMarkup:
                     ),
                     callback_data=f"ws:{workspace.value}",
                 )
-                for workspace in Workspace
+                for workspace in WORKSPACE_DISPLAY_ORDER
             ]
         ]
     )

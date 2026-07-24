@@ -49,6 +49,7 @@ from flowmate.bot.handlers.voice import (
     split_transcription,
     voice_message,
 )
+from flowmate.bot.handlers.workspaces import workspace_keyboard
 from flowmate.bot.middleware import AllowedUserMiddleware, DatabaseSessionMiddleware
 from flowmate.core.config import Settings
 from flowmate.db.models import DraftSession
@@ -269,6 +270,14 @@ async def test_callback_allowlist_allows_owner_and_rejects_unknown_user(
 
 def test_stale_cancel_callback_is_rejected() -> None:
     assert parse_callback_data("draft:cancel") is None
+
+
+def test_workspace_keyboard_orders_work_before_personal() -> None:
+    keyboard = workspace_keyboard("personal")
+    buttons = keyboard.inline_keyboard[0]
+
+    assert [button.text for button in buttons] == ["Работа", "• Личное"]
+    assert [button.callback_data for button in buttons] == ["ws:work", "ws:personal"]
 
 
 @pytest.mark.asyncio
