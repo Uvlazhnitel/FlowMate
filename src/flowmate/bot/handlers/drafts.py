@@ -26,6 +26,7 @@ from flowmate.ai.schemas import (
     TemporalStatus,
 )
 from flowmate.ai.service import DraftParsingService
+from flowmate.bot.callback_data import encode_revision
 from flowmate.bot.menu import answer_with_main_menu, restore_main_menu
 from flowmate.bot.presentation import (
     TelegramDisplayContext,
@@ -61,6 +62,8 @@ from flowmate.task_engine.conversion import (
     DraftConversionResult,
     DraftConversionService,
 )
+from flowmate.task_engine.enums import WorkItemType
+from flowmate.task_engine.management import work_item_revision
 from flowmate.workspaces import WORKSPACE_LABELS
 
 DRAFT_ANALYZING_MESSAGE = "⏳ Запись принята. Разбираю…"
@@ -331,6 +334,37 @@ def format_conversion_summary(
     return "\n\n".join(blocks)
 
 
+def due_date_offer_keyboard(
+    result: DraftConversionResult,
+) -> InlineKeyboardMarkup | None:
+    tasks = [
+        item
+        for item in result.work_items
+        if item.type == WorkItemType.TASK.value and item.due_at is None
+    ]
+    if not tasks:
+        return None
+    multiple = len(tasks) > 1
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"📅 Добавить срок · {preview(item.title, 28)}"
+                        if multiple
+                        else "📅 Добавить срок"
+                    ),
+                    callback_data=(
+                        f"wi:r:{item.id}:"
+                        f"{encode_revision(work_item_revision(item.updated_at))}"
+                    ),
+                )
+            ]
+            for item in tasks
+        ]
+    )
+
+
 def ready_keyboard(draft_id: UUID) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -502,22 +536,27 @@ async def analyze_note_content(
         high_confidence_threshold=high_confidence_threshold,
     ):
         try:
-            await draft_conversion_service.convert(
+            conversion_result = await draft_conversion_service.convert(
                 db_session,
                 draft_id=draft.id,
                 user_id=draft.user_id,
             )
             await db_session.commit()
             display = draft_display_context(result, preferences)
-            await answer_with_main_menu(
-                message,
-                fast_capture_summary(
-                    result,
-                    workspace=draft.workspace,
-                    display=display,
-                ),
-                parse_mode="HTML",
+            summary = fast_capture_summary(
+                result,
+                workspace=draft.workspace,
+                display=display,
             )
+            keyboard = due_date_offer_keyboard(conversion_result)
+            if keyboard is None:
+                await answer_with_main_menu(message, summary, parse_mode="HTML")
+            else:
+                await message.answer(
+                    summary,
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
             return
         except (DraftConversionError, SQLAlchemyError):
             await db_session.rollback()
@@ -722,6 +761,7 @@ async def _draft_callback(
                 workspace=draft.workspace,
             ),
             parse_mode="HTML",
+            reply_markup=due_date_offer_keyboard(result),
         )
         return
     if action == "change" and draft.status in {"needs_clarification", "ready"}:
@@ -775,6 +815,7 @@ async def _draft_callback(
                     workspace=draft.workspace,
                 ),
                 parse_mode="HTML",
+                reply_markup=due_date_offer_keyboard(result),
             )
             return
         if option.get("action") == "change":

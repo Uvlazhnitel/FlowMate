@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -48,13 +49,18 @@ from flowmate.bot.handlers.voice import (
     split_transcription,
     voice_message,
 )
-from flowmate.bot.handlers.workspaces import workspace_keyboard
+from flowmate.bot.handlers.workspaces import workspace_keyboard, workspace_toggle
 from flowmate.bot.middleware import AllowedUserMiddleware, DatabaseSessionMiddleware
 from flowmate.core.config import Settings
 from flowmate.db.models import DraftSession
 from flowmate.speech.errors import SpeechProviderError, SpeechTimeoutError
 from flowmate.speech.service import TranscriptionService
 from flowmate.speech.temp_files import TemporaryAudioFileService
+from flowmate.workspace_service import (
+    WorkspaceSwitchBlockedError,
+    WorkspaceSwitchBlocker,
+)
+from flowmate.workspaces import Workspace
 from tests.ai_factories import make_analysis_result, make_draft_item, make_parse_result
 
 
@@ -277,6 +283,83 @@ def test_workspace_keyboard_orders_work_before_personal() -> None:
 
     assert [button.text for button in buttons] == ["Работа", "• Личное"]
     assert [button.callback_data for button in buttons] == ["ws:work", "ws:personal"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_button_toggles_in_one_tap_without_inline_keyboard() -> None:
+    user = SimpleNamespace(id=uuid4(), active_workspace="personal")
+
+    async def switch(
+        _: AsyncSession,
+        __: object,
+        target: Workspace,
+    ) -> SimpleNamespace:
+        user.active_workspace = target.value
+        return user
+
+    session = make_mock_session()
+    with (
+        patch(
+            "flowmate.bot.handlers.workspaces.get_user_by_telegram_id",
+            new=AsyncMock(return_value=user),
+        ),
+        patch(
+            "flowmate.bot.handlers.workspaces.switch_workspace",
+            new=AsyncMock(side_effect=switch),
+        ) as switch_mock,
+        patch(
+            "flowmate.bot.handlers.workspaces.answer_with_main_menu",
+            new=AsyncMock(),
+        ) as answer,
+    ):
+        message = make_message(123, text="🔀 Работа / Личное")
+        await workspace_toggle(message, session)
+        await workspace_toggle(message, session)
+
+    assert [call.args[2] for call in switch_mock.await_args_list] == [
+        Workspace.WORK,
+        Workspace.PERSONAL,
+    ]
+    assert [call.args[1] for call in answer.await_args_list] == [
+        "✅ Включено пространство: Работа.",
+        "✅ Включено пространство: Личное.",
+    ]
+    assert cast(AsyncMock, session.commit).await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_workspace_button_keeps_current_space_when_switch_is_blocked() -> None:
+    user = SimpleNamespace(id=uuid4(), active_workspace="work")
+    blocker = WorkspaceSwitchBlocker(
+        code="active_draft",
+        message="Сначала подтвердите или отмените текущий черновик.",
+    )
+    session = make_mock_session()
+    with (
+        patch(
+            "flowmate.bot.handlers.workspaces.get_user_by_telegram_id",
+            new=AsyncMock(return_value=user),
+        ),
+        patch(
+            "flowmate.bot.handlers.workspaces.switch_workspace",
+            new=AsyncMock(side_effect=WorkspaceSwitchBlockedError(blocker)),
+        ),
+        patch(
+            "flowmate.bot.handlers.workspaces.answer_with_main_menu",
+            new=AsyncMock(),
+        ) as answer,
+    ):
+        await workspace_toggle(
+            make_message(123, text="🔀 Работа / Личное"),
+            session,
+        )
+
+    cast(AsyncMock, session.rollback).assert_awaited_once()
+    cast(AsyncMock, session.commit).assert_not_awaited()
+    answer.assert_awaited_once()
+    call = answer.await_args
+    assert call is not None
+    assert call.args[1] == blocker.message
 
 
 @pytest.mark.asyncio

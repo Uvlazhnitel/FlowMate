@@ -6,6 +6,7 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from flowmate.bot.menu import answer_with_main_menu
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.workspace_service import (
     WorkspaceSwitchBlockedError,
@@ -45,6 +46,36 @@ async def workspace_command(message: Message, db_session: AsyncSession) -> None:
     await message.answer(
         f"Текущее пространство: {WORKSPACE_LABELS[user.active_workspace]}.",
         reply_markup=workspace_keyboard(user.active_workspace),
+    )
+
+
+async def workspace_toggle(message: Message, db_session: AsyncSession) -> None:
+    telegram_user = message.from_user
+    if telegram_user is None:
+        return
+    user = await get_user_by_telegram_id(db_session, telegram_user.id)
+    if user is None:
+        await answer_with_main_menu(message, "Сначала используйте /start.")
+        return
+    target = (
+        Workspace.PERSONAL
+        if user.active_workspace == Workspace.WORK.value
+        else Workspace.WORK
+    )
+    try:
+        user = await switch_workspace(db_session, user.id, target)
+    except WorkspaceSwitchBlockedError as error:
+        await db_session.rollback()
+        await answer_with_main_menu(message, error.blocker.message)
+        return
+    except ValueError:
+        await db_session.rollback()
+        await answer_with_main_menu(message, "Пространство недоступно.")
+        return
+    await db_session.commit()
+    await answer_with_main_menu(
+        message,
+        f"✅ Включено пространство: {WORKSPACE_LABELS[user.active_workspace]}.",
     )
 
 

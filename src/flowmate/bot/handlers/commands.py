@@ -65,7 +65,11 @@ from flowmate.bot.handlers.work_items import (
     work_item_callback,
     work_item_selection_callback,
 )
-from flowmate.bot.handlers.workspaces import workspace_callback, workspace_command
+from flowmate.bot.handlers.workspaces import (
+    workspace_callback,
+    workspace_command,
+    workspace_toggle,
+)
 from flowmate.bot.menu import (
     CANCEL_BUTTON,
     FOLLOW_UPS_BUTTON,
@@ -244,7 +248,7 @@ def create_router(
     router.message.register(questions_command, F.text == QUESTIONS_BUTTON)
     router.message.register(search_command, F.text == SEARCH_BUTTON)
     router.message.register(reminders_settings_command, F.text == SETTINGS_BUTTON)
-    router.message.register(workspace_command, F.text == WORKSPACE_BUTTON)
+    router.message.register(workspace_toggle, F.text == WORKSPACE_BUTTON)
     router.callback_query.register(workspace_callback, F.data.startswith("ws:"))
     router.message.register(
         meeting_title_reply,

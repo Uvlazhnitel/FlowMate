@@ -22,6 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.errors import AIError
 from flowmate.ai.schemas import ManagementAction, ManagementIntent, TemporalStatus
+from flowmate.bot.callback_data import (
+    decode_revision as decode_revision,
+)
+from flowmate.bot.callback_data import (
+    encode_revision as encode_revision,
+)
 from flowmate.bot.menu import answer_with_main_menu
 from flowmate.bot.presentation import (
     TelegramDisplayContext,
@@ -241,26 +247,6 @@ def selection_keyboard(
             ],
         ]
     )
-
-
-def encode_revision(value: int) -> str:
-    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
-    if value < 0:
-        raise ValueError("revision must not be negative")
-    if value == 0:
-        return "0"
-    result = ""
-    while value:
-        value, remainder = divmod(value, 36)
-        result = alphabet[remainder] + result
-    return result
-
-
-def decode_revision(value: str) -> int | None:
-    try:
-        return int(value, 36)
-    except ValueError:
-        return None
 
 
 def item_action_data(action: str, item: WorkItem) -> str:

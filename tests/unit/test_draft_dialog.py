@@ -30,9 +30,10 @@ from flowmate.bot.handlers.drafts import (
     DRAFT_REPLY_REQUIRED_MESSAGE,
     analyze_note_content,
     draft_callback,
+    due_date_offer_keyboard,
     refine_draft,
 )
-from flowmate.db.models import DraftSession
+from flowmate.db.models import DraftSession, WorkItem
 from flowmate.drafts.questions import next_clarification_question
 from flowmate.speech.service import TranscriptionService
 from flowmate.task_engine.conversion import (
@@ -86,6 +87,7 @@ def make_draft(
     return DraftSession(
         id=uuid4(),
         user_id=uuid4(),
+        workspace="personal",
         source_note_id=uuid4(),
         status=status,
         analysis_payload=analysis.model_dump(mode="json"),
@@ -123,6 +125,25 @@ def make_conversion_service(draft: DraftSession) -> DraftConversionService:
     return cast(DraftConversionService, service)
 
 
+def make_work_item(
+    *,
+    item_type: str = "task",
+    title: str = "Подготовить отчёт",
+    due_at: datetime | None = None,
+) -> WorkItem:
+    return WorkItem(
+        id=uuid4(),
+        user_id=uuid4(),
+        workspace="work",
+        type=item_type,
+        title=title,
+        status="active",
+        priority="normal",
+        due_at=due_at,
+        updated_at=datetime(2026, 7, 28, 9, tzinfo=UTC),
+    )
+
+
 def make_callback(draft_id: UUID, action: str) -> tuple[CallbackQuery, Update]:
     message = make_message(text="Draft controls")
     callback = CallbackQuery(
@@ -133,6 +154,99 @@ def make_callback(draft_id: UUID, action: str) -> tuple[CallbackQuery, Update]:
         data=f"draft:{action}:{draft_id}",
     )
     return callback, Update(update_id=500, callback_query=callback)
+
+
+def test_due_date_offer_is_only_shown_for_undated_tasks() -> None:
+    first = make_work_item(title="Подготовить отчёт")
+    second = make_work_item(title="Позвонить клиенту")
+    dated = make_work_item(
+        title="Отправить документы",
+        due_at=datetime(2026, 7, 29, 12, tzinfo=UTC),
+    )
+    follow_up = make_work_item(item_type="follow_up", title="Проверить ответ")
+    result = DraftConversionResult(
+        draft_id=uuid4(),
+        work_items=(first, dated, follow_up, second),
+        notes=(),
+        counts={DraftItemType.TASK: 3, DraftItemType.FOLLOW_UP: 1},
+    )
+
+    keyboard = due_date_offer_keyboard(result)
+
+    assert keyboard is not None
+    assert [row[0].text for row in keyboard.inline_keyboard] == [
+        "📅 Добавить срок · Подготовить отчёт",
+        "📅 Добавить срок · Позвонить клиенту",
+    ]
+    assert [
+        (row[0].callback_data or "").split(":")[:3] for row in keyboard.inline_keyboard
+    ] == [["wi", "r", str(first.id)], ["wi", "r", str(second.id)]]
+
+
+def test_due_date_offer_is_absent_without_undated_tasks() -> None:
+    result = DraftConversionResult(
+        draft_id=uuid4(),
+        work_items=(
+            make_work_item(
+                due_at=datetime(2026, 7, 29, 12, tzinfo=UTC),
+            ),
+            make_work_item(item_type="waiting"),
+        ),
+        notes=(),
+        counts={},
+    )
+
+    assert due_date_offer_keyboard(result) is None
+
+
+@pytest.mark.asyncio
+async def test_fast_capture_offers_due_date_for_created_undated_task() -> None:
+    draft = make_draft(status="parsing")
+    draft.workspace = "work"
+    analysis = make_analysis_result(
+        make_parse_result([make_draft_item(confidence=0.95)]),
+        context=make_context(active_workspace="work"),
+    )
+    item = make_work_item()
+    conversion_result = DraftConversionResult(
+        draft_id=draft.id,
+        work_items=(item,),
+        notes=(),
+        counts={DraftItemType.TASK: 1},
+    )
+    conversion_service = MagicMock(spec=DraftConversionService)
+    conversion_service.convert = AsyncMock(return_value=conversion_result)
+    message = make_message(text="Подготовить отчёт")
+    with (
+        patch(
+            "flowmate.bot.handlers.drafts.replace_draft_analysis",
+            new=AsyncMock(),
+        ),
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+    ):
+        await analyze_note_content(
+            message,
+            content=message.text or "",
+            telegram_user_id=123,
+            source=DraftSource.TEXT,
+            service=make_service(),
+            db_session=make_session(),
+            draft=draft,
+            draft_ttl_hours=24,
+            precomputed_result=analysis,
+            active_workspace="work",
+            high_confidence_threshold=0.8,
+            draft_conversion_service=cast(
+                DraftConversionService,
+                conversion_service,
+            ),
+        )
+
+    call = answer.await_args
+    assert call is not None
+    markup = call.kwargs["reply_markup"]
+    assert markup.inline_keyboard[0][0].text == "📅 Добавить срок"
+    cast(AsyncMock, conversion_service.convert).assert_awaited_once()
 
 
 def test_question_planner_ignores_optional_missing_fields() -> None:
@@ -577,9 +691,54 @@ async def test_draft_callbacks_transition_owned_session(
         )
 
     assert draft.status == expected_status
-    expected_kwargs = {"parse_mode": "HTML"} if action == "confirm" else {}
+    expected_kwargs = (
+        {"parse_mode": "HTML", "reply_markup": None} if action == "confirm" else {}
+    )
     edit_text.assert_awaited_once_with(expected_message, **expected_kwargs)
     answer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_undated_task_offers_due_date_action() -> None:
+    draft = make_draft(status="ready")
+    callback, update = make_callback(draft.id, "confirm")
+    item = make_work_item()
+    result = DraftConversionResult(
+        draft_id=draft.id,
+        work_items=(item,),
+        notes=(),
+        counts={DraftItemType.TASK: 1},
+    )
+    conversion_service = MagicMock(spec=DraftConversionService)
+    conversion_service.convert = AsyncMock(return_value=result)
+    with (
+        patch(
+            "flowmate.bot.handlers.drafts.get_user_by_telegram_id",
+            new=AsyncMock(return_value=SimpleNamespace(id=draft.user_id)),
+        ),
+        patch(
+            "flowmate.bot.handlers.drafts.get_draft_for_user",
+            new=AsyncMock(return_value=draft),
+        ),
+        patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
+        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit_text,
+    ):
+        await draft_callback(
+            callback,
+            update,
+            make_session(),
+            draft_conversion_service=cast(
+                DraftConversionService,
+                conversion_service,
+            ),
+        )
+
+    call = edit_text.await_args
+    assert call is not None
+    markup = call.kwargs["reply_markup"]
+    button = markup.inline_keyboard[0][0]
+    assert button.text == "📅 Добавить срок"
+    assert (button.callback_data or "").startswith(f"wi:r:{item.id}:")
 
 
 @pytest.mark.asyncio
