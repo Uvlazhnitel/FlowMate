@@ -27,6 +27,12 @@ from flowmate.bot.handlers.work_items import (
     ManagementIntentOutcome,
     execute_management_intent,
 )
+from flowmate.bot.presentation import (
+    TelegramDisplayContext,
+    format_datetime,
+    html_text,
+    preview,
+)
 from flowmate.db.drafts import create_parsing_draft, get_draft_by_source_note
 from flowmate.db.models import (
     DraftSession,
@@ -43,20 +49,23 @@ from flowmate.db.notes import (
 )
 from flowmate.db.users import get_or_create_telegram_user, get_user_by_telegram_id
 from flowmate.meetings.service import link_note_to_active_meeting
-from flowmate.reminders.preferences import NotificationDefaults
+from flowmate.reminders.preferences import (
+    NotificationDefaults,
+    get_effective_notification_preferences,
+)
 from flowmate.reminders.sync import ReminderPolicy
 from flowmate.task_engine.action_sessions import finish_action_session
 from flowmate.task_engine.conversion import DraftConversionService
 from flowmate.task_engine.intents import management_update_was_processed
 from flowmate.workspaces import activate_workspace, active_workspace
 
-NOTE_SAVED_MESSAGE = "Заметка сохранена."
-NOTE_ALREADY_SAVED_MESSAGE = "Заметка уже сохранена."
+NOTE_SAVED_MESSAGE = "✅ Заметка сохранена"
+NOTE_ALREADY_SAVED_MESSAGE = "Эта запись уже сохранена."
 MANAGEMENT_ALREADY_PROCESSED_MESSAGE = "Изменение уже обработано."
 NOTE_EMPTY_MESSAGE = "Заметка не может быть пустой."
 NOTE_SAVE_FAILED_MESSAGE = "Не удалось сохранить заметку. Попробуйте позже."
 NOTE_LIST_FAILED_MESSAGE = "Не удалось загрузить заметки. Попробуйте позже."
-NO_NOTES_MESSAGE = "Заметок пока нет."
+NO_NOTES_MESSAGE = "🗒 Заметок пока нет"
 NOTE_PREVIEW_LENGTH = 300
 NOTE_LIST_LIMIT = 10
 
@@ -402,31 +411,51 @@ async def text_note(
         await message.answer(NOTE_SAVED_MESSAGE)
 
 
-def format_note_preview(note: Note, position: int) -> str:
-    normalized = " ".join((note.content or "[голосовая расшифровка очищена]").split())
-    if len(normalized) > NOTE_PREVIEW_LENGTH:
-        normalized = f"{normalized[: NOTE_PREVIEW_LENGTH - 3]}..."
-    source = {"voice": "голос", "manual": "вручную"}.get(note.source, "текст")
-    created_at = note.created_at.strftime("%Y-%m-%d %H:%M UTC")
-    return f"{position}. [{source}] {created_at}\n{normalized}"
+def format_note_preview(
+    note: Note,
+    position: int,
+    display: TelegramDisplayContext | None = None,
+) -> str:
+    context = display or TelegramDisplayContext(ZoneInfo("UTC"))
+    normalized = preview(
+        note.content or "Исходная расшифровка очищена",
+        NOTE_PREVIEW_LENGTH,
+    )
+    source_icon = "🎙" if note.source == "voice" else "🗒"
+    created_at = format_datetime(note.created_at, context)
+    return (
+        f"{position}. {source_icon} <b>{html_text(created_at)}</b>\n"
+        f"{html_text(normalized)}"
+    )
 
 
-async def notes_command(message: Message, db_session: AsyncSession) -> None:
+async def notes_command(
+    message: Message,
+    db_session: AsyncSession,
+    notification_defaults: NotificationDefaults | None = None,
+) -> None:
     telegram_user = message.from_user
     if telegram_user is None:
         return
 
     try:
         user = await get_user_by_telegram_id(db_session, telegram_user.id)
-        notes = (
-            await list_recent_notes_for_user(
+        if user is None:
+            notes = []
+            preferences = None
+        else:
+            notes = await list_recent_notes_for_user(
                 db_session,
                 user.id,
                 limit=NOTE_LIST_LIMIT,
             )
-            if user is not None
-            else []
-        )
+            preferences = (
+                await get_effective_notification_preferences(
+                    db_session, user.id, notification_defaults
+                )
+                if notification_defaults is not None
+                else None
+            )
         await db_session.rollback()
     except SQLAlchemyError:
         await db_session.rollback()
@@ -441,8 +470,13 @@ async def notes_command(message: Message, db_session: AsyncSession) -> None:
         await message.answer(NO_NOTES_MESSAGE)
         return
 
-    response = "Последние заметки:\n\n" + "\n\n".join(
-        format_note_preview(note, position)
+    display = (
+        TelegramDisplayContext.from_preferences(preferences)
+        if preferences is not None
+        else TelegramDisplayContext(ZoneInfo("UTC"))
+    )
+    response = "🗒 <b>Последние заметки</b>\n\n" + "\n\n".join(
+        format_note_preview(note, position, display)
         for position, note in enumerate(notes, start=1)
     )
-    await message.answer(response, parse_mode=None)
+    await message.answer(response, parse_mode="HTML")

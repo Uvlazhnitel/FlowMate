@@ -159,7 +159,8 @@ async def test_empty_digest_is_suppressed_unless_enabled(
         now=now,
         defaults=DEFAULTS,
     )
-    assert message is not None and "Можно перенести: 0" in message
+    assert message is not None and "На сегодня всё спокойно." in message
+    assert ": 0" not in message
 
 
 @pytest.mark.integration

@@ -1,3 +1,4 @@
+# ruff: noqa: RUF001
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -110,37 +111,50 @@ async def start_command(
     user.is_active = True
     await db_session.flush()
     await message.answer(
-        "Добро пожаловать! FlowMate готов к работе.",
-        parse_mode=None,
+        "👋 <b>FlowMate готов к работе</b>\n\n"
+        "Нажмите «🎙 Записать» и отправьте задачу текстом или голосом.",
+        parse_mode="HTML",
         reply_markup=main_menu_keyboard(),
     )
 
 
 async def help_command(message: Message) -> None:
     await message.answer(
-        "Доступные команды: /start, /menu, /help, /status, /notes, /search. "
-        "Записи: /today, /tasks, /followups, /waiting, /questions, "
-        "/topics, /people. Черновики: /draft, /cancel. "
-        "Напоминания: /reminders, /quiet, /snooze. "
-        "Встречи: /meeting, /meeting_status, /meeting_notes, /meeting_end, "
-        "/meeting_review, "
-        "/meeting_cancel. "
-        "Пространство: /workspace. "
-        "Нажмите «🎙 Записать»: следующая текстовая или голосовая реплика будет "
-        "сохранена как новая запись. Уверенные записи создаются сразу, остальные "
-        "остаются в черновике. «❌ Отмена» завершает текущий временный диалог."
+        "ℹ️ <b>Как пользоваться FlowMate</b>\n\n"
+        "🎙 <b>Новая запись</b>\n"
+        "Нажмите «Записать» и отправьте текст или голосовое сообщение.\n\n"
+        "📋 <b>Работа</b>\n"
+        "/today — дела на сегодня\n"
+        "/tasks — задачи\n"
+        "/followups — follow-up\n"
+        "/waiting — ожидания\n"
+        "/questions — вопросы\n"
+        "/search — поиск\n\n"
+        "🎙 <b>Встречи</b>\n"
+        "/meeting — начать встречу\n"
+        "/meeting_status — текущая встреча\n"
+        "/meeting_notes — записанные пункты\n"
+        "/meeting_end — завершить встречу\n\n"
+        "⚙️ <b>Настройки</b>\n"
+        "/workspace — Работа / Личное\n"
+        "/reminders — напоминания\n"
+        "/cancel — отменить текущий диалог",
+        parse_mode="HTML",
     )
 
 
 async def status_command(message: Message, db_engine: AsyncEngine) -> None:
     if await database_is_ready(db_engine):
-        await message.answer("Бот работает, база данных доступна.")
+        await message.answer("✅ FlowMate работает")
         return
-    await message.answer("Сервис временно недоступен. Попробуйте позже.")
+    await message.answer("⚠️ FlowMate временно недоступен. Попробуйте позже.")
 
 
 async def unsupported_message(message: Message) -> None:
-    await message.answer("Отправьте текст, голосовое сообщение или используйте /help.")
+    await message.answer(
+        "Отправьте текст или голосовое сообщение после кнопки «🎙 Записать».\n"
+        "Все возможности: /help"
+    )
 
 
 async def draft_command(message: Message, db_session: AsyncSession) -> None:
@@ -157,7 +171,7 @@ async def draft_command(message: Message, db_session: AsyncSession) -> None:
         await answer_with_main_menu(message, DRAFT_NOT_FOUND_MESSAGE)
         return
     if draft.status == "parsing" or draft.analysis_payload is None:
-        await message.answer("Черновик ещё анализируется.")
+        await message.answer("⏳ Запись ещё обрабатывается")
         return
     await show_draft(message, draft, db_session)
 

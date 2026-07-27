@@ -18,8 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.schemas import SearchIntent
 from flowmate.bot.formatting import split_plain_text
-from flowmate.bot.handlers.work_items import OPEN_LABELS, STATUS_LABELS, send_details
+from flowmate.bot.handlers.work_items import send_details
 from flowmate.bot.menu import main_menu_keyboard, restore_main_menu
+from flowmate.bot.presentation import (
+    TelegramDisplayContext,
+    format_due_datetime,
+    item_presentation,
+    status_presentation,
+)
 from flowmate.db.models import WorkItem, WorkItemActionSession
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.meetings.service import get_active_meeting
@@ -57,7 +63,6 @@ from flowmate.task_engine.transient_dialogs import cancel_transient_dialogs
 PAGE_SIZE = 5
 MAX_PAGE = 999
 MAX_TITLE_LENGTH = 120
-MAX_CONTEXT_LENGTH = 60
 EXPIRED_LIST_MESSAGE = "Список устарел. Откройте его заново."
 LIST_FAILED_MESSAGE = "Не удалось загрузить список. Попробуйте позже."
 
@@ -158,8 +163,9 @@ def format_item_date(
 ) -> str:
     value = effective_item_date(item)
     if value is None:
-        return "без даты"
-    localized = value.astimezone(timezone)
+        return "Без даты"
+    context = TelegramDisplayContext(timezone=timezone)
+    formatted = format_due_datetime(value, context, now=now)
     if (
         item.status
         in {
@@ -171,10 +177,8 @@ def format_item_date(
         }
         and value < now
     ):
-        return f"просрочено: {localized:%d.%m.%Y %H:%M}"
-    if localized.date() == now.astimezone(timezone).date():
-        return f"сегодня, {localized:%H:%M}"
-    return localized.strftime("%d.%m.%Y %H:%M")
+        return f"🔴 Просрочено · {formatted}"
+    return formatted
 
 
 def format_work_item_entry(
@@ -185,24 +189,13 @@ def format_work_item_entry(
     now: datetime,
 ) -> str:
     item = value.item
-    people = ", ".join(value.person_names[:2])
-    if len(value.person_names) > 2:
-        people = f"{people} +{len(value.person_names) - 2}"
+    type_icon, _ = item_presentation(item.type)
+    status_icon, status_label = status_presentation(item.status)
     lines = [
-        f"{index}. {normalize_display_text(item.title, MAX_TITLE_LENGTH)}\n"
-        f"   Дата: {format_item_date(item, timezone=timezone, now=now)}",
-        f"   Статус: {STATUS_LABELS[item.status]}; тип: {OPEN_LABELS[item.type]}",
+        f"{index}. {type_icon} {normalize_display_text(item.title, MAX_TITLE_LENGTH)}",
+        f"   {status_icon} {status_label} · "
+        f"{format_item_date(item, timezone=timezone, now=now)}",
     ]
-    if people:
-        lines.insert(
-            1,
-            f"   Люди: {normalize_display_text(people, MAX_CONTEXT_LENGTH)}",
-        )
-    if value.topic_name:
-        lines.insert(
-            1,
-            f"   Тема: {normalize_display_text(value.topic_name, MAX_CONTEXT_LENGTH)}",
-        )
     return "\n".join(lines)
 
 
@@ -233,10 +226,11 @@ def format_stale_contact_entry(
     now: datetime,
 ) -> str:
     item = value.work_item
+    icon, label = item_presentation(item.type)
     return (
         f"{index}. {normalize_display_text(value.person.display_name, 80)} — "
         f"{normalize_display_text(item.title, MAX_TITLE_LENGTH)}\n"
-        f"   {OPEN_LABELS[item.type]}; "
+        f"   {icon} {label} · "
         f"{format_item_date(item, timezone=timezone, now=now)}"
     )
 
@@ -253,7 +247,7 @@ def list_keyboard(
     rows = [
         [
             InlineKeyboardButton(
-                text=f"{index}. Открыть",
+                text=f"{index}. Подробнее",
                 callback_data=f"wi:details:{item_id}",
             )
         ]

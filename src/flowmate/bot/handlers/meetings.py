@@ -17,6 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowmate.ai.provider import MeetingReviewProvider
 from flowmate.bot.handlers.meeting_review import send_review_summary
 from flowmate.bot.menu import answer_with_main_menu, restore_main_menu
+from flowmate.bot.presentation import (
+    TelegramDisplayContext,
+    format_datetime,
+    html_text,
+)
 from flowmate.db.models import Meeting, MeetingSetupSession, Person, Topic
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.meetings.enums import MeetingType
@@ -83,17 +88,35 @@ def setup_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def format_meeting(meeting: Meeting) -> str:
-    title = meeting.title
-    status = meeting.status
+MEETING_STATUS_LABELS = {
+    "planned": "🗓 Запланирована",
+    "active": "🟢 Идёт сейчас",
+    "processing": "⏳ Готовится итог",
+    "review_required": "✏️ Нужна проверка",
+    "completed": "✅ Завершена",
+    "cancelled": "🚫 Отменена",
+}
+
+
+def format_meeting(
+    meeting: Meeting,
+    display: TelegramDisplayContext | None = None,
+) -> str:
+    context = display or TelegramDisplayContext(ZoneInfo("UTC"))
     started = meeting.started_at
-    started_text = started.strftime("%d.%m.%Y %H:%M UTC") if started else "не начата"
+    started_text = format_datetime(started, context) if started is not None else None
     warning = (
-        "\n⚠️ Встреча активна больше 12 часов."
+        "\n\n⚠️ Встреча длится больше 12 часов"
         if meeting_is_long_running(meeting)
         else ""
     )
-    return f"{title}\nСтатус: {status}\nНачало: {started_text}{warning}"
+    lines = [
+        f"🎙 <b>{html_text(meeting.title)}</b>",
+        MEETING_STATUS_LABELS.get(meeting.status, "• Встреча"),
+    ]
+    if started_text is not None:
+        lines.append(f"Начало: {html_text(started_text)}")
+    return "\n".join(lines) + warning
 
 
 async def _setup_summary(session: AsyncSession, setup: MeetingSetupSession) -> str:
@@ -121,20 +144,27 @@ async def _setup_summary(session: AsyncSession, setup: MeetingSetupSession) -> s
         if topic_ids
         else []
     )
-    people_text = ", ".join(value.display_name for value in people) or "не выбраны"
-    topics_text = ", ".join(value.name for value in topics) or "не выбраны"
-    return (
-        f"Тип: {TYPE_LABELS[meeting_type]}\n"
-        f"Название: {context.get('title') or 'будет создано автоматически'}\n"
-        f"Участники: {people_text}\n"
-        f"Темы: {topics_text}"
-    )
+    people_text = ", ".join(html_text(value.display_name) for value in people)
+    topics_text = ", ".join(html_text(value.name) for value in topics)
+    title = str(context.get("title") or "создадим автоматически")
+    lines = [
+        "🎙 <b>Новая встреча</b>",
+        "",
+        TYPE_LABELS[meeting_type],
+        f"<b>{html_text(title)}</b>",
+    ]
+    if people_text:
+        lines.extend(("", f"👥 {people_text}"))
+    if topics_text:
+        lines.append(f"🏷 {topics_text}")
+    return "\n".join(lines)
 
 
 async def meeting_command(
     message: Message,
     db_session: AsyncSession,
     work_item_action_ttl_minutes: int,
+    notification_defaults: NotificationDefaults,
 ) -> None:
     telegram_user = message.from_user
     if telegram_user is None:
@@ -145,7 +175,16 @@ async def meeting_command(
         return
     active = await get_active_meeting(db_session, user.id)
     if active is not None:
-        await message.answer("Meeting Mode уже активен.\n" + format_meeting(active))
+        preferences = await get_effective_notification_preferences(
+            db_session, user.id, notification_defaults
+        )
+        await message.answer(
+            format_meeting(
+                active,
+                TelegramDisplayContext.from_preferences(preferences),
+            ),
+            parse_mode="HTML",
+        )
         return
     setup = await open_setup(
         db_session, user.id, ttl_minutes=work_item_action_ttl_minutes
@@ -153,13 +192,23 @@ async def meeting_command(
     await db_session.commit()
     if "type" in setup.context:
         await message.answer(
-            await _setup_summary(db_session, setup), reply_markup=setup_keyboard()
+            await _setup_summary(db_session, setup),
+            parse_mode="HTML",
+            reply_markup=setup_keyboard(),
         )
     else:
-        await message.answer("Выберите тип встречи.", reply_markup=type_keyboard())
+        await message.answer(
+            "🎙 <b>Новая встреча</b>\n\nВыберите формат:",
+            parse_mode="HTML",
+            reply_markup=type_keyboard(),
+        )
 
 
-async def meeting_status_command(message: Message, db_session: AsyncSession) -> None:
+async def meeting_status_command(
+    message: Message,
+    db_session: AsyncSession,
+    notification_defaults: NotificationDefaults,
+) -> None:
     telegram_user = message.from_user
     if telegram_user is None:
         return
@@ -168,11 +217,19 @@ async def meeting_status_command(message: Message, db_session: AsyncSession) -> 
         await message.answer("Активной встречи нет.")
         return
     active = await get_active_meeting(db_session, user.id)
-    await message.answer(
-        "Активной встречи нет."
-        if active is None
-        else "Meeting Mode активен.\n" + format_meeting(active)
-    )
+    if active is None:
+        await message.answer("Сейчас нет активной встречи.")
+    else:
+        preferences = await get_effective_notification_preferences(
+            db_session, user.id, notification_defaults
+        )
+        await message.answer(
+            format_meeting(
+                active,
+                TelegramDisplayContext.from_preferences(preferences),
+            ),
+            parse_mode="HTML",
+        )
 
 
 async def meeting_end_command(
@@ -200,7 +257,7 @@ async def meeting_end_command(
         )
         meeting_id = meeting.id
         await db_session.commit()
-        await message.answer("Встреча завершена. Обработка начата.")
+        await message.answer("✅ Встреча завершена\n\n⏳ Собираю итог…")
         await generate_review(
             db_session,
             user.id,
@@ -216,7 +273,8 @@ async def meeting_end_command(
     except MeetingReviewError:
         await db_session.commit()
         await message.answer(
-            "Встреча сохранена. Итог пока не собран; повторите через /meeting_review."
+            "✅ Встреча сохранена\n\n"
+            "Итог пока не готов. Попробуйте снова через /meeting_review."
         )
     except (ValueError, SQLAlchemyError):
         await db_session.rollback()
@@ -237,7 +295,7 @@ async def meeting_cancel_command(
     if setup is not None:
         await finish_setup(db_session, setup, status="cancelled")
         await db_session.commit()
-        await message.answer("Настройка встречи отменена.")
+        await message.answer("Настройка встречи отменена")
         return
     active = await get_active_meeting(db_session, user.id)
     if active is None:
@@ -248,7 +306,7 @@ async def meeting_cancel_command(
             db_session, user.id, active.id, telegram_update_id=event_update.update_id
         )
         await db_session.commit()
-        await message.answer("Встреча отменена.")
+        await message.answer("🚫 Встреча отменена")
     except (ValueError, SQLAlchemyError):
         await db_session.rollback()
         await message.answer("Не удалось отменить встречу.")
@@ -268,7 +326,9 @@ async def meeting_title_reply(
     )
     await db_session.commit()
     await message.answer(
-        await _setup_summary(db_session, meeting_setup), reply_markup=setup_keyboard()
+        await _setup_summary(db_session, meeting_setup),
+        parse_mode="HTML",
+        reply_markup=setup_keyboard(),
     )
     await restore_main_menu(message)
 
@@ -366,7 +426,9 @@ async def meeting_callback(
                 db_session, setup, step="context", values={"type": value.value}
             )
             await message.answer(
-                await _setup_summary(db_session, setup), reply_markup=setup_keyboard()
+                await _setup_summary(db_session, setup),
+                parse_mode="HTML",
+                reply_markup=setup_keyboard(),
             )
         elif data == "mt:title":
             prompt = await message.answer(
@@ -405,11 +467,14 @@ async def meeting_callback(
         elif data == "mt:context":
             await update_setup(db_session, setup, step="context")
             await message.answer(
-                await _setup_summary(db_session, setup), reply_markup=setup_keyboard()
+                await _setup_summary(db_session, setup),
+                parse_mode="HTML",
+                reply_markup=setup_keyboard(),
             )
         elif data == "mt:review":
             await message.answer(
                 await _setup_summary(db_session, setup),
+                parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[
                         [
@@ -469,7 +534,12 @@ async def meeting_callback(
                 db_session, setup, status="completed", meeting_id=meeting.id
             )
             await answer_with_main_menu(
-                message, "Meeting Mode активен.\n" + format_meeting(meeting)
+                message,
+                format_meeting(
+                    meeting,
+                    TelegramDisplayContext.from_preferences(preferences),
+                ),
+                parse_mode="HTML",
             )
         await db_session.commit()
         await callback.answer()

@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -16,6 +17,7 @@ from flowmate.bot.handlers.drafts import (
     DRAFT_EXPIRED_MESSAGE,
     DRAFT_FAILED_MESSAGE,
     DRAFT_REPLY_REQUIRED_MESSAGE,
+    format_conversion_summary,
     refine_draft,
 )
 from flowmate.bot.handlers.voice import (
@@ -24,6 +26,7 @@ from flowmate.bot.handlers.voice import (
     TRANSCRIPTION_FAILED_MESSAGE,
 )
 from flowmate.bot.menu import answer_with_main_menu
+from flowmate.bot.presentation import TelegramDisplayContext
 from flowmate.db.drafts import (
     DraftStatus,
     claim_update,
@@ -31,12 +34,15 @@ from flowmate.db.drafts import (
     transition_draft,
 )
 from flowmate.db.models import DraftSession
+from flowmate.reminders.preferences import (
+    NotificationDefaults,
+    get_effective_notification_preferences,
+)
 from flowmate.speech.errors import AudioTooLargeError, SpeechError, SpeechTimeoutError
 from flowmate.speech.service import TranscriptionService
 from flowmate.task_engine.conversion import (
     DraftConversionError,
     DraftConversionService,
-    conversion_summary,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,6 +66,8 @@ async def handle_control_phrase(
     user_id: UUID,
     draft_ttl_hours: int,
     draft_conversion_service: DraftConversionService,
+    notification_defaults: NotificationDefaults | None = None,
+    app_timezone: ZoneInfo | None = None,
 ) -> bool:
     normalized = " ".join((message.text or "").split()).casefold()
     if normalized not in {"отмена", "сохрани как есть"}:
@@ -86,7 +94,7 @@ async def handle_control_phrase(
         status: DraftStatus = "cancelled"
         await transition_draft(db_session, claimed, status)
         await db_session.commit()
-        response = "Черновик отменён. Исходная заметка сохранена."
+        response = "🚫 Черновик отменён. Исходная запись сохранена."
     else:
         try:
             result = await draft_conversion_service.convert(
@@ -96,7 +104,17 @@ async def handle_control_phrase(
                 allow_incomplete=True,
             )
             await db_session.commit()
-            response = conversion_summary(result)
+            display = TelegramDisplayContext(timezone=app_timezone or ZoneInfo("UTC"))
+            if notification_defaults is not None:
+                preferences = await get_effective_notification_preferences(
+                    db_session, user_id, notification_defaults
+                )
+                display = TelegramDisplayContext.from_preferences(preferences)
+            response = format_conversion_summary(
+                result,
+                display=display,
+                workspace=claimed.workspace,
+            )
         except (DraftConversionError, SQLAlchemyError) as error:
             await db_session.rollback()
             logger.error(
@@ -106,7 +124,11 @@ async def handle_control_phrase(
                 type(error).__name__,
             )
             response = DRAFT_CONVERSION_FAILED_MESSAGE
-    await answer_with_main_menu(message, response)
+    await answer_with_main_menu(
+        message,
+        response,
+        parse_mode="HTML" if normalized != "отмена" else None,
+    )
     return True
 
 
@@ -160,6 +182,8 @@ async def active_draft_message(
     draft_ttl_hours: int = 24,
     draft_database_failed: bool = False,
     processed_draft_update: bool = False,
+    notification_defaults: NotificationDefaults | None = None,
+    app_timezone: ZoneInfo | None = None,
 ) -> None:
     telegram_user = message.from_user
     if telegram_user is None:
@@ -187,6 +211,8 @@ async def active_draft_message(
         user_id=draft_user_id,
         draft_ttl_hours=draft_ttl_hours,
         draft_conversion_service=(draft_conversion_service or DraftConversionService()),
+        notification_defaults=notification_defaults,
+        app_timezone=app_timezone,
     ):
         return
     if active_draft.status == "ready":

@@ -43,22 +43,25 @@ def review_keyboard(meeting_id: UUID) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Разобрать сейчас", callback_data=f"mr:clarify:{meeting_id}"
+                    text="❓ Разобрать вопросы",
+                    callback_data=f"mr:clarify:{meeting_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="Открыть итог", callback_data=f"mr:show:{meeting_id}"
+                    text="📋 Открыть итог", callback_data=f"mr:show:{meeting_id}"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="Подтвердить готовые", callback_data=f"mr:confirm:{meeting_id}"
+                    text="✅ Сохранить готовые",
+                    callback_data=f"mr:confirm:{meeting_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="Оставить в Inbox", callback_data=f"mr:inbox:{meeting_id}"
+                    text="📥 Остальное в Inbox",
+                    callback_data=f"mr:inbox:{meeting_id}",
                 )
             ],
         ]
@@ -75,8 +78,11 @@ def format_review_summary(payload: dict[str, object]) -> str:
         ("decision", "решения"),
         ("note", "заметки"),
     )
-    lines = ["Встреча завершена.", "", "Записано:"]
-    lines.extend(f"— {values.get(key, 0)} {label}" for key, label in labels)
+    lines = ["✅ Встреча завершена", "", "Итог:"]
+    non_empty = [
+        f"• {values.get(key, 0)} {label}" for key, label in labels if values.get(key, 0)
+    ]
+    lines.extend(non_empty or ["• Новых записей нет"])
     items = payload.get("items", [])
     unresolved = (
         sum(
@@ -88,7 +94,7 @@ def format_review_summary(payload: dict[str, object]) -> str:
         else 0
     )
     if unresolved:
-        lines.extend(["", f"Требуют уточнения: {unresolved}."])
+        lines.extend(["", f"❓ Нужно уточнить: {unresolved}"])
     return "\n".join(lines)
 
 

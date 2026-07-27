@@ -31,7 +31,6 @@ from flowmate.bot.handlers.commands import (
 )
 from flowmate.bot.handlers.drafts import (
     DRAFT_ANALYZING_MESSAGE,
-    DRAFT_CONTROL_MESSAGE,
     parse_callback_data,
 )
 from flowmate.bot.handlers.notes import (
@@ -286,16 +285,26 @@ async def test_help_response() -> None:
         await help_command(make_message(123, text="/help"))
 
     answer.assert_awaited_once_with(
-        "Доступные команды: /start, /menu, /help, /status, /notes, /search. "
-        "Записи: /today, /tasks, /followups, /waiting, /questions, "
-        "/topics, /people. Черновики: /draft, /cancel. "
-        "Напоминания: /reminders, /quiet, /snooze. "
-        "Встречи: /meeting, /meeting_status, /meeting_notes, /meeting_end, "
-        "/meeting_review, /meeting_cancel. "
-        "Пространство: /workspace. "
-        "Нажмите «🎙 Записать»: следующая текстовая или голосовая реплика будет "
-        "сохранена как новая запись. Уверенные записи создаются сразу, остальные "
-        "остаются в черновике. «❌ Отмена» завершает текущий временный диалог."
+        "ℹ️ <b>Как пользоваться FlowMate</b>\n\n"
+        "🎙 <b>Новая запись</b>\n"
+        "Нажмите «Записать» и отправьте текст или голосовое сообщение.\n\n"
+        "📋 <b>Работа</b>\n"
+        "/today — дела на сегодня\n"
+        "/tasks — задачи\n"
+        "/followups — follow-up\n"
+        "/waiting — ожидания\n"
+        "/questions — вопросы\n"
+        "/search — поиск\n\n"
+        "🎙 <b>Встречи</b>\n"
+        "/meeting — начать встречу\n"
+        "/meeting_status — текущая встреча\n"
+        "/meeting_notes — записанные пункты\n"
+        "/meeting_end — завершить встречу\n\n"
+        "⚙️ <b>Настройки</b>\n"
+        "/workspace — Работа / Личное\n"
+        "/reminders — напоминания\n"
+        "/cancel — отменить текущий диалог",
+        parse_mode="HTML",
     )
 
 
@@ -303,8 +312,8 @@ async def test_help_response() -> None:
 @pytest.mark.parametrize(
     ("ready", "expected"),
     [
-        (True, "Бот работает, база данных доступна."),
-        (False, "Сервис временно недоступен. Попробуйте позже."),
+        (True, "✅ FlowMate работает"),
+        (False, "⚠️ FlowMate временно недоступен. Попробуйте позже."),
     ],
 )
 async def test_status_response(ready: bool, expected: str) -> None:
@@ -328,7 +337,8 @@ async def test_unsupported_message_response() -> None:
         await unsupported_message(make_message(123, text="hello"))
 
     answer.assert_awaited_once_with(
-        "Отправьте текст, голосовое сообщение или используйте /help."
+        "Отправьте текст или голосовое сообщение после кнопки «🎙 Записать».\n"
+        "Все возможности: /help"
     )
 
 
@@ -513,9 +523,10 @@ async def test_new_voice_note_is_parsed_after_transcription() -> None:
         "Распознанный текст",
         DRAFT_ANALYZING_MESSAGE,
     ]
-    assert "[заметка] Voice note" in answer.await_args_list[3].args[0]
-    assert answer.await_args_list[3].kwargs == {"parse_mode": None}
-    assert answer.await_args_list[4].args[0] == DRAFT_CONTROL_MESSAGE
+    assert "🗒 <b>Заметка</b>\nVoice note" in answer.await_args_list[3].args[0]
+    assert answer.await_args_list[3].kwargs["parse_mode"] == "HTML"
+    assert "reply_markup" in answer.await_args_list[3].kwargs
+    assert len(answer.await_args_list) == 4
 
 
 @pytest.mark.asyncio

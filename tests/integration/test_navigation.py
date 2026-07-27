@@ -82,7 +82,7 @@ async def test_work_item_pages_have_stable_boundaries_and_enrichment(
             [
                 row
                 for row in first.keyboard.inline_keyboard
-                if row[0].text.endswith("Открыть")
+                if row[0].text.endswith("Подробнее")
             ]
         )
         == 5
@@ -93,8 +93,8 @@ async def test_work_item_pages_have_stable_boundaries_and_enrichment(
         for button in row
     )
     assert "Private other-user task" not in first.text + last.text
-    assert "Testing" in first.text + last.text
-    assert "Антон" in first.text + last.text
+    assert "Testing" not in first.text + last.text
+    assert "Антон" not in first.text + last.text
     assert not any(
         button.text == "Вперёд"
         for row in last.keyboard.inline_keyboard

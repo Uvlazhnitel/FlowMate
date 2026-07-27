@@ -37,11 +37,16 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-async def answer_with_main_menu(message: Message, text: str) -> bool:
+async def answer_with_main_menu(
+    message: Message,
+    text: str,
+    *,
+    parse_mode: str | None = None,
+) -> bool:
     try:
         await message.answer(
             text,
-            parse_mode=None,
+            parse_mode=parse_mode,
             reply_markup=main_menu_keyboard(),
         )
     except TelegramAPIError:

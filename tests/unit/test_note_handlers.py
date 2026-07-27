@@ -1,3 +1,4 @@
+# ruff: noqa: RUF001
 import logging
 from datetime import UTC, datetime, time
 from types import SimpleNamespace
@@ -254,7 +255,7 @@ async def test_text_note_returns_safe_save_status(
 
 
 @pytest.mark.asyncio
-async def test_new_text_note_is_parsed_and_returned_as_plain_text() -> None:
+async def test_new_text_note_is_returned_as_compact_html_card() -> None:
     message = make_message(text="  Prepare report  ")
     service, parse = make_draft_service()
     with (
@@ -274,15 +275,12 @@ async def test_new_text_note_is_parsed_and_returned_as_plain_text() -> None:
     parse.assert_awaited_once_with("Prepare report")
     assert answer.await_args_list[0].args[0] == DRAFT_ANALYZING_MESSAGE
     summary_call = answer.await_args_list[1]
-    assert "Я нашёл записей: 1" in summary_call.args[0]
-    assert "Общая уверенность: 82%" in summary_call.args[0]
-    assert "Статус: готово" in summary_call.args[0]
-    assert "[задача] Prepare report" in summary_call.args[0]
-    assert summary_call.kwargs == {"parse_mode": None}
-    assert answer.await_args_list[2].args[0] == (
-        "Проверьте черновик. Финальные записи ещё не созданы."
+    assert summary_call.args[0] == (
+        "📝 <b>Проверьте запись</b>\n\n📌 <b>Задача</b>\nPrepare report"
     )
-    assert "reply_markup" in answer.await_args_list[2].kwargs
+    assert summary_call.kwargs["parse_mode"] == "HTML"
+    assert "reply_markup" in summary_call.kwargs
+    assert len(answer.await_args_list) == 2
 
 
 @pytest.mark.asyncio
@@ -519,7 +517,7 @@ async def test_ai_failure_keeps_saved_note_and_logs_no_content(
 
 
 @pytest.mark.asyncio
-async def test_long_draft_summary_is_split_without_markup() -> None:
+async def test_long_draft_title_is_compact_and_within_telegram_limit() -> None:
     message = make_message(text="Long note")
     service, _ = make_draft_service(make_draft_result("x" * 8500))
     with (
@@ -531,13 +529,11 @@ async def test_long_draft_summary_is_split_without_markup() -> None:
     ):
         await text_note(message, make_update(message), make_session(), service)
 
-    summary_calls = answer.await_args_list[1:-1]
-    assert len(summary_calls) == 3
-    assert all(len(call.args[0]) <= 4000 for call in summary_calls)
-    assert all(call.kwargs == {"parse_mode": None} for call in summary_calls)
-    assert answer.await_args_list[-1].args[0] == (
-        "Проверьте черновик. Финальные записи ещё не созданы."
-    )
+    summary_call = answer.await_args_list[1]
+    assert len(summary_call.args[0]) <= 4000
+    assert summary_call.kwargs["parse_mode"] == "HTML"
+    assert "reply_markup" in summary_call.kwargs
+    assert len(answer.await_args_list) == 2
 
 
 @pytest.mark.asyncio
@@ -573,13 +569,13 @@ async def test_summary_shows_every_detected_item() -> None:
         await text_note(message, make_update(message), make_session(), service)
 
     summary = answer.await_args_list[1].args[0]
-    assert "1. [вопрос] Спросить лида про эскалацию" in summary
-    assert "2. [контроль] Написать Антону по срокам" in summary
-    assert "3. [заметка] Клиент ждёт ответ до среды" in summary
-    assert "Люди: Антон" in summary
+    assert "1. ❓ <b>Вопрос</b>\nСпросить лида про эскалацию" in summary
+    assert "2. 🔁 <b>Follow-up</b>\nНаписать Антону по срокам" in summary
+    assert "3. 🗒 <b>Заметка</b>\nКлиент ждёт ответ до среды" in summary
+    assert "Люди:" not in summary
 
 
-def test_summary_shows_original_dates_topics_and_dependencies() -> None:
+def test_summary_shows_human_date_without_internal_metadata() -> None:
     due = make_temporal_candidate(
         original_phrase="до среды",
         normalized_value=datetime(2026, 7, 22, tzinfo=UTC),
@@ -609,12 +605,13 @@ def test_summary_shows_original_dates_topics_and_dependencies() -> None:
 
     summary = format_draft_summary(analysis)
 
-    assert 'Срок: "до среды" → 2026-07-22T23:59:59+00:00' in summary
-    assert "Темы: эскалация" in summary
-    assert 'Зависимости: после пункта 1 ("после этого")' in summary
+    assert "📅 Срок: 22 июля" in summary
+    assert "2026-07-22T" not in summary
+    assert "Темы:" not in summary
+    assert "Зависимости:" not in summary
 
 
-def test_note_preview_is_plain_compact_and_bounded() -> None:
+def test_note_preview_is_safe_compact_and_bounded() -> None:
     note = Note(
         user_id=uuid4(),
         content="line one\n" + "x" * 400,
@@ -625,9 +622,9 @@ def test_note_preview_is_plain_compact_and_bounded() -> None:
 
     preview = format_note_preview(note, 1)
 
-    assert preview.startswith("1. [голос] 2026-07-20 12:30 UTC\nline one ")
+    assert preview.startswith("1. 🎙 <b>20 июля, 12:30</b>\nline one ")
     assert len(preview.split("\n", maxsplit=1)[1]) == 300
-    assert preview.endswith("...")
+    assert preview.endswith("…")
 
 
 def test_manual_note_preview_has_distinct_source_label() -> None:
@@ -639,11 +636,11 @@ def test_manual_note_preview_has_distinct_source_label() -> None:
         created_at=datetime(2026, 7, 20, 12, 30, tzinfo=UTC),
     )
 
-    assert format_note_preview(note, 1).startswith("1. [вручную] 2026-07-20 12:30 UTC")
+    assert format_note_preview(note, 1).startswith("1. 🗒 <b>20 июля, 12:30</b>")
 
 
 @pytest.mark.asyncio
-async def test_notes_command_lists_only_requested_users_notes_as_plain_text() -> None:
+async def test_notes_command_lists_only_requested_users_notes_as_safe_html() -> None:
     message = make_message(text="/notes")
     session = make_session()
     user = SimpleNamespace(id=uuid4())
@@ -671,8 +668,10 @@ async def test_notes_command_lists_only_requested_users_notes_as_plain_text() ->
     list_notes.assert_awaited_once_with(session, user.id, limit=10)
     cast(AsyncMock, session.rollback).assert_awaited_once()
     answer.assert_awaited_once_with(
-        "Последние заметки:\n\n1. [текст] 2026-07-20 12:30 UTC\n<b>not markup</b>",
-        parse_mode=None,
+        "🗒 <b>Последние заметки</b>\n\n"
+        "1. 🗒 <b>20 июля, 12:30</b>\n"
+        "&lt;b&gt;not markup&lt;/b&gt;",
+        parse_mode="HTML",
     )
 
 

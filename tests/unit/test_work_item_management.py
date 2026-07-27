@@ -93,7 +93,7 @@ def test_custom_date_parser_uses_application_timezone() -> None:
     assert date_only == datetime(2026, 7, 21, 23, 59, 59, tzinfo=timezone)
     assert with_time == datetime(2026, 7, 22, 9, 30, tzinfo=timezone)
     assert parse_user_datetime("в следующую пятницу", timezone) is None
-    assert format_datetime(with_time, timezone) == "22.07.2026 09:30"
+    assert format_datetime(with_time, timezone) == "22 июля, 09:30"
 
 
 def make_details(item_type: str = "task", status: str = "inbox") -> WorkItemDetails:
@@ -139,9 +139,9 @@ def test_detail_card_is_safe_concise_and_context_sensitive() -> None:
     text = format_work_item_details(details, ZoneInfo("UTC"))
     keyboard = details_keyboard(details)
 
-    assert "Название: Important work" in text
+    assert "📌 <b>Задача</b>\nImportant work" in text
     assert "Private linked note" in text
-    assert "Testing" in text and "Антон" in text
+    assert "Testing" not in text and "Антон" not in text
     assert len(text) < 4000
     labels = [button.text for row in keyboard.inline_keyboard for button in row]
     assert labels == [
@@ -558,7 +558,7 @@ async def test_ambiguous_management_creates_selection_without_mutation() -> None
     answer_call = answer.await_args
     assert answer_call is not None
     assert answer_call.args[0].startswith("Выберите запись:\n\n")
-    assert "[follow-up] Follow-up 0" in answer_call.args[0]
+    assert "🔁 Follow-up 0" in answer_call.args[0]
     assert "Люди:" not in answer_call.args[0]
     assert len(answer_call.kwargs["reply_markup"].inline_keyboard) == 3
     assert answer_call.kwargs["reply_markup"].inline_keyboard[-1][0].text == "Отмена"

@@ -45,15 +45,15 @@ def format_preferences(preferences: UserNotificationPreferences) -> str:
     )
     empty = "да" if preferences.send_empty_digests else "нет"
     return (
-        "Настройки напоминаний\n"
-        f"Часовой пояс: {preferences.timezone}\n"
-        f"Утренний обзор: {morning}\n"
-        f"Вечерний обзор: {evening}\n"
-        f"Тихие часы: {quiet}\n"
-        "Время напоминаний по умолчанию: "
+        "⚙️ Настройки напоминаний\n\n"
+        f"🌍 Часовой пояс: {preferences.timezone}\n"
+        f"☀️ Утренний обзор: {morning}\n"
+        f"🌙 Вечерний обзор: {evening}\n"
+        f"🔕 Тихие часы: {quiet}\n"
+        "⏰ Время по умолчанию: "
         f"{preferences.default_reminder_time:%H:%M}\n"
-        f"Snooze по умолчанию: {preferences.default_snooze_minutes} мин.\n"
-        f"Пустые обзоры: {empty}"
+        f"⏳ Откладывать на: {preferences.default_snooze_minutes} мин.\n"
+        f"📭 Пустые обзоры: {empty}"
     )
 
 

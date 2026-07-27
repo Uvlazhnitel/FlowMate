@@ -398,10 +398,13 @@ known and any explicitly supplied date is valid and unambiguous. Missing
 optional people, topics, amounts, descriptions, or dates remain Inbox metadata
 and do not block capture. Items between the two thresholds require
 confirmation; lower-confidence or invalid-date items remain unresolved. The
-summary is plain text and includes every detected item. Ready drafts show
-Confirm, Change, and Cancel buttons. Drafts that need clarification ask one
-question at a time; text and voice answers must be sent as a Telegram Reply to
-that question. Clear options are shown as buttons.
+Telegram preview is a compact HTML card with only the record type, title,
+human-readable due date, and reminder. Internal confidence, AI status, missing
+fields, people, topics, dependencies, and raw ISO values remain stored but are
+not shown in routine Telegram messages. Ready drafts show **Сохранить**,
+**Изменить**, and **Отменить** buttons. Drafts that need clarification ask one
+plain-language question at a time; text and voice answers must be sent as a
+Telegram Reply to that question. Clear options are shown as buttons.
 
 Only one open draft is kept per user. `/draft` shows it and `/cancel` atomically
 cancels every standalone draft and work-item dialog while preserving source
@@ -441,7 +444,12 @@ WorkItem relations when both referenced items are actionable.
 `/waiting`, and `/questions` show compact lists of the corresponding active
 records; `/topics` and `/people` include open-record counts. Lists use pages of
 five records with `Назад`, `Вперёд`, and `Главное меню` inline actions. Each
-WorkItem summary includes its date, people, topic, status, and a details button.
+WorkItem summary includes its type, title, human-readable date, status, and a
+details button.
+Routine Telegram cards intentionally omit people and topics; those projections
+remain available in the PWA and the explicit `/people` and `/topics` views.
+Dates use the user's timezone and display preferences, with natural labels such
+as `Сегодня, 11:14`, `Завтра, 09:00`, or `7 августа`.
 
 The main reply keyboard contains `🎙 Записать`, `📅 Сегодня`, `✅ Задачи`,
 `🔁 Follow-up`, `⏳ Ждём`, `❓ Вопросы`, `🔍 Поиск`, `⚙️ Настройки`,
@@ -469,8 +477,8 @@ clear conversational result opens directly; multiple results use the same
 five-item pagination. Search uses `ILIKE`/JSONB alias matching and does not
 provide fuzzy, semantic, vector, or standalone Note search.
 
-Open a record from a list to see its description, dates, people, topic, up to
-three relevant notes, recent history, and context-sensitive actions. Active
+Open **Подробнее** from a list to see its description, dates, up to three
+relevant notes, recent history, and context-sensitive actions. Active
 tasks can be completed, snoozed, rescheduled, annotated, or cancelled;
 follow-ups also support **Ответ получен**; waiting records support **Получено**
 and creation of one linked follow-up. Completed records can be reopened.

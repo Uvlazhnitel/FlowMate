@@ -159,22 +159,25 @@ def format_digest_message(
 ) -> str:
     workspace_label = WORKSPACE_LABELS[workspace]
     if reminder_type is ReminderType.MORNING_DIGEST:
-        return (
-            f"Доброе утро · {workspace_label}\n\n"
-            f"🔴 Просрочено: {snapshot.overdue}\n"
-            f"🟠 На сегодня: {snapshot.due_today}\n"
-            f"🔁 Follow-up: {snapshot.follow_ups}\n"
-            f"⏳ Ждём ответа: {snapshot.waiting}\n"
-            f"❓ Открытые вопросы: {snapshot.questions}\n"
-            f"📥 Входящие: {snapshot.inbox}"
-        )
-    return (
-        f"Вечерний обзор · {workspace_label}\n\n"
-        f"🟠 Не завершено сегодня: {snapshot.due_today}\n"
-        f"🔁 Просроченные follow-up: {snapshot.follow_ups}\n"
-        f"⏳ Требуют внимания: {snapshot.waiting}\n"
-        f"📅 Можно перенести: {snapshot.reschedule}"
-    )
+        values = [
+            ("🔴", "Просрочено", snapshot.overdue),
+            ("🟠", "На сегодня", snapshot.due_today),
+            ("🔁", "Follow-up", snapshot.follow_ups),
+            ("⏳", "Ждём ответа", snapshot.waiting),
+            ("❓", "Открытые вопросы", snapshot.questions),
+            ("📥", "Входящие", snapshot.inbox),
+        ]
+        title = f"☀️ Доброе утро · {workspace_label}"
+    else:
+        values = [
+            ("🟠", "Не завершено сегодня", snapshot.due_today),
+            ("🔁", "Просроченные follow-up", snapshot.follow_ups),
+            ("⏳", "Требуют внимания", snapshot.waiting),
+            ("📅", "Можно перенести", snapshot.reschedule),
+        ]
+        title = f"🌙 Вечерний обзор · {workspace_label}"
+    rows = [f"{icon} {label}: {value}" for icon, label, value in values if value]
+    return "\n\n".join((title, "\n".join(rows or ["На сегодня всё спокойно."])))
 
 
 async def ensure_daily_digest_reminders(

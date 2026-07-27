@@ -23,6 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowmate.ai.errors import AIError
 from flowmate.ai.schemas import ManagementAction, ManagementIntent, TemporalStatus
 from flowmate.bot.menu import answer_with_main_menu
+from flowmate.bot.presentation import (
+    TelegramDisplayContext,
+    format_due_datetime,
+    html_text,
+    item_presentation,
+    preview,
+    status_presentation,
+)
 from flowmate.db.drafts import get_active_draft_for_user
 from flowmate.db.models import WorkItem, WorkItemActionSession
 from flowmate.db.users import get_user_by_telegram_id
@@ -126,46 +134,49 @@ EVENT_LABELS = {
 
 
 def format_datetime(value: datetime | None, timezone: ZoneInfo) -> str:
-    if value is None:
-        return "не задано"
-    return value.astimezone(timezone).strftime("%d.%m.%Y %H:%M")
+    return format_due_datetime(value, TelegramDisplayContext(timezone=timezone))
 
 
 def card_preview(value: str, limit: int) -> str:
-    normalized = " ".join(value.split())
-    return (
-        normalized
-        if len(normalized) <= limit
-        else f"{normalized[: limit - 1].rstrip()}…"
-    )
+    return preview(value, limit)
 
 
 def format_work_item_details(details: WorkItemDetails, timezone: ZoneInfo) -> str:
     item = details.item
+    type_icon, type_label = item_presentation(item.type)
+    status_icon, status_label = status_presentation(item.status)
     lines = [
-        f"Тип: {OPEN_LABELS[item.type]}",
-        f"Название: {card_preview(item.title, 180)}",
-        f"Статус: {STATUS_LABELS[item.status]}",
-        f"Срок: {format_datetime(item.due_at, timezone)}",
-        f"Следующий контакт: {format_datetime(item.next_follow_up_at, timezone)}",
+        f"{type_icon} <b>{type_label}</b>",
+        html_text(card_preview(item.title, 220)),
+        "",
+        f"{status_icon} {status_label}",
     ]
-    if details.person_names:
-        lines.append(f"Люди: {card_preview(', '.join(details.person_names), 240)}")
-    if details.topic_name:
-        lines.append(f"Тема: {card_preview(details.topic_name, 120)}")
+    if item.due_at is not None:
+        lines.append(f"📅 Срок: {format_datetime(item.due_at, timezone)}")
+    if item.next_follow_up_at is not None:
+        lines.append(
+            f"🔁 Следующий контакт: {format_datetime(item.next_follow_up_at, timezone)}"
+        )
     if item.description:
-        lines.append(f"Описание: {card_preview(item.description, 800)}")
+        lines.extend(["", html_text(card_preview(item.description, 800))])
     if details.notes:
         lines.extend(
-            ["", "Заметки:"]
+            ["", "<b>Заметки</b>"]
             + [
-                f"• {card_preview(note.content or '[транскрипция очищена]', 260)}"
+                f"• {
+                    html_text(
+                        card_preview(
+                            note.content or '[транскрипция очищена]',
+                            260,
+                        )
+                    )
+                }"
                 for note in details.notes
             ]
         )
     if details.events:
         lines.extend(
-            ["", "Последние изменения:"]
+            ["", "<b>Последние изменения</b>"]
             + [
                 f"• {event.created_at.astimezone(timezone):%d.%m.%Y %H:%M} — "
                 f"{EVENT_LABELS[event.event_type]}"
@@ -180,7 +191,7 @@ def item_keyboard(item: WorkItem) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Открыть",
+                    text="Подробнее",
                     callback_data=f"wi:details:{item.id}",
                 )
             ]
@@ -199,14 +210,11 @@ def format_selection_entry(
         if item.type == WorkItemType.FOLLOW_UP.value
         else item.due_at
     )
+    icon, label = item_presentation(item.type)
     lines = [
-        f"{index}. [{OPEN_LABELS[item.type]}] {card_preview(item.title, 120)}\n"
-        f"дата: {format_datetime(scheduled, timezone)}"
+        f"{index}. {icon} {card_preview(item.title, 120)}",
+        f"   {label} · {format_datetime(scheduled, timezone)}",
     ]
-    if value.person_names:
-        lines.append(f"   Люди: {card_preview(', '.join(value.person_names), 100)}")
-    if value.topic_name:
-        lines.append(f"   Тема: {card_preview(value.topic_name, 80)}")
     return "\n".join(lines)
 
 
@@ -367,17 +375,26 @@ async def send_item_list(
     timezone: ZoneInfo,
 ) -> None:
     if not items:
-        await message.answer(f"{heading}: записей нет.")
+        await message.answer(f"{heading}\n\nЗдесь пока нет записей.")
         return
-    await message.answer(f"{heading}: {len(items)}")
+    await message.answer(f"<b>{heading}</b> · {len(items)}", parse_mode="HTML")
     for item in items:
         date = item.next_follow_up_at if item.type == "follow_up" else item.due_at
-        text = (
-            f"[{OPEN_LABELS[item.type]}] {item.title}\n"
-            f"Статус: {STATUS_LABELS[item.status]}; "
-            f"дата: {format_datetime(date, timezone)}"
+        icon, label = item_presentation(item.type)
+        status_icon, status_label = status_presentation(item.status)
+        text = "\n".join(
+            (
+                f"{icon} <b>{label}</b>",
+                html_text(card_preview(item.title, 220)),
+                "",
+                f"{status_icon} {status_label} · {format_datetime(date, timezone)}",
+            )
         )
-        await message.answer(text, parse_mode=None, reply_markup=item_keyboard(item))
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=item_keyboard(item),
+        )
 
 
 async def send_details(
@@ -400,13 +417,13 @@ async def send_details(
     if edit:
         await message.edit_text(
             text,
-            parse_mode=None,
+            parse_mode="HTML",
             reply_markup=details_keyboard(details),
         )
     else:
         await message.answer(
             text,
-            parse_mode=None,
+            parse_mode="HTML",
             reply_markup=details_keyboard(details),
         )
     return True
@@ -1101,7 +1118,7 @@ async def action_session_message(
                         format_work_item_details(details, app_timezone),
                         chat_id=origin_chat_id,
                         message_id=origin_message_id,
-                        parse_mode=None,
+                        parse_mode="HTML",
                         reply_markup=details_keyboard(details),
                     )
                 except TelegramAPIError:

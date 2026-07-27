@@ -57,14 +57,19 @@ logger = logging.getLogger(__name__)
 def capture_keyboard(capture_id: UUID) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="↩️ Undo", callback_data=f"mc:undo:{capture_id}")]
+            [
+                InlineKeyboardButton(
+                    text="↩️ Отменить последний",
+                    callback_data=f"mc:undo:{capture_id}",
+                )
+            ]
         ]
     )
 
 
 async def _acknowledge(message: Message, capture: DraftSession) -> None:
     await message.answer(
-        f"✅ Записал. Пункт №{capture.capture_sequence}.",
+        f"✅ Пункт №{capture.capture_sequence} записан",
         reply_markup=capture_keyboard(capture.id),
     )
 
@@ -358,12 +363,12 @@ async def meeting_notes_command(message: Message, db_session: AsyncSession) -> N
         if meeting_is_long_running(meeting)
         else ""
     )
-    lines = [f"{meeting.title}{warning}"]
+    lines = [f"🎙 {meeting.title}{warning}", "", "Записанные пункты:"]
     for capture in page.items:
         items = cast(list[dict[str, object]], capture.get("items", []))
         titles = "; ".join(str(item["title"]) for item in items) or "обрабатывается"
-        lines.append(f"№{capture['sequence']}: {titles}")
-    if len(lines) == 1:
+        lines.append(f"{capture['sequence']}. {titles}")
+    if len(lines) == 3:
         lines.append("Пунктов пока нет.")
     for chunk in split_plain_text("\n".join(lines)):
         await message.answer(chunk, parse_mode=None)

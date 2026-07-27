@@ -1,6 +1,6 @@
 # ruff: noqa: RUF001
 import logging
-from datetime import time
+from datetime import datetime, time
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -18,20 +18,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowmate.ai.errors import AIError
 from flowmate.ai.prompt_versions import REFINEMENT_PROMPT_VERSION
 from flowmate.ai.schemas import (
-    DependencyCandidate,
-    DependencyRelation,
     DraftAnalysisResult,
-    DraftItem,
     DraftItemAssessment,
     DraftItemType,
     DraftReadiness,
     DraftSource,
-    TemporalCandidate,
     TemporalStatus,
 )
 from flowmate.ai.service import DraftParsingService
-from flowmate.bot.formatting import split_plain_text
-from flowmate.bot.menu import restore_main_menu
+from flowmate.bot.menu import answer_with_main_menu, restore_main_menu
+from flowmate.bot.presentation import (
+    TelegramDisplayContext,
+    format_datetime,
+    html_text,
+    item_presentation,
+    join_html_blocks,
+    pluralize,
+    preview,
+)
 from flowmate.db.drafts import (
     claim_update,
     clear_processing_update,
@@ -46,6 +50,7 @@ from flowmate.db.models import DraftSession
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.drafts.questions import ClarificationQuestion, next_clarification_question
 from flowmate.reminders.preferences import (
+    EffectiveNotificationPreferences,
     NotificationDefaults,
     get_effective_notification_preferences,
 )
@@ -53,44 +58,22 @@ from flowmate.reminders.timezone import resolve_local_datetime
 from flowmate.stabilization.jobs import enqueue_ai_job
 from flowmate.task_engine.conversion import (
     DraftConversionError,
+    DraftConversionResult,
     DraftConversionService,
-    conversion_summary,
 )
 from flowmate.workspaces import WORKSPACE_LABELS
 
-DRAFT_ANALYZING_MESSAGE = "Заметка сохранена. Анализирую содержание."
-DRAFT_FAILED_MESSAGE = "Не удалось подготовить структурированный черновик."
-DRAFT_CONTROL_MESSAGE = "Проверьте черновик. Финальные записи ещё не созданы."
-DRAFT_CANCELLED_MESSAGE = "Черновик отменён. Исходная заметка сохранена."
+DRAFT_ANALYZING_MESSAGE = "⏳ Запись принята. Разбираю…"
+DRAFT_FAILED_MESSAGE = "Не получилось разобрать запись. Она сохранена в Inbox."
+DRAFT_CANCELLED_MESSAGE = "Черновик отменён. Исходная запись сохранена."
 DRAFT_CONVERSION_FAILED_MESSAGE = (
-    "Не удалось создать записи из черновика. Черновик сохранён."
+    "Не получилось создать запись. Черновик сохранён — можно повторить позже."
 )
-DRAFT_EXPIRED_MESSAGE = "Срок действия черновика истёк."
-DRAFT_NOT_FOUND_MESSAGE = "Активный черновик не найден."
-DRAFT_BUSY_MESSAGE = "Предыдущий ответ ещё обрабатывается."
-DRAFT_REPLY_REQUIRED_MESSAGE = "Ответьте на текущее уточнение через Reply."
-DRAFT_CHANGE_QUESTION = "Что изменить в черновике?"
-
-ITEM_TYPE_LABELS = {
-    DraftItemType.TASK: "задача",
-    DraftItemType.FOLLOW_UP: "контроль",
-    DraftItemType.WAITING: "ожидание",
-    DraftItemType.QUESTION: "вопрос",
-    DraftItemType.NOTE: "заметка",
-    DraftItemType.DECISION: "решение",
-    DraftItemType.AGENDA_ITEM: "пункт повестки",
-    DraftItemType.UNKNOWN: "не определено",
-}
-READINESS_LABELS = {
-    DraftReadiness.READY: "готово",
-    DraftReadiness.CLARIFICATION_REQUIRED: "нужно уточнение",
-    DraftReadiness.UNRESOLVED: "не определено",
-}
-TEMPORAL_STATUS_LABELS = {
-    TemporalStatus.RESOLVED: "определено",
-    TemporalStatus.AMBIGUOUS: "неоднозначно",
-    TemporalStatus.INVALID: "некорректно",
-}
+DRAFT_EXPIRED_MESSAGE = "Этот черновик уже недоступен. Запишите пункт заново."
+DRAFT_NOT_FOUND_MESSAGE = "Сейчас нет активного черновика."
+DRAFT_BUSY_MESSAGE = "Предыдущий ответ ещё обрабатывается. Подождите немного."
+DRAFT_REPLY_REQUIRED_MESSAGE = "Ответьте через Reply на последнее уточнение."
+DRAFT_CHANGE_QUESTION = "Что нужно изменить?"
 
 logger = logging.getLogger(__name__)
 
@@ -151,17 +134,52 @@ def fast_capture_summary(
     analysis: DraftAnalysisResult,
     *,
     workspace: str,
+    display: TelegramDisplayContext | None = None,
 ) -> str:
+    context = display or TelegramDisplayContext(
+        timezone=ZoneInfo(analysis.context.timezone)
+    )
     count = len(analysis.items)
-    noun = "запись" if count == 1 else "записи"
-    lines = [
-        f"✅ Создано {count} {noun} · {WORKSPACE_LABELS[workspace]}",
-        *[
-            f"{position}. {assessment.item.title}"
-            for position, assessment in enumerate(analysis.items, start=1)
-        ],
-    ]
-    return "\n".join(lines)
+    heading = (
+        "✅ <b>Запись создана</b>"
+        if count == 1
+        else f"✅ <b>Создано {count} "
+        f"{pluralize(count, ('запись', 'записи', 'записей'))}</b>"
+    )
+    blocks = [heading]
+    for position, assessment in enumerate(analysis.items, start=1):
+        item = assessment.item
+        icon, label = item_presentation(item.type.value)
+        prefix = f"{position}. " if count > 1 else ""
+        lines = [
+            f"{prefix}{icon} <b>{label}</b>",
+            html_text(preview(item.title, 240)),
+        ]
+        candidate = item.reminder_candidate or item.due_date_candidate
+        if (
+            candidate is not None
+            and candidate.status is TemporalStatus.RESOLVED
+            and candidate.normalized_value is not None
+        ):
+            date_only = (
+                candidate is item.due_date_candidate and not candidate.time_was_explicit
+            )
+            label_prefix = (
+                "⏰ Напомнить" if candidate is item.reminder_candidate else "📅 Срок"
+            )
+            lines.append(
+                f"{label_prefix}: "
+                f"{
+                    format_datetime(
+                        candidate.normalized_value,
+                        context,
+                        date_only=date_only,
+                    )
+                }"
+            )
+        blocks.append("\n".join(lines))
+    blocks.append(f"📂 {WORKSPACE_LABELS[workspace]}")
+    return "\n\n".join(blocks)
 
 
 async def mark_draft_failed_safely(
@@ -186,90 +204,131 @@ async def release_processing_update_safely(
         await db_session.rollback()
 
 
-def normalize_display_text(value: str) -> str:
-    return " ".join(value.split())
+def draft_display_context(
+    result: DraftAnalysisResult,
+    preferences: EffectiveNotificationPreferences | None = None,
+) -> TelegramDisplayContext:
+    if preferences is not None:
+        return TelegramDisplayContext.from_preferences(preferences)
+    return TelegramDisplayContext(timezone=ZoneInfo(result.context.timezone))
 
 
-def format_temporal_candidate(label: str, candidate: TemporalCandidate) -> str:
-    original = normalize_display_text(candidate.original_phrase)
-    value = (
-        candidate.normalized_value.isoformat()
-        if candidate.normalized_value is not None
-        else TEMPORAL_STATUS_LABELS[candidate.status]
+def format_draft_blocks(
+    result: DraftAnalysisResult,
+    *,
+    display: TelegramDisplayContext | None = None,
+) -> list[str]:
+    context = display or draft_display_context(result)
+    count = len(result.items)
+    heading = (
+        "📝 <b>Проверьте запись</b>"
+        if count == 1
+        else f"📝 <b>Проверьте {count} "
+        f"{pluralize(count, ('запись', 'записи', 'записей'))}</b>"
     )
-    explanation = (
-        f" ({normalize_display_text(candidate.explanation)})"
-        if candidate.explanation
-        else ""
-    )
-    return f'{label}: "{original}" → {value}{explanation}'
-
-
-def format_dependency(dependency: DependencyCandidate) -> str:
-    phrase = normalize_display_text(dependency.original_phrase)
-    if dependency.relation is DependencyRelation.CONDITIONAL:
-        condition = normalize_display_text(dependency.condition or "")
-        return f'если "{condition}" ({phrase})'
-    relation_labels = {
-        DependencyRelation.BEFORE: "до",
-        DependencyRelation.AFTER: "после",
-        DependencyRelation.BLOCKED_BY: "заблокировано до",
-        DependencyRelation.WAITING_FOR: "ожидает",
-    }
-    relation = relation_labels[dependency.relation]
-    return f'{relation} пункта {dependency.target_item_number} ("{phrase}")'
-
-
-def append_optional_item_fields(lines: list[str], item: DraftItem) -> None:
-    if item.description:
-        lines.append(f"Описание: {normalize_display_text(item.description)}")
-    if item.person_candidates:
-        people = ", ".join(map(normalize_display_text, item.person_candidates))
-        lines.append(f"Люди: {people}")
-    if item.topic_candidates:
-        topics = ", ".join(map(normalize_display_text, item.topic_candidates))
-        lines.append(f"Темы: {topics}")
-    if item.due_date_candidate:
-        lines.append(format_temporal_candidate("Срок", item.due_date_candidate))
-    if item.reminder_candidate:
-        lines.append(format_temporal_candidate("Напоминание", item.reminder_candidate))
-    if item.dependencies:
-        dependencies = "; ".join(map(format_dependency, item.dependencies))
-        lines.append(f"Зависимости: {dependencies}")
-    if item.notes:
-        lines.append(
-            f"Примечания: {'; '.join(map(normalize_display_text, item.notes))}"
-        )
-    if item.missing_fields:
-        missing = ", ".join(map(normalize_display_text, item.missing_fields))
-        lines.append(f"Не хватает данных: {missing}")
-    if item.ambiguities:
-        values = "; ".join(map(normalize_display_text, item.ambiguities))
-        lines.append(f"Неоднозначности: {values}")
-
-
-def format_draft_summary(result: DraftAnalysisResult) -> str:
-    lines = [
-        f"Я нашёл записей: {len(result.items)}",
-        f"Намерение: {ITEM_TYPE_LABELS[result.overall_intent]}",
-        f"Общая уверенность: {round(result.confidence * 100)}%",
-    ]
+    blocks = [heading]
     for position, assessment in enumerate(result.items, start=1):
         item = assessment.item
-        lines.extend(
+        icon, label = item_presentation(item.type.value)
+        prefix = f"{position}. " if count > 1 else ""
+        lines = [
+            f"{prefix}{icon} <b>{label}</b>",
+            html_text(preview(item.title, 300)),
+        ]
+        for candidate, date_label, date_icon in (
+            (item.due_date_candidate, "Срок", "📅"),
+            (item.reminder_candidate, "Напомнить", "⏰"),
+        ):
+            if (
+                candidate is None
+                or candidate.status is not TemporalStatus.RESOLVED
+                or candidate.normalized_value is None
+            ):
+                continue
+            lines.append(
+                f"{date_icon} {date_label}: "
+                f"{
+                    format_datetime(
+                        candidate.normalized_value,
+                        context,
+                        date_only=(
+                            candidate is item.due_date_candidate
+                            and not candidate.time_was_explicit
+                        ),
+                    )
+                }"
+            )
+        blocks.append("\n".join(lines))
+    return blocks
+
+
+def format_draft_summary(
+    result: DraftAnalysisResult,
+    *,
+    display: TelegramDisplayContext | None = None,
+) -> str:
+    return "\n\n".join(format_draft_blocks(result, display=display))
+
+
+def format_conversion_summary(
+    result: DraftConversionResult,
+    *,
+    display: TelegramDisplayContext,
+    workspace: str,
+) -> str:
+    entries: list[tuple[str, str, datetime | None, bool]] = []
+    for item in result.work_items:
+        date = item.next_follow_up_at if item.type == "follow_up" else item.due_at
+        entries.append(
             (
-                "",
-                f"{position}. [{ITEM_TYPE_LABELS[item.type]}] "
-                f"{normalize_display_text(item.title)}",
-                f"Статус: {READINESS_LABELS[assessment.readiness]}",
-                f"Уверенность: {round(item.confidence * 100)}%",
+                item.type,
+                item.title,
+                date,
+                item.type != "follow_up" and date is not None,
             )
         )
-        append_optional_item_fields(lines, item)
-    if result.ambiguities:
-        values = "; ".join(map(normalize_display_text, result.ambiguities))
-        lines.extend(("", f"Общие неоднозначности: {values}"))
-    return "\n".join(lines)
+    entries.extend(
+        ("note", note.content or "Заметка", None, False) for note in result.notes
+    )
+    count = len(entries)
+    if count == 0:
+        return "✅ <b>Черновик сохранён</b>"
+    if count == 1:
+        single_headings = {
+            "task": "Задача создана",
+            "follow_up": "Follow-up создан",
+            "waiting": "Ожидание создано",
+            "question": "Вопрос создан",
+            "note": "Заметка сохранена",
+            "decision": "Решение сохранено",
+            "agenda_item": "Пункт повестки создан",
+        }
+        blocks = [f"✅ <b>{single_headings.get(entries[0][0], 'Запись создана')}</b>"]
+    else:
+        blocks = [
+            f"✅ <b>Создано {count} "
+            f"{pluralize(count, ('запись', 'записи', 'записей'))}</b>"
+        ]
+    for position, (item_type, title, date, may_be_date_only) in enumerate(entries, 1):
+        icon, label = item_presentation(item_type)
+        prefix = f"{position}. " if count > 1 else ""
+        lines = [
+            f"{prefix}{icon} <b>{label}</b>",
+            html_text(preview(title, 300)),
+        ]
+        if date is not None:
+            date_only = (
+                may_be_date_only
+                and date.astimezone(display.timezone)
+                .time()
+                .replace(microsecond=0)
+                .isoformat()
+                == "23:59:59"
+            )
+            lines.append(f"📅 {format_datetime(date, display, date_only=date_only)}")
+        blocks.append("\n".join(lines))
+    blocks.append(f"📂 {WORKSPACE_LABELS[workspace]}")
+    return "\n\n".join(blocks)
 
 
 def ready_keyboard(draft_id: UUID) -> InlineKeyboardMarkup:
@@ -277,11 +336,11 @@ def ready_keyboard(draft_id: UUID) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Подтвердить",
+                    text="✅ Сохранить",
                     callback_data=f"draft:confirm:{draft_id}",
                 ),
                 InlineKeyboardButton(
-                    text="Изменить",
+                    text="✏️ Изменить",
                     callback_data=f"draft:change:{draft_id}",
                 ),
             ],
@@ -331,26 +390,29 @@ async def show_draft(
     message: Message,
     draft: DraftSession,
     db_session: AsyncSession,
+    *,
+    display: TelegramDisplayContext | None = None,
 ) -> None:
     analysis = load_analysis(draft)
-    for chunk in split_plain_text(format_draft_summary(analysis)):
-        await message.answer(chunk, parse_mode=None)
+    chunks = join_html_blocks(format_draft_blocks(analysis, display=display))
+    keyboard: InlineKeyboardMarkup | None = None
     if draft.status == "ready":
+        keyboard = ready_keyboard(draft.id)
+        question = None
+    else:
+        question = next_clarification_question(analysis)
+        if question is None:
+            await transition_draft(db_session, draft, "ready")
+            await db_session.commit()
+            keyboard = ready_keyboard(draft.id)
+    for index, chunk in enumerate(chunks):
         await message.answer(
-            DRAFT_CONTROL_MESSAGE,
-            reply_markup=ready_keyboard(draft.id),
+            chunk,
+            parse_mode="HTML",
+            reply_markup=keyboard if index == len(chunks) - 1 else None,
         )
-        return
-    question = next_clarification_question(analysis)
-    if question is None:
-        await transition_draft(db_session, draft, "ready")
-        await db_session.commit()
-        await message.answer(
-            DRAFT_CONTROL_MESSAGE,
-            reply_markup=ready_keyboard(draft.id),
-        )
-        return
-    await send_question(message, draft, question, db_session)
+    if question is not None:
+        await send_question(message, draft, question, db_session)
 
 
 async def analyze_note_content(
@@ -369,6 +431,7 @@ async def analyze_note_content(
     draft_conversion_service: DraftConversionService | None = None,
     notification_defaults: NotificationDefaults | None = None,
 ) -> None:
+    preferences: EffectiveNotificationPreferences | None = None
     try:
         workspace = (
             active_workspace
@@ -445,11 +508,16 @@ async def analyze_note_content(
                 user_id=draft.user_id,
             )
             await db_session.commit()
-            await message.answer(
-                fast_capture_summary(result, workspace=draft.workspace),
-                parse_mode=None,
+            display = draft_display_context(result, preferences)
+            await answer_with_main_menu(
+                message,
+                fast_capture_summary(
+                    result,
+                    workspace=draft.workspace,
+                    display=display,
+                ),
+                parse_mode="HTML",
             )
-            await restore_main_menu(message)
             return
         except (DraftConversionError, SQLAlchemyError):
             await db_session.rollback()
@@ -458,7 +526,12 @@ async def analyze_note_content(
                 telegram_user_id,
                 draft.id,
             )
-    await show_draft(message, draft, db_session)
+    await show_draft(
+        message,
+        draft,
+        db_session,
+        display=draft_display_context(result, preferences),
+    )
 
 
 async def refine_draft(
@@ -574,6 +647,8 @@ async def _draft_callback(
     draft_parsing_service: DraftParsingService | None = None,
     draft_conversion_service: DraftConversionService | None = None,
     draft_ttl_hours: int = 24,
+    notification_defaults: NotificationDefaults | None = None,
+    app_timezone: ZoneInfo | None = None,
 ) -> None:
     parsed = parse_callback_data(callback_query.data)
     telegram_user = callback_query.from_user
@@ -618,8 +693,7 @@ async def _draft_callback(
         await transition_draft(db_session, draft, "cancelled")
         await db_session.commit()
         await callback_query.answer()
-        await callback_query.message.edit_text(DRAFT_CANCELLED_MESSAGE)
-        await restore_main_menu(callback_query.message)
+        await callback_query.message.edit_text(f"🚫 {DRAFT_CANCELLED_MESSAGE}")
         return
     if action == "confirm" and draft.status in {
         "needs_clarification",
@@ -635,8 +709,20 @@ async def _draft_callback(
         )
         await db_session.commit()
         await callback_query.answer()
-        await callback_query.message.edit_text(conversion_summary(result))
-        await restore_main_menu(callback_query.message)
+        display = TelegramDisplayContext(timezone=app_timezone or ZoneInfo("UTC"))
+        if notification_defaults is not None:
+            preferences = await get_effective_notification_preferences(
+                db_session, user.id, notification_defaults
+            )
+            display = TelegramDisplayContext.from_preferences(preferences)
+        await callback_query.message.edit_text(
+            format_conversion_summary(
+                result,
+                display=display,
+                workspace=draft.workspace,
+            ),
+            parse_mode="HTML",
+        )
         return
     if action == "change" and draft.status in {"needs_clarification", "ready"}:
         draft.status = "needs_clarification"
@@ -676,8 +762,20 @@ async def _draft_callback(
                 allow_incomplete=True,
             )
             await db_session.commit()
-            await callback_query.message.edit_text(conversion_summary(result))
-            await restore_main_menu(callback_query.message)
+            display = TelegramDisplayContext(timezone=app_timezone or ZoneInfo("UTC"))
+            if notification_defaults is not None:
+                preferences = await get_effective_notification_preferences(
+                    db_session, user.id, notification_defaults
+                )
+                display = TelegramDisplayContext.from_preferences(preferences)
+            await callback_query.message.edit_text(
+                format_conversion_summary(
+                    result,
+                    display=display,
+                    workspace=draft.workspace,
+                ),
+                parse_mode="HTML",
+            )
             return
         if option.get("action") == "change":
             draft.current_question = DRAFT_CHANGE_QUESTION
@@ -714,6 +812,8 @@ async def draft_callback(
     draft_parsing_service: DraftParsingService | None = None,
     draft_conversion_service: DraftConversionService | None = None,
     draft_ttl_hours: int = 24,
+    notification_defaults: NotificationDefaults | None = None,
+    app_timezone: ZoneInfo | None = None,
 ) -> None:
     try:
         await _draft_callback(
@@ -723,6 +823,8 @@ async def draft_callback(
             draft_parsing_service,
             draft_conversion_service,
             draft_ttl_hours,
+            notification_defaults,
+            app_timezone,
         )
     except (DraftConversionError, SQLAlchemyError) as error:
         await db_session.rollback()

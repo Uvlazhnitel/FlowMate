@@ -38,7 +38,6 @@ from flowmate.speech.service import TranscriptionService
 from flowmate.task_engine.conversion import (
     DraftConversionResult,
     DraftConversionService,
-    conversion_summary,
 )
 from tests.ai_factories import (
     make_analysis_result,
@@ -489,19 +488,12 @@ async def test_voice_answer_refines_existing_draft() -> None:
         (
             "сохрани как есть",
             "confirmed",
-            conversion_summary(
-                DraftConversionResult(
-                    draft_id=UUID(int=0),
-                    work_items=(),
-                    notes=(),
-                    counts={},
-                )
-            ),
+            "✅ <b>Черновик сохранён</b>",
         ),
         (
             "отмена",
             "cancelled",
-            "Черновик отменён. Исходная заметка сохранена.",
+            "🚫 Черновик отменён. Исходная запись сохранена.",
         ),
     ],
 )
@@ -546,16 +538,13 @@ async def test_control_phrase_closes_same_draft_idempotently(
         (
             "confirm",
             "confirmed",
-            conversion_summary(
-                DraftConversionResult(
-                    draft_id=UUID(int=0),
-                    work_items=(),
-                    notes=(),
-                    counts={},
-                )
-            ),
+            "✅ <b>Черновик сохранён</b>",
         ),
-        ("cancel", "cancelled", "Черновик отменён. Исходная заметка сохранена."),
+        (
+            "cancel",
+            "cancelled",
+            "🚫 Черновик отменён. Исходная запись сохранена.",
+        ),
     ],
 )
 async def test_draft_callbacks_transition_owned_session(
@@ -588,13 +577,9 @@ async def test_draft_callbacks_transition_owned_session(
         )
 
     assert draft.status == expected_status
-    edit_text.assert_awaited_once_with(expected_message)
-    answer.assert_awaited_once()
-    menu_call = answer.await_args
-    assert menu_call is not None
-    assert menu_call.args == ("Можно записать следующий пункт.",)
-    assert menu_call.kwargs["parse_mode"] is None
-    assert menu_call.kwargs["reply_markup"].is_persistent is True
+    expected_kwargs = {"parse_mode": "HTML"} if action == "confirm" else {}
+    edit_text.assert_awaited_once_with(expected_message, **expected_kwargs)
+    answer.assert_not_awaited()
 
 
 @pytest.mark.asyncio

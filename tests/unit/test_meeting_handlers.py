@@ -141,9 +141,9 @@ def test_meeting_review_keyboard_and_summary_are_compact() -> None:
             "items": [{"status": "clarification_required"}],
         }
     )
-    assert "— 3 задачи" in summary
-    assert "— 2 решения" in summary
-    assert "Требуют уточнения: 1" in summary
+    assert "• 3 задачи" in summary
+    assert "• 2 решения" in summary
+    assert "❓ Нужно уточнить: 1" in summary
 
 
 @pytest.mark.asyncio
@@ -176,7 +176,7 @@ async def test_text_capture_acknowledges_before_deferred_analysis() -> None:
     analyze_call = analyze.await_args
     assert reply_call is not None
     assert analyze_call is not None
-    assert reply_call.args[0] == "✅ Записал. Пункт №4."
+    assert reply_call.args[0] == "✅ Пункт №4 записан"
     assert reply_call.kwargs["reply_markup"] == capture_keyboard(capture.id)
     assert analyze_call.kwargs["source"] is DraftSource.TEXT
 
@@ -269,7 +269,7 @@ async def test_voice_capture_deletes_audio_and_defers_analysis() -> None:
     assert not provider.audio_path.exists()
     assert [call.args[0] for call in answer.await_args_list] == [
         "Обрабатываю голосовое сообщение.",
-        "✅ Записал. Пункт №4.",
+        "✅ Пункт №4 записан",
     ]
     analyze_call = analyze.await_args
     assert analyze_call is not None
@@ -326,7 +326,7 @@ async def test_duplicate_voice_capture_skips_download() -> None:
     answer.assert_awaited_once()
     answer_call = answer.await_args
     assert answer_call is not None
-    assert answer_call.args[0] == "✅ Записал. Пункт №4."
+    assert answer_call.args[0] == "✅ Пункт №4 записан"
 
 
 @pytest.mark.asyncio
