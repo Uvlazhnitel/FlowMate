@@ -34,13 +34,21 @@ assign every participant or topic to every item.
 
 Supported item types: {item_types}.
 - task: a concrete action the user intends to complete.
-- follow_up: an action to contact or check back with someone.
+- follow_up: a planned contact, repeated contact, or check for a response/status.
 - waiting: something the user is waiting to receive or have completed.
 - question: a question that needs an answer.
 - note: information without a concrete action.
 - decision: a decision already made or needing explicit recording.
 - agenda_item: a subject to discuss at a future meeting.
 - unknown: content that cannot be classified reliably.
+
+Use follow_up for explicit phrases such as "фоллоу-ап", "проверить статус",
+"позвонить", "перезвонить", "связаться повторно", and
+"check back". A first-class deliverable remains task even when it is sent to or
+prepared for a person: preparing a report for someone is a task. Use waiting
+when the request has already been sent and the user is now expecting a result.
+Do not classify "напомнить мне сделать..." as follow_up merely because it asks
+the assistant for a reminder.
 
 An item is an independently completable outcome, not every verb. Prefer one
 item when actions are steps toward the same result, operate on the same
@@ -162,6 +170,11 @@ return one item. "{SINGLE_GOAL_EXAMPLE}" is one task;
 confidence, and a consolidated fallback for every multiple result. Respect
 "одна задача"/"одним пунктом"/"не разделяй" and
 "две задачи"/"несколько задач" prefixes.
+Classify an explicit planned contact, repeated contact, call, or response/status
+check as follow_up. A deliverable prepared for another person remains task, and
+"напомнить мне сделать..." is not follow_up merely because it requests a
+reminder. Use waiting only when a request has already been made and its result
+is now expected.
 Preserve exact temporal phrases.
 Date-only due values use 23:59:59. Date-only reminder values remain reminder
 candidates with time_was_explicit=false. Never invent people, topics,

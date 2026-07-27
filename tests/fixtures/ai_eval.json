@@ -167,6 +167,38 @@
     "expected_reminder": null
   },
   {
+    "id": "explicit_follow_up_provider_misclassification",
+    "input": "Сделать фоллоу-ап и проверить статус ответа Антона",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Проверить статус ответа Антона",
+          "description": null,
+          "person_candidates": ["Антон"],
+          "topic_candidates": [],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.94
+        }
+      ],
+      "itemization_decision": "single",
+      "itemization_basis": "single_goal",
+      "itemization_confidence": 0.98,
+      "consolidated_item": null,
+      "ambiguities": [],
+      "confidence": 0.94
+    },
+    "expected_types": ["follow_up"],
+    "expected_due": null,
+    "expected_reminder": null
+  },
+  {
     "id": "payment_without_amount",
     "input": "Скинуть деньги за Польшу",
     "recorded_output": {

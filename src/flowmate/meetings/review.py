@@ -319,9 +319,12 @@ proposal and must never be split into separate verb-level proposals. Captures
 without parsed draft items may produce at most one conservative proposal. Amounts,
 descriptions, topics, people, dates, and times are optional
 unless the capture explicitly makes them essential. Do not turn absent optional
-details into clarification questions. Decisions may reference related proposal
-numbers. Return only the requested schema; do not include technical logs or raw
-provider metadata."""
+details into clarification questions. Preserve a source draft item's task,
+follow_up, or waiting type unless the capture explicitly corrects it. A planned
+contact or response/status check is follow_up; an already requested result is
+waiting; a deliverable remains task even when it is prepared for another person.
+Decisions may reference related proposal numbers. Return only the requested
+schema; do not include technical logs or raw provider metadata."""
 
 
 def _record_from_item(

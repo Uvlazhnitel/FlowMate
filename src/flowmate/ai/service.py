@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from flowmate.ai.analysis import (
     analysis_to_parse_result,
+    apply_item_type_policy,
     apply_itemization_policy,
     build_analysis_result,
 )
@@ -325,6 +326,7 @@ class DraftParsingService:
             source_text=normalized,
             split_threshold=self._split_confidence_threshold,
         )
+        draft = apply_item_type_policy(draft, source_text=normalized)
         return build_analysis_result(
             draft,
             context=context,
@@ -387,6 +389,7 @@ class DraftParsingService:
             source_text=user_text,
             split_threshold=self._split_confidence_threshold,
         )
+        parsed = apply_item_type_policy(parsed, source_text=user_text)
         return build_analysis_result(
             parsed,
             context=context,

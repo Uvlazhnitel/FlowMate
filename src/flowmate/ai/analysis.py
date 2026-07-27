@@ -30,6 +30,24 @@ MULTIPLE_ITEM_BASES = {
     ItemizationBasis.SEPARATE_SENTENCES,
     ItemizationBasis.INDEPENDENT_OUTCOMES,
 }
+EXPLICIT_FOLLOW_UP = re.compile(
+    r"(?:"
+    r"\bfollow[\s-]?up\b|"
+    r"\bфол+оу[\s-]?ап\w*\b|"  # noqa: RUF001
+    r"\b(?:проверить|уточнить)\s+статус\b|"
+    r"\bпроверить[,\s]+(?:ответил|ответила|ответили)\b|"  # noqa: RUF001
+    r"\bнапомнить\s+о\s+себе\b|"  # noqa: RUF001
+    r"\bсвязаться\s+(?:снова|повторно)\b|"  # noqa: RUF001
+    r"\b(?:снова|повторно)\s+(?:связаться|написать|позвонить)\b|"
+    r"\b(?:пингануть|дожать)\b|"
+    r"\bcheck[\s-]?back\b"
+    r")",
+    re.IGNORECASE,
+)
+DIRECT_CONTACT_FOLLOW_UP = re.compile(
+    r"^\s*(?:по|пере)?звонить\b|^\s*связаться\b",
+    re.IGNORECASE,
+)
 
 
 def normalize_text(value: str | None) -> str:
@@ -112,6 +130,41 @@ def apply_itemization_policy(
                 else ItemizationBasis.UNCERTAIN
             ),
             "consolidated_item": None,
+        }
+    )
+
+
+def apply_item_type_policy(
+    result: DraftParseResult,
+    *,
+    source_text: str,
+) -> DraftParseResult:
+    """Correct only explicit, low-risk task/follow-up classification mistakes."""
+    single_item = len(result.draft_items) == 1
+    items: list[DraftItem] = []
+    for item in result.draft_items:
+        item_text = " ".join(
+            value for value in (item.title, item.description) if value is not None
+        )
+        explicit_follow_up = bool(EXPLICIT_FOLLOW_UP.search(item_text))
+        if single_item:
+            explicit_follow_up = explicit_follow_up or bool(
+                EXPLICIT_FOLLOW_UP.search(source_text)
+            )
+        direct_contact = bool(
+            item.person_candidates and DIRECT_CONTACT_FOLLOW_UP.search(item.title)
+        )
+        if item.type is DraftItemType.TASK and (explicit_follow_up or direct_contact):
+            item = item.model_copy(update={"type": DraftItemType.FOLLOW_UP})
+        items.append(item)
+
+    overall_intent = result.overall_intent
+    if len(items) == 1:
+        overall_intent = items[0].type
+    return result.model_copy(
+        update={
+            "overall_intent": overall_intent,
+            "draft_items": items,
         }
     )
 

@@ -1,10 +1,15 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from flowmate.ai.analysis import apply_itemization_policy, build_analysis_result
+from flowmate.ai.analysis import (
+    apply_item_type_policy,
+    apply_itemization_policy,
+    build_analysis_result,
+)
 from flowmate.ai.schemas import (
     DependencyCandidate,
     DependencyRelation,
+    DraftItemType,
     DraftReadiness,
     ItemizationBasis,
     ItemizationDecision,
@@ -276,3 +281,75 @@ def test_explicit_multiple_directive_overrides_low_split_confidence() -> None:
 
     assert normalized.itemization_decision is ItemizationDecision.MULTIPLE
     assert len(normalized.draft_items) == 2
+
+
+def test_explicit_follow_up_is_corrected_when_provider_returns_task() -> None:
+    result = make_parse_result(
+        [
+            make_draft_item(
+                title="Проверить ответ Антона",
+                person_candidates=["Антон"],
+            )
+        ]
+    )
+
+    normalized = apply_item_type_policy(
+        result,
+        source_text="Сделать фоллоу-ап: проверить, ответил ли Антон",
+    )
+
+    assert normalized.overall_intent is DraftItemType.FOLLOW_UP
+    assert normalized.draft_items[0].type is DraftItemType.FOLLOW_UP
+
+
+def test_direct_call_with_person_is_corrected_to_follow_up() -> None:
+    result = make_parse_result(
+        [make_draft_item(title="Позвонить Лене", person_candidates=["Лена"])]
+    )
+
+    normalized = apply_item_type_policy(result, source_text="Позвонить Лене")
+
+    assert normalized.draft_items[0].type is DraftItemType.FOLLOW_UP
+
+
+def test_reminder_and_person_deliverable_remain_tasks() -> None:
+    reminder = make_parse_result([make_draft_item(title="Отправить отчёт Антону")])
+    deliverable = make_parse_result(
+        [
+            make_draft_item(
+                title="Подготовить отчёт для Антона",
+                person_candidates=["Антон"],
+            )
+        ]
+    )
+
+    reminder_result = apply_item_type_policy(
+        reminder,
+        source_text="Напомни завтра отправить отчёт Антону",
+    )
+    deliverable_result = apply_item_type_policy(
+        deliverable,
+        source_text="Подготовить отчёт для Антона",
+    )
+
+    assert reminder_result.draft_items[0].type is DraftItemType.TASK
+    assert deliverable_result.draft_items[0].type is DraftItemType.TASK
+
+
+def test_multi_item_source_marker_does_not_reclassify_unrelated_task() -> None:
+    result = make_parse_result(
+        [
+            make_draft_item(title="Написать Антону", person_candidates=["Антон"]),
+            make_draft_item(title="Купить молоко"),
+        ]
+    )
+
+    normalized = apply_item_type_policy(
+        result,
+        source_text="Фоллоу-ап Антону и купить молоко",
+    )
+
+    assert [item.type for item in normalized.draft_items] == [
+        DraftItemType.TASK,
+        DraftItemType.TASK,
+    ]
