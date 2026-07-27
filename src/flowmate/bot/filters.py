@@ -15,6 +15,29 @@ from flowmate.meetings.review import get_latest_review
 from flowmate.meetings.service import get_active_meeting
 from flowmate.meetings.setup import get_open_setup
 from flowmate.task_engine.action_sessions import get_active_action_session
+from flowmate.task_engine.enums import WorkItemAction
+
+
+class CaptureNewFilter(Filter):
+    async def __call__(
+        self,
+        message: Message,
+        db_session: AsyncSession,
+    ) -> bool | dict[str, Any]:
+        telegram_user = message.from_user
+        if telegram_user is None:
+            return False
+        try:
+            user = await get_user_by_telegram_id(db_session, telegram_user.id)
+            if user is None:
+                return False
+            action = await get_active_action_session(db_session, user.id)
+        except SQLAlchemyError:
+            await db_session.rollback()
+            return False
+        if action is None or action.action != WorkItemAction.CAPTURE_NEW.value:
+            return False
+        return {"active_capture": action}
 
 
 class ActiveWorkItemActionFilter(Filter):
@@ -35,6 +58,8 @@ class ActiveWorkItemActionFilter(Filter):
             await db_session.rollback()
             return False
         if action is None:
+            return False
+        if action.action == WorkItemAction.CAPTURE_NEW.value:
             return False
         return {
             "active_work_item_action": action,

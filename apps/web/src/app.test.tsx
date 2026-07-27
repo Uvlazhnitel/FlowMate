@@ -40,6 +40,7 @@ function emptyOperationalResponse(path: string): Response {
         evening_digest_time: "18:00:00",
         quiet_hours_start: "22:00:00",
         quiet_hours_end: "08:00:00",
+        default_reminder_time: "09:00:00",
         default_snooze_minutes: 60,
         send_empty_digests: false,
         date_display_format: "day_month_year",

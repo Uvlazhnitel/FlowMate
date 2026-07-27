@@ -115,7 +115,7 @@ def test_optional_missing_fields_and_general_ambiguity_do_not_block_capture() ->
     assert analysis.items[0].item.missing_fields == ["сумма", "дата", "тема"]
 
 
-def test_explicit_identity_ambiguity_requires_clarification() -> None:
+def test_explicit_identity_ambiguity_does_not_block_capture() -> None:
     result = make_parse_result(
         [
             make_draft_item(
@@ -133,7 +133,7 @@ def test_explicit_identity_ambiguity_requires_clarification() -> None:
         clarification_threshold=0.5,
     )
 
-    assert analysis.items[0].readiness is DraftReadiness.CLARIFICATION_REQUIRED
+    assert analysis.items[0].readiness is DraftReadiness.READY
 
 
 def test_duplicates_are_merged_and_dependency_targets_are_remapped() -> None:

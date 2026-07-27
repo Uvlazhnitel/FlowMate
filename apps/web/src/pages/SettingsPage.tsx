@@ -335,6 +335,14 @@ function SettingsContent({
             </select>
           </label>
           <label>
+            Время напоминаний по умолчанию
+            <input
+              type="time"
+              value={preferences.default_reminder_time.slice(0, 5)}
+              onChange={(event) => update("default_reminder_time", event.target.value)}
+            />
+          </label>
+          <label>
             Snooze по умолчанию, минут
             <input
               type="number"

@@ -25,6 +25,7 @@ from flowmate.ai.schemas import (
     TemporalCandidate,
     TemporalStatus,
 )
+from flowmate.reminders.parsing import SnoozeParsingService
 
 Clock = Callable[[ZoneInfo], datetime]
 
@@ -110,9 +111,60 @@ def apply_exact_temporal_answer(
     question_key = question.casefold()
     if "напомин" not in question_key and "срок" not in question_key:
         return None
-    candidate = parse_exact_local_date(answer, current.context)
+    timezone = ZoneInfo(current.context.timezone)
+    parsed_datetime = SnoozeParsingService.parse_deterministic(
+        answer,
+        timezone=timezone,
+        now=current.context.current_datetime,
+        default_time=time(9),
+    )
+    candidate = (
+        TemporalCandidate(
+            original_phrase=answer.strip(),
+            normalized_value=parsed_datetime,
+            status=TemporalStatus.RESOLVED,
+            explanation=None,
+            time_was_explicit=bool(
+                re.search(r"\d{1,2}:\d{2}|через\s+", answer.casefold())
+                or "утром" in answer.casefold()
+            ),
+        )
+        if parsed_datetime is not None
+        else parse_exact_local_date(answer, current.context)
+    )
     if candidate is None:
         return None
+    if (
+        "срок" in question_key
+        and not candidate.time_was_explicit
+        and candidate.normalized_value is not None
+    ):
+        local_date = candidate.normalized_value.astimezone(timezone).date()
+        candidate = candidate.model_copy(
+            update={
+                "normalized_value": datetime.combine(
+                    local_date,
+                    time(23, 59, 59),
+                    tzinfo=timezone,
+                )
+            }
+        )
+    due_candidate = candidate
+    if (
+        "напомин" in question_key
+        and candidate.normalized_value is not None
+        and not candidate.time_was_explicit
+    ):
+        local_date = candidate.normalized_value.astimezone(timezone).date()
+        due_candidate = candidate.model_copy(
+            update={
+                "normalized_value": datetime.combine(
+                    local_date,
+                    time(23, 59, 59),
+                    tzinfo=timezone,
+                )
+            }
+        )
     parsed = analysis_to_parse_result(current)
     items = list(parsed.draft_items)
     for index, item in enumerate(items):
@@ -121,8 +173,20 @@ def apply_exact_temporal_answer(
         items[index] = DraftItem.model_validate(
             {
                 **item.model_dump(),
-                "due_date_candidate": candidate,
-                "reminder_candidate": None,
+                "due_date_candidate": (
+                    candidate
+                    if "срок" in question_key
+                    else due_candidate
+                    if "напомин" in question_key
+                    else item.due_date_candidate
+                ),
+                "reminder_candidate": (
+                    candidate
+                    if "напомин" in question_key
+                    else None
+                    if "срок" in question_key
+                    else item.reminder_candidate
+                ),
                 "missing_fields": remove_temporal_ambiguities(item.missing_fields),
                 "ambiguities": remove_temporal_ambiguities(item.ambiguities),
             }

@@ -16,6 +16,7 @@ TOPICS_BUTTON = "🗂 Темы"
 SEARCH_BUTTON = "🔍 Поиск"
 SETTINGS_BUTTON = "⚙️ Настройки"
 WORKSPACE_BUTTON = "🔀 Работа / Личное"
+CANCEL_BUTTON = "❌ Отмена"
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -27,9 +28,8 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text=WAITING_BUTTON),
                 KeyboardButton(text=QUESTIONS_BUTTON),
             ],
-            [KeyboardButton(text=PEOPLE_BUTTON), KeyboardButton(text=TOPICS_BUTTON)],
             [KeyboardButton(text=SEARCH_BUTTON), KeyboardButton(text=SETTINGS_BUTTON)],
-            [KeyboardButton(text=WORKSPACE_BUTTON)],
+            [KeyboardButton(text=WORKSPACE_BUTTON), KeyboardButton(text=CANCEL_BUTTON)],
         ],
         resize_keyboard=True,
         is_persistent=True,

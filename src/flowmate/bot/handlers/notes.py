@@ -1,5 +1,6 @@
 # ruff: noqa: RUF001
 import logging
+import re
 from dataclasses import dataclass
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -22,9 +23,18 @@ from flowmate.bot.handlers.drafts import (
     analyze_note_content,
 )
 from flowmate.bot.handlers.navigation import execute_search_intent
-from flowmate.bot.handlers.work_items import execute_management_intent
+from flowmate.bot.handlers.work_items import (
+    ManagementIntentOutcome,
+    execute_management_intent,
+)
 from flowmate.db.drafts import create_parsing_draft, get_draft_by_source_note
-from flowmate.db.models import DraftSession, Meeting, Note, User
+from flowmate.db.models import (
+    DraftSession,
+    Meeting,
+    Note,
+    User,
+    WorkItemActionSession,
+)
 from flowmate.db.notes import (
     NoteSource,
     create_note_idempotently,
@@ -33,9 +43,12 @@ from flowmate.db.notes import (
 )
 from flowmate.db.users import get_or_create_telegram_user, get_user_by_telegram_id
 from flowmate.meetings.service import link_note_to_active_meeting
+from flowmate.reminders.preferences import NotificationDefaults
 from flowmate.reminders.sync import ReminderPolicy
+from flowmate.task_engine.action_sessions import finish_action_session
+from flowmate.task_engine.conversion import DraftConversionService
 from flowmate.task_engine.intents import management_update_was_processed
-from flowmate.workspaces import active_workspace
+from flowmate.workspaces import activate_workspace, active_workspace
 
 NOTE_SAVED_MESSAGE = "Заметка сохранена."
 NOTE_ALREADY_SAVED_MESSAGE = "Заметка уже сохранена."
@@ -61,6 +74,67 @@ class NoteSaveOutcome:
 
 logger = logging.getLogger(__name__)
 
+CREATION_MARKERS = (
+    "добавить",
+    "добавь",
+    "создать",
+    "создай",
+    "записать",
+    "запиши",
+    "напомнить",
+    "напомни",
+    "нужно сделать",
+)
+MANAGEMENT_MARKERS = (
+    "заверши",
+    "выполни задачу",
+    "отмени задачу",
+    "перенеси задачу",
+    "перенеси существующ",
+    "верни задачу",
+    "переоткрой",
+)
+WORKSPACE_PREFIX = re.compile(
+    r"^\s*(?P<label>работа|в\s+работу|личное|в\s+личное)\s*:\s*",
+    re.IGNORECASE,
+)
+
+
+def explicitly_manages_existing_item(message: Message, content: str) -> bool:
+    if message.reply_to_message is not None:
+        return True
+    normalized = content.casefold()
+    if any(marker in normalized for marker in CREATION_MARKERS):
+        return False
+    return any(marker in normalized for marker in MANAGEMENT_MARKERS)
+
+
+def capture_workspace_override(value: str) -> tuple[str, str | None]:
+    match = WORKSPACE_PREFIX.match(value)
+    if match is None:
+        return value, None
+    label = " ".join(match.group("label").casefold().split())
+    workspace = "work" if "работ" in label else "personal"
+    return value[match.end() :].strip(), workspace
+
+
+def selected_capture_workspace(
+    analysis: DraftAnalysisResult | None,
+    *,
+    current: str,
+    explicit: str | None,
+    high_confidence_threshold: float,
+) -> tuple[str, bool]:
+    if explicit is not None:
+        return explicit, True
+    if (
+        analysis is not None
+        and analysis.workspace_candidate is not None
+        and analysis.workspace_confidence >= high_confidence_threshold
+    ):
+        return analysis.workspace_candidate, True
+    return current, False
+
 
 async def save_note_for_message(
     message: Message,
@@ -72,6 +146,9 @@ async def save_note_for_message(
     create_draft: bool = False,
     draft_ttl_hours: int = 24,
     default_workspace: str = "personal",
+    capture_session: WorkItemActionSession | None = None,
+    workspace_override: str | None = None,
+    update_active_workspace: bool = False,
 ) -> NoteSaveOutcome:
     telegram_user = message.from_user
     if telegram_user is None:
@@ -84,6 +161,14 @@ async def save_note_for_message(
             display_name=telegram_user.full_name[:255],
             active_workspace=default_workspace,
         )
+        if workspace_override is not None:
+            activate_workspace(
+                db_session,
+                user_id=user.id,
+                workspace=workspace_override,
+            )
+            if update_active_workspace:
+                user.active_workspace = workspace_override
         note, created = await create_note_idempotently(
             db_session,
             user_id=user.id,
@@ -107,6 +192,12 @@ async def save_note_for_message(
                 user_id=user.id,
                 source_note_id=note.id,
                 ttl_hours=draft_ttl_hours,
+            )
+        if created and capture_session is not None:
+            await finish_action_session(
+                db_session,
+                capture_session,
+                status="completed",
             )
         await db_session.commit()
     except SQLAlchemyError:
@@ -137,6 +228,9 @@ async def text_note(
     app_timezone: ZoneInfo | None = None,
     reminder_policy: ReminderPolicy | None = None,
     default_workspace: str = "personal",
+    active_capture: WorkItemActionSession | None = None,
+    draft_conversion_service: DraftConversionService | None = None,
+    notification_defaults: NotificationDefaults | None = None,
 ) -> None:
     content = message.text.strip() if message.text is not None else ""
     if not content:
@@ -174,17 +268,24 @@ async def text_note(
             return
     await db_session.rollback()
 
+    parse_content, explicit_workspace = capture_workspace_override(content)
     routed: DraftAnalysisResult | ManagementIntent | SearchIntent | None = None
     if draft_parsing_service is not None:
         try:
             workspace = active_workspace(db_session)
             routed = (
-                await draft_parsing_service.parse_text(
-                    content,
+                await draft_parsing_service.parse(
+                    parse_content,
+                    source=DraftSource.TEXT,
+                    active_workspace=workspace,
+                )
+                if active_capture is not None
+                else await draft_parsing_service.parse_text(
+                    parse_content,
                     active_workspace=workspace,
                 )
                 if workspace is not None
-                else await draft_parsing_service.parse_text(content)
+                else await draft_parsing_service.parse_text(parse_content)
             )
         except AIError as error:
             logger.warning(
@@ -195,7 +296,7 @@ async def text_note(
     if isinstance(routed, ManagementIntent):
         timezone = app_timezone or ZoneInfo("UTC")
         try:
-            await execute_management_intent(
+            management_outcome = await execute_management_intent(
                 message,
                 event_update,
                 db_session,
@@ -212,7 +313,21 @@ async def text_note(
                 message.from_user.id if message.from_user else 0,
             )
             await message.answer("Не удалось изменить запись. Попробуйте позже.")
-        return
+            return
+        if management_outcome is not ManagementIntentOutcome.NOT_FOUND:
+            return
+        if explicitly_manages_existing_item(message, content):
+            await message.answer("Подходящая запись не найдена.")
+            return
+        if draft_parsing_service is not None:
+            try:
+                routed = await draft_parsing_service.parse(
+                    parse_content,
+                    source=DraftSource.TEXT,
+                    active_workspace=active_workspace(db_session),
+                )
+            except AIError:
+                routed = None
     if isinstance(routed, SearchIntent):
         timezone = app_timezone or ZoneInfo("UTC")
         try:
@@ -234,6 +349,13 @@ async def text_note(
             await message.answer("Не удалось выполнить поиск. Попробуйте позже.")
         return
 
+    current_workspace = active_workspace(db_session) or default_workspace
+    selected_workspace, update_workspace = selected_capture_workspace(
+        routed if isinstance(routed, DraftAnalysisResult) else None,
+        current=current_workspace,
+        explicit=explicit_workspace,
+        high_confidence_threshold=ai_high_confidence_threshold,
+    )
     result = await save_note_for_message(
         message,
         event_update,
@@ -243,6 +365,9 @@ async def text_note(
         create_draft=isinstance(routed, DraftAnalysisResult),
         draft_ttl_hours=draft_ttl_hours,
         default_workspace=default_workspace,
+        capture_session=active_capture,
+        workspace_override=selected_workspace,
+        update_active_workspace=update_workspace,
     )
     if result.status == "failed":
         await message.answer(NOTE_SAVE_FAILED_MESSAGE)
@@ -257,7 +382,7 @@ async def text_note(
         await message.answer(DRAFT_ANALYZING_MESSAGE)
         await analyze_note_content(
             message,
-            content=content,
+            content=parse_content,
             telegram_user_id=message.from_user.id,
             source=DraftSource.TEXT,
             service=draft_parsing_service,
@@ -266,6 +391,9 @@ async def text_note(
             draft_ttl_hours=draft_ttl_hours,
             precomputed_result=routed,
             active_workspace=result.draft.workspace,
+            high_confidence_threshold=ai_high_confidence_threshold,
+            draft_conversion_service=draft_conversion_service,
+            notification_defaults=notification_defaults,
         )
     elif draft_parsing_service is not None and routed is None:
         await message.answer(NOTE_SAVED_MESSAGE)

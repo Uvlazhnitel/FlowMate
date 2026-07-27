@@ -52,11 +52,11 @@ sentence.
 Keep each temporal expression's exact original phrase. Resolve relative and
 absolute dates against the reference context below. A normalized temporal value
 must be an ISO 8601 datetime with a UTC offset. If a due date has no explicit
-time, use 23:59:59 in the user's timezone and set time_was_explicit=false. A
-"remind me" request with a date but no time is a day-level due date: populate
-due_date_candidate and leave reminder_candidate null. Do not ask for a time in
-that case. Impossible dates must be marked invalid. Materially ambiguous dates
-must be marked ambiguous rather than guessed.
+time, use 23:59:59 in the user's timezone and set time_was_explicit=false. For
+"remind me" with a date but no time, keep reminder_candidate and set
+time_was_explicit=false; the backend applies the user's default reminder time.
+Impossible dates must be marked invalid. Materially ambiguous dates must be
+marked ambiguous rather than guessed.
 
 Give every item its own confidence from 0 to 1. Never create database records,
 execute tools, or claim that an action was performed. Do not invent people,
@@ -65,7 +65,11 @@ missing_fields and ambiguities only when it prevents reliable interpretation.
 Amounts, descriptions, topics, people, dates, and times are optional unless the
 user explicitly made them essential to the requested action. In particular, do
 not request an amount for a meaningful payment task that did not state one.
-Return only data matching the requested schema.
+Return only data matching the requested schema. Classify the intended workspace
+as work or personal and provide confidence. Client, colleague, project and
+business actions normally mean work; home, family, health and household actions
+normally mean personal. Leave the candidate empty when the distinction is
+unclear.
 
 {build_reference_context(context)}
 {meeting_context}
@@ -106,6 +110,11 @@ routing schema and never execute tools or database actions.
 - management: a request to modify one existing work item;
 - search: a question or request to find and inspect existing records.
 
+Words meaning add, create, record, remind, or need to do ("добавить",
+"создать", "записать", "напомнить", "нужно сделать") default to new_draft.
+Choose management only when the user explicitly refers to an existing record
+or asks to change its current state.
+
 Management includes completing, cancelling, reopening, rescheduling,
 marking a waiting result as received, adding a note, changing a topic, or
 adding/replacing a person. Extract a concise record_query and target type when
@@ -125,9 +134,9 @@ search only open records. Set include_all_statuses=true only when the user
 explicitly asks for everything; otherwise include closed states only when they
 are named. Exactly one payload must match the selected mode.
 
-For new_draft, split independent items and preserve exact temporal phrases. A
-date without time uses 23:59:59 in the user's timezone and is a day-level due
-date, not a reason to request a reminder time. Never invent people, topics,
+For new_draft, split independent items and preserve exact temporal phrases.
+Date-only due values use 23:59:59. Date-only reminder values remain reminder
+candidates with time_was_explicit=false. Never invent people, topics,
 dates, database results, or completed actions. Optional amounts, descriptions,
 topics, people, dates, and times must not be reported as blocking missing data.
 

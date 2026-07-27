@@ -56,6 +56,7 @@ async def test_reminders_command_enables_morning_digest() -> None:
         quiet_hours_enabled=False,
         quiet_hours_start=time(22),
         quiet_hours_end=time(8),
+        default_reminder_time=time(9),
         default_snooze_minutes=60,
         send_empty_digests=False,
     )

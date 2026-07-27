@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,6 +24,8 @@ from flowmate.ai.service import DraftParsingService
 from flowmate.bot.handlers.drafts import (
     DRAFT_ANALYZING_MESSAGE,
     DRAFT_FAILED_MESSAGE,
+    apply_default_reminder_time,
+    fast_capture_is_ready,
     format_draft_summary,
 )
 from flowmate.bot.handlers.notes import (
@@ -38,9 +40,10 @@ from flowmate.bot.handlers.notes import (
     format_note_preview,
     notes_command,
     save_note_for_message,
+    selected_capture_workspace,
     text_note,
 )
-from flowmate.db.models import DraftSession, Note
+from flowmate.db.models import DraftSession, Note, WorkItemActionSession
 from tests.ai_factories import (
     make_analysis_result,
     make_draft_item,
@@ -280,6 +283,137 @@ async def test_new_text_note_is_parsed_and_returned_as_plain_text() -> None:
         "Проверьте черновик. Финальные записи ещё не созданы."
     )
     assert "reply_markup" in answer.await_args_list[2].kwargs
+
+
+@pytest.mark.asyncio
+async def test_record_capture_bypasses_routing_and_keeps_two_new_tasks() -> None:
+    message = make_message(
+        text="Добавить Личи Home Office. Отправить сообщение клиенту"
+    )
+    result = make_analysis_result(
+        make_parse_result(
+            [
+                make_draft_item(title="Добавить Личи Home Office"),
+                make_draft_item(title="Отправить сообщение клиенту"),
+            ],
+            confidence=0.95,
+        )
+    )
+    service = MagicMock(spec=DraftParsingService)
+    service.parse = AsyncMock(return_value=result)
+    service.parse_text = AsyncMock()
+    capture = WorkItemActionSession(
+        id=uuid4(),
+        user_id=uuid4(),
+        action="capture_new",
+        status="open",
+        context={},
+        expires_at=datetime(2026, 7, 28, tzinfo=UTC),
+    )
+    with (
+        patch(
+            "flowmate.bot.handlers.notes.save_note_for_message",
+            new=AsyncMock(return_value=make_save_outcome("created", with_draft=True)),
+        ),
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+    ):
+        await text_note(
+            message,
+            make_update(message),
+            make_session(),
+            cast(DraftParsingService, service),
+            active_capture=capture,
+        )
+
+    cast(AsyncMock, service.parse).assert_awaited_once()
+    cast(AsyncMock, service.parse_text).assert_not_awaited()
+    response = "\n".join(str(call.args[0]) for call in answer.await_args_list)
+    assert "Добавить Личи Home Office" in response
+    assert "Отправить сообщение клиенту" in response
+    assert "Подходящая запись не найдена" not in response
+
+
+def test_workspace_selection_uses_explicit_ai_and_current_fallback() -> None:
+    analysis = make_draft_result()
+    work_analysis = analysis.model_copy(
+        update={"workspace_candidate": "work", "workspace_confidence": 0.95}
+    )
+    assert selected_capture_workspace(
+        analysis,
+        current="work",
+        explicit="personal",
+        high_confidence_threshold=0.8,
+    ) == ("personal", True)
+    assert selected_capture_workspace(
+        work_analysis,
+        current="personal",
+        explicit=None,
+        high_confidence_threshold=0.8,
+    ) == ("work", True)
+    assert selected_capture_workspace(
+        analysis,
+        current="personal",
+        explicit=None,
+        high_confidence_threshold=0.8,
+    ) == ("personal", False)
+
+
+def test_fast_capture_applies_default_reminder_time_and_allows_optional_fields() -> (
+    None
+):
+    analysis = make_analysis_result(
+        make_parse_result(
+            [
+                make_draft_item(
+                    title="Перечислить деньги за Польшу",
+                    missing_fields=["amount", "topic", "person"],
+                    reminder_candidate=make_temporal_candidate(
+                        original_phrase="7 августа",
+                        normalized_value=datetime(2026, 8, 7, tzinfo=UTC),
+                        time_was_explicit=False,
+                    ),
+                    confidence=0.95,
+                )
+            ],
+            confidence=0.95,
+        ),
+        context=make_analysis_result().context.model_copy(
+            update={"timezone": "Europe/Riga"}
+        ),
+    )
+
+    updated = apply_default_reminder_time(analysis, default_time=time(8, 15))
+    reminder = updated.items[0].item.reminder_candidate
+
+    assert reminder is not None
+    assert reminder.normalized_value is not None
+    assert reminder.normalized_value.astimezone(ZoneInfo("Europe/Riga")).time() == time(
+        8, 15
+    )
+    assert fast_capture_is_ready(updated, high_confidence_threshold=0.8)
+
+
+def test_fast_capture_preserves_explicit_reminder_time() -> None:
+    expected = datetime(2026, 8, 7, 14, 30, tzinfo=UTC)
+    analysis = make_analysis_result(
+        make_parse_result(
+            [
+                make_draft_item(
+                    reminder_candidate=make_temporal_candidate(
+                        normalized_value=expected,
+                        time_was_explicit=True,
+                    ),
+                    confidence=0.95,
+                )
+            ],
+            confidence=0.95,
+        )
+    )
+
+    updated = apply_default_reminder_time(analysis, default_time=time(8, 15))
+
+    assert updated.items[0].item.reminder_candidate is not None
+    assert updated.items[0].item.reminder_candidate.normalized_value == expected
 
 
 @pytest.mark.asyncio

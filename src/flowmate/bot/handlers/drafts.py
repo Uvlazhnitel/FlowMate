@@ -1,6 +1,8 @@
 # ruff: noqa: RUF001
 import logging
+from datetime import time
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from aiogram.types import (
     CallbackQuery,
@@ -20,6 +22,7 @@ from flowmate.ai.schemas import (
     DependencyRelation,
     DraftAnalysisResult,
     DraftItem,
+    DraftItemAssessment,
     DraftItemType,
     DraftReadiness,
     DraftSource,
@@ -42,12 +45,18 @@ from flowmate.db.drafts import (
 from flowmate.db.models import DraftSession
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.drafts.questions import ClarificationQuestion, next_clarification_question
+from flowmate.reminders.preferences import (
+    NotificationDefaults,
+    get_effective_notification_preferences,
+)
+from flowmate.reminders.timezone import resolve_local_datetime
 from flowmate.stabilization.jobs import enqueue_ai_job
 from flowmate.task_engine.conversion import (
     DraftConversionError,
     DraftConversionService,
     conversion_summary,
 )
+from flowmate.workspaces import WORKSPACE_LABELS
 
 DRAFT_ANALYZING_MESSAGE = "Заметка сохранена. Анализирую содержание."
 DRAFT_FAILED_MESSAGE = "Не удалось подготовить структурированный черновик."
@@ -84,6 +93,75 @@ TEMPORAL_STATUS_LABELS = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def apply_default_reminder_time(
+    analysis: DraftAnalysisResult,
+    *,
+    default_time: time,
+) -> DraftAnalysisResult:
+    timezone = ZoneInfo(analysis.context.timezone)
+    changed = False
+    assessments: list[DraftItemAssessment] = []
+    for assessment in analysis.items:
+        item = assessment.item
+        candidate = item.reminder_candidate
+        if (
+            candidate is None
+            or candidate.status is not TemporalStatus.RESOLVED
+            or candidate.normalized_value is None
+            or candidate.time_was_explicit
+        ):
+            assessments.append(assessment)
+            continue
+        local_date = candidate.normalized_value.astimezone(timezone).date()
+        resolved = resolve_local_datetime(local_date, default_time, timezone)
+        updated_candidate = candidate.model_copy(update={"normalized_value": resolved})
+        updated_item = item.model_copy(update={"reminder_candidate": updated_candidate})
+        assessments.append(assessment.model_copy(update={"item": updated_item}))
+        changed = True
+    return analysis.model_copy(update={"items": assessments}) if changed else analysis
+
+
+def fast_capture_is_ready(
+    analysis: DraftAnalysisResult,
+    *,
+    high_confidence_threshold: float,
+) -> bool:
+    if analysis.confidence < high_confidence_threshold:
+        return False
+    for assessment in analysis.items:
+        item = assessment.item
+        if (
+            assessment.readiness is not DraftReadiness.READY
+            or item.type is DraftItemType.UNKNOWN
+            or item.confidence < high_confidence_threshold
+        ):
+            return False
+        for candidate in (item.due_date_candidate, item.reminder_candidate):
+            if (
+                candidate is not None
+                and candidate.status is not TemporalStatus.RESOLVED
+            ):
+                return False
+    return True
+
+
+def fast_capture_summary(
+    analysis: DraftAnalysisResult,
+    *,
+    workspace: str,
+) -> str:
+    count = len(analysis.items)
+    noun = "запись" if count == 1 else "записи"
+    lines = [
+        f"✅ Создано {count} {noun} · {WORKSPACE_LABELS[workspace]}",
+        *[
+            f"{position}. {assessment.item.title}"
+            for position, assessment in enumerate(analysis.items, start=1)
+        ],
+    ]
+    return "\n".join(lines)
 
 
 async def mark_draft_failed_safely(
@@ -287,9 +365,20 @@ async def analyze_note_content(
     draft_ttl_hours: int,
     precomputed_result: DraftAnalysisResult | None = None,
     active_workspace: str | None = None,
+    high_confidence_threshold: float = 0.8,
+    draft_conversion_service: DraftConversionService | None = None,
+    notification_defaults: NotificationDefaults | None = None,
 ) -> None:
     try:
-        workspace = active_workspace or draft.workspace
+        workspace = (
+            active_workspace
+            or draft.workspace
+            or (
+                precomputed_result.context.active_workspace
+                if precomputed_result is not None
+                else "personal"
+            )
+        )
         result = precomputed_result or (
             await service.parse(
                 content,
@@ -299,6 +388,24 @@ async def analyze_note_content(
             if workspace is not None
             else await service.parse(content, source=source)
         )
+        if result.context.active_workspace != workspace:
+            result = result.model_copy(
+                update={
+                    "context": result.context.model_copy(
+                        update={"active_workspace": workspace}
+                    )
+                }
+            )
+        if notification_defaults is not None:
+            preferences = await get_effective_notification_preferences(
+                db_session,
+                draft.user_id,
+                notification_defaults,
+            )
+            result = apply_default_reminder_time(
+                result,
+                default_time=preferences.default_reminder_time,
+            )
         question = next_clarification_question(result)
         await replace_draft_analysis(
             db_session,
@@ -327,6 +434,30 @@ async def analyze_note_content(
         await message.answer(DRAFT_FAILED_MESSAGE)
         return
 
+    if draft_conversion_service is not None and fast_capture_is_ready(
+        result,
+        high_confidence_threshold=high_confidence_threshold,
+    ):
+        try:
+            await draft_conversion_service.convert(
+                db_session,
+                draft_id=draft.id,
+                user_id=draft.user_id,
+            )
+            await db_session.commit()
+            await message.answer(
+                fast_capture_summary(result, workspace=draft.workspace),
+                parse_mode=None,
+            )
+            await restore_main_menu(message)
+            return
+        except (DraftConversionError, SQLAlchemyError):
+            await db_session.rollback()
+            logger.error(
+                "telegram_fast_capture_conversion_failed user_id=%s draft_id=%s",
+                telegram_user_id,
+                draft.id,
+            )
     await show_draft(message, draft, db_session)
 
 

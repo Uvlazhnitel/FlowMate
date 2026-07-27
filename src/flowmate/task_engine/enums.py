@@ -64,6 +64,7 @@ class WorkItemEventType(StrEnum):
 
 
 class WorkItemAction(StrEnum):
+    CAPTURE_NEW = "capture_new"
     SELECT_RECORD = "select_record"
     RESCHEDULE = "reschedule"
     ADD_NOTE = "add_note"

@@ -22,6 +22,7 @@ class NotificationDefaults:
     quiet_hours_start: time
     quiet_hours_end: time
     snooze_minutes: int
+    reminder_time: time = time(9)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "NotificationDefaults":
@@ -31,6 +32,7 @@ class NotificationDefaults:
             evening_digest_time=settings.default_evening_digest_time,
             quiet_hours_start=settings.default_quiet_hours_start,
             quiet_hours_end=settings.default_quiet_hours_end,
+            reminder_time=settings.default_reminder_time,
             snooze_minutes=settings.default_snooze_minutes,
         )
 
@@ -45,6 +47,7 @@ class EffectiveNotificationPreferences:
     quiet_hours_enabled: bool
     quiet_hours_start: time
     quiet_hours_end: time
+    default_reminder_time: time
     default_snooze_minutes: int
     send_empty_digests: bool
     date_display_format: str
@@ -84,6 +87,7 @@ def effective_preferences(
             quiet_hours_enabled=False,
             quiet_hours_start=defaults.quiet_hours_start,
             quiet_hours_end=defaults.quiet_hours_end,
+            default_reminder_time=defaults.reminder_time,
             default_snooze_minutes=defaults.snooze_minutes,
             send_empty_digests=False,
             date_display_format="day_month_year",
@@ -98,6 +102,7 @@ def effective_preferences(
         quiet_hours_enabled=value.quiet_hours_enabled,
         quiet_hours_start=value.quiet_hours_start,
         quiet_hours_end=value.quiet_hours_end,
+        default_reminder_time=value.default_reminder_time,
         default_snooze_minutes=value.default_snooze_minutes,
         send_empty_digests=value.send_empty_digests,
         date_display_format=value.date_display_format,
@@ -151,6 +156,7 @@ async def get_or_create_notification_preferences(
             quiet_hours_enabled=False,
             quiet_hours_start=defaults.quiet_hours_start,
             quiet_hours_end=defaults.quiet_hours_end,
+            default_reminder_time=defaults.reminder_time,
             default_snooze_minutes=defaults.snooze_minutes,
             send_empty_digests=False,
             date_display_format="day_month_year",

@@ -7,12 +7,12 @@ from flowmate.bot.filters import (
     ActiveDraftFilter,
     ActiveMeetingCaptureFilter,
     ActiveWorkItemActionFilter,
+    CaptureNewFilter,
     MeetingReviewReplyFilter,
     MeetingTitleReplyFilter,
 )
 from flowmate.bot.handlers.clarification import active_draft_message
 from flowmate.bot.handlers.drafts import (
-    DRAFT_CANCELLED_MESSAGE,
     DRAFT_NOT_FOUND_MESSAGE,
     draft_callback,
     show_draft,
@@ -66,15 +66,14 @@ from flowmate.bot.handlers.work_items import (
 )
 from flowmate.bot.handlers.workspaces import workspace_callback, workspace_command
 from flowmate.bot.menu import (
+    CANCEL_BUTTON,
     FOLLOW_UPS_BUTTON,
-    PEOPLE_BUTTON,
     QUESTIONS_BUTTON,
     RECORD_BUTTON,
     SEARCH_BUTTON,
     SETTINGS_BUTTON,
     TASKS_BUTTON,
     TODAY_BUTTON,
-    TOPICS_BUTTON,
     WAITING_BUTTON,
     WORKSPACE_BUTTON,
     answer_with_main_menu,
@@ -86,13 +85,10 @@ from flowmate.bot.middleware import (
     PersistentUpdateMiddleware,
     WorkspaceContextMiddleware,
 )
-from flowmate.db.drafts import get_active_draft_for_user, transition_draft
+from flowmate.db.drafts import get_active_draft_for_user
 from flowmate.db.health import database_is_ready
 from flowmate.db.users import get_or_create_telegram_user, get_user_by_telegram_id
-from flowmate.task_engine.action_sessions import (
-    finish_action_session,
-    get_active_action_session,
-)
+from flowmate.task_engine.transient_dialogs import cancel_transient_dialogs
 
 
 async def start_command(
@@ -130,7 +126,9 @@ async def help_command(message: Message) -> None:
         "/meeting_review, "
         "/meeting_cancel. "
         "Пространство: /workspace. "
-        "Отправьте текст или голосовое сообщение, чтобы сохранить заметку."
+        "Нажмите «🎙 Записать»: следующая текстовая или голосовая реплика будет "
+        "сохранена как новая запись. Уверенные записи создаются сразу, остальные "
+        "остаются в черновике. «❌ Отмена» завершает текущий временный диалог."
     )
 
 
@@ -169,27 +167,15 @@ async def cancel_command(message: Message, db_session: AsyncSession) -> None:
     if telegram_user is None:
         return
     user = await get_user_by_telegram_id(db_session, telegram_user.id)
-    action_session = (
-        await get_active_action_session(db_session, user.id)
-        if user is not None
-        else None
-    )
-    if action_session is not None:
-        await finish_action_session(db_session, action_session, status="cancelled")
-        await db_session.commit()
-        await answer_with_main_menu(message, "Текущее действие отменено.")
+    if user is None:
+        await answer_with_main_menu(message, "Активных действий нет")
         return
-    draft = (
-        await get_active_draft_for_user(db_session, user.id)
-        if user is not None
-        else None
-    )
-    if draft is None:
-        await answer_with_main_menu(message, DRAFT_NOT_FOUND_MESSAGE)
-        return
-    await transition_draft(db_session, draft, "cancelled")
+    cancelled = await cancel_transient_dialogs(db_session, user.id)
     await db_session.commit()
-    await answer_with_main_menu(message, DRAFT_CANCELLED_MESSAGE)
+    await answer_with_main_menu(
+        message,
+        "Текущее действие отменено" if cancelled.total else "Активных действий нет",
+    )
 
 
 def create_router(
@@ -218,6 +204,7 @@ def create_router(
     router.message.register(notes_command, Command("notes"))
     router.message.register(draft_command, Command("draft"))
     router.message.register(cancel_command, Command("cancel"))
+    router.message.register(cancel_command, F.text == CANCEL_BUTTON)
     router.message.register(today_command, Command("today"))
     router.message.register(tasks_command, Command("tasks"))
     router.message.register(followups_command, Command("followups"))
@@ -241,8 +228,6 @@ def create_router(
     router.message.register(followups_command, F.text == FOLLOW_UPS_BUTTON)
     router.message.register(waiting_command, F.text == WAITING_BUTTON)
     router.message.register(questions_command, F.text == QUESTIONS_BUTTON)
-    router.message.register(people_command, F.text == PEOPLE_BUTTON)
-    router.message.register(topics_command, F.text == TOPICS_BUTTON)
     router.message.register(search_command, F.text == SEARCH_BUTTON)
     router.message.register(reminders_settings_command, F.text == SETTINGS_BUTTON)
     router.message.register(workspace_command, F.text == WORKSPACE_BUTTON)
@@ -256,6 +241,16 @@ def create_router(
         meeting_review_reply,
         MeetingReviewReplyFilter(),
         F.text | F.voice,
+    )
+    router.message.register(
+        voice_message,
+        CaptureNewFilter(),
+        F.voice,
+    )
+    router.message.register(
+        text_note,
+        CaptureNewFilter(),
+        F.text & ~F.text.startswith("/"),
     )
     router.message.register(
         action_session_message,

@@ -88,6 +88,32 @@ async def test_snooze_parser_prefers_exact_and_uses_strict_ai_fallback() -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("phrase", "expected"),
+    [
+        ("через час", datetime(2026, 7, 22, 11, tzinfo=UTC)),
+        ("через 30 минут", datetime(2026, 7, 22, 10, 30, tzinfo=UTC)),
+        ("завтра", datetime(2026, 7, 23, 8, 15, tzinfo=UTC)),
+        ("в пятницу", datetime(2026, 7, 24, 8, 15, tzinfo=UTC)),
+        ("через две недели", datetime(2026, 8, 5, 10, tzinfo=UTC)),
+        ("15 августа в 14:30", datetime(2026, 8, 15, 14, 30, tzinfo=UTC)),
+    ],
+)
+async def test_natural_language_time_phrases(
+    phrase: str,
+    expected: datetime,
+) -> None:
+    service = SnoozeParsingService(None, timeout_seconds=5)
+    result = await service.parse(
+        phrase,
+        timezone=ZoneInfo("UTC"),
+        now=datetime(2026, 7, 22, 10, tzinfo=UTC),
+        default_time=time(8, 15),
+    )
+    assert result == expected
+
+
+@pytest.mark.asyncio
 async def test_snooze_parser_rejects_past_and_unavailable_natural_language() -> None:
     service = SnoozeParsingService(None, timeout_seconds=5)
     now = datetime(2026, 7, 22, 10, tzinfo=UTC)

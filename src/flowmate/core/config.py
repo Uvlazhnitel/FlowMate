@@ -285,6 +285,10 @@ class Settings(BaseSettings):
         default=time(8, 0),
         validation_alias="DEFAULT_QUIET_HOURS_END",
     )
+    default_reminder_time: time = Field(
+        default=time(9, 0),
+        validation_alias="DEFAULT_REMINDER_TIME",
+    )
     default_snooze_minutes: int = Field(
         default=60,
         ge=1,
@@ -363,6 +367,7 @@ class Settings(BaseSettings):
         "default_evening_digest_time",
         "default_quiet_hours_start",
         "default_quiet_hours_end",
+        "default_reminder_time",
     )
     @classmethod
     def validate_local_time(cls, value: time) -> time:

@@ -2,6 +2,7 @@
 import json
 import logging
 from datetime import UTC, datetime, time, timedelta
+from enum import StrEnum
 from pathlib import Path
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -77,6 +78,14 @@ from flowmate.task_engine.service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class ManagementIntentOutcome(StrEnum):
+    HANDLED = "handled"
+    AMBIGUOUS = "ambiguous"
+    NOT_FOUND = "not_found"
+
+
 LIST_FAILED_MESSAGE = "Не удалось загрузить записи. Попробуйте позже."
 
 OPEN_LABELS = {
@@ -133,23 +142,17 @@ def card_preview(value: str, limit: int) -> str:
 
 def format_work_item_details(details: WorkItemDetails, timezone: ZoneInfo) -> str:
     item = details.item
-    people_text = (
-        card_preview(", ".join(details.person_names), 240)
-        if details.person_names
-        else "не указаны"
-    )
-    topic_text = (
-        card_preview(details.topic_name, 120) if details.topic_name else "не задана"
-    )
     lines = [
         f"Тип: {OPEN_LABELS[item.type]}",
         f"Название: {card_preview(item.title, 180)}",
         f"Статус: {STATUS_LABELS[item.status]}",
         f"Срок: {format_datetime(item.due_at, timezone)}",
         f"Следующий контакт: {format_datetime(item.next_follow_up_at, timezone)}",
-        f"Люди: {people_text}",
-        f"Тема: {topic_text}",
     ]
+    if details.person_names:
+        lines.append(f"Люди: {card_preview(', '.join(details.person_names), 240)}")
+    if details.topic_name:
+        lines.append(f"Тема: {card_preview(details.topic_name, 120)}")
     if item.description:
         lines.append(f"Описание: {card_preview(item.description, 800)}")
     if details.notes:
@@ -191,18 +194,20 @@ def format_selection_entry(
     timezone: ZoneInfo,
 ) -> str:
     item = value.item
-    people = card_preview(", ".join(value.person_names), 100) or "—"
-    topic = card_preview(value.topic_name, 80) if value.topic_name else "—"
     scheduled = (
         item.next_follow_up_at
         if item.type == WorkItemType.FOLLOW_UP.value
         else item.due_at
     )
-    return (
+    lines = [
         f"{index}. [{OPEN_LABELS[item.type]}] {card_preview(item.title, 120)}\n"
-        f"   Люди: {people}; тема: {topic}; "
         f"дата: {format_datetime(scheduled, timezone)}"
-    )
+    ]
+    if value.person_names:
+        lines.append(f"   Люди: {card_preview(', '.join(value.person_names), 100)}")
+    if value.topic_name:
+        lines.append(f"   Тема: {card_preview(value.topic_name, 80)}")
+    return "\n".join(lines)
 
 
 def selection_keyboard(
@@ -725,7 +730,7 @@ async def work_item_callback(
         if action not in mutating_actions:
             await callback_query.answer("Действие недоступно.")
             return
-        await callback_query.answer("Обрабатываю…")
+        await callback_query.answer("Готово" if action == "c" else "Обрабатываю…")
         callback_acknowledged = True
         update_id = event_update.update_id
         preferences = await get_effective_notification_preferences(
@@ -740,7 +745,7 @@ async def work_item_callback(
                 update_id,
                 expected_revision=expected_revision,
             )
-            response = "Запись завершена."
+            response = f"✅ Выполнено: {item.title}"
         elif action == "x":
             result = await cancel_work_item(
                 db_session,
@@ -987,6 +992,7 @@ async def action_session_message(
                 text,
                 timezone=preferences.zoneinfo,
                 now=datetime.now(preferences.zoneinfo),
+                default_time=preferences.default_reminder_time,
             )
             await snooze_work_item_reminder(
                 db_session,
@@ -1014,6 +1020,7 @@ async def action_session_message(
                     text,
                     timezone=preferences.zoneinfo,
                     now=datetime.now(preferences.zoneinfo),
+                    default_time=preferences.default_reminder_time,
                 )
             new_date = parsed_date
             await reschedule_work_item(
@@ -1113,7 +1120,10 @@ async def action_session_message(
         await message.answer(message_text)
     except (AIError, InvalidWorkItemTransitionError, SnoozeParsingError, ValueError):
         await db_session.rollback()
-        await message.answer("Не удалось применить изменение.")
+        await message.answer(
+            "Не удалось понять дату. Можно написать: завтра утром, через час "
+            "или 15 августа в 14:00. Для отмены нажмите ❌ Отмена."
+        )
     except SQLAlchemyError:
         await db_session.rollback()
         logger.error(
@@ -1155,7 +1165,7 @@ async def apply_management_intent(
             await complete_work_item(
                 db_session, user_id, item.id, telegram_update_id=update_id
             )
-            response = "Запись завершена."
+            response = f"✅ Выполнено: {item.title}"
         elif intent.action is ManagementAction.CANCEL:
             await cancel_work_item(
                 db_session, user_id, item.id, telegram_update_id=update_id
@@ -1185,7 +1195,8 @@ async def apply_management_intent(
                     item_id=item.id,
                     action=WorkItemAction.RESCHEDULE,
                     prompt=(
-                        "На какую дату перенести? Введите ГГГГ-ММ-ДД или ДД.ММ.ГГГГ."
+                        "Когда перенести? Можно написать: завтра утром, через час "
+                        "или 15 августа в 14:00. Для отмены нажмите ❌ Отмена."
                     ),
                     ttl_minutes=action_ttl_minutes,
                     telegram_update_id=update_id,
@@ -1315,17 +1326,16 @@ async def execute_management_intent(
     action_ttl_minutes: int,
     app_timezone: ZoneInfo,
     reminder_policy: ReminderPolicy | None = None,
-) -> bool:
+) -> ManagementIntentOutcome:
     telegram_user = message.from_user
     if telegram_user is None:
-        return True
+        return ManagementIntentOutcome.HANDLED
     user = await get_user_by_telegram_id(db_session, telegram_user.id)
     if user is None:
-        await message.answer("Запись не найдена.")
-        return True
+        return ManagementIntentOutcome.NOT_FOUND
     if await get_active_draft_for_user(db_session, user.id) is not None:
         await message.answer("Сначала завершите или отмените активный черновик.")
-        return True
+        return ManagementIntentOutcome.AMBIGUOUS
     contextual_id = (
         replied_work_item_id(message) if intent.contextual_reference else None
     )
@@ -1336,12 +1346,11 @@ async def execute_management_intent(
         contextual_work_item_id=contextual_id,
     )
     if not matches:
-        await message.answer("Подходящая запись не найдена.")
-        return True
+        return ManagementIntentOutcome.NOT_FOUND
     if len(matches) > 1:
         if len(matches) > 10:
             await message.answer("Найдено слишком много записей. Уточните название.")
-            return True
+            return ManagementIntentOutcome.AMBIGUOUS
         action_session = await create_action_session(
             db_session,
             user_id=user.id,
@@ -1364,14 +1373,14 @@ async def execute_management_intent(
             parse_mode=None,
             reply_markup=selection_keyboard(action_session.id, entries),
         )
-        return True
+        return ManagementIntentOutcome.AMBIGUOUS
     item = matches[0]
     if intent.confidence < high_confidence_threshold or intent.ambiguities:
         await message.answer(
             "Нужно уточнить действие. Откройте запись и выберите кнопку.",
             reply_markup=item_keyboard(item),
         )
-        return True
+        return ManagementIntentOutcome.AMBIGUOUS
     await apply_management_intent(
         message,
         event_update,
@@ -1384,7 +1393,7 @@ async def execute_management_intent(
         app_timezone=app_timezone,
         reminder_policy=reminder_policy,
     )
-    return True
+    return ManagementIntentOutcome.HANDLED
 
 
 async def work_item_selection_callback(

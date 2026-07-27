@@ -8,7 +8,8 @@ from aiogram.types import Message, Update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from flowmate.ai.schemas import DraftSource
+from flowmate.ai.errors import AIError
+from flowmate.ai.schemas import DraftAnalysisResult, DraftSource
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.formatting import TELEGRAM_TEXT_LIMIT, split_plain_text
 from flowmate.bot.handlers.drafts import (
@@ -19,11 +20,17 @@ from flowmate.bot.handlers.notes import (
     NOTE_ALREADY_SAVED_MESSAGE,
     NOTE_SAVE_FAILED_MESSAGE,
     NOTE_SAVED_MESSAGE,
+    capture_workspace_override,
     save_note_for_message,
+    selected_capture_workspace,
 )
+from flowmate.db.models import WorkItemActionSession
 from flowmate.db.notes import get_note_by_telegram_update_id
+from flowmate.reminders.preferences import NotificationDefaults
 from flowmate.speech.errors import AudioTooLargeError, SpeechError, SpeechTimeoutError
 from flowmate.speech.service import TranscriptionService
+from flowmate.task_engine.conversion import DraftConversionService
+from flowmate.workspaces import active_workspace
 
 PROCESSING_MESSAGE = "Обрабатываю голосовое сообщение."
 SPEECH_UNAVAILABLE_MESSAGE = "Распознавание речи пока не настроено."
@@ -49,6 +56,10 @@ async def voice_message(
     draft_parsing_service: DraftParsingService | None = None,
     draft_ttl_hours: int = 24,
     default_workspace: str = "personal",
+    active_capture: WorkItemActionSession | None = None,
+    ai_high_confidence_threshold: float = 0.8,
+    draft_conversion_service: DraftConversionService | None = None,
+    notification_defaults: NotificationDefaults | None = None,
 ) -> None:
     voice = message.voice
     telegram_user = message.from_user
@@ -119,6 +130,27 @@ async def voice_message(
         await message.answer(TRANSCRIPTION_FAILED_MESSAGE)
         return
 
+    parse_content, explicit_workspace = capture_workspace_override(transcription)
+    analysis: DraftAnalysisResult | None = None
+    if draft_parsing_service is not None:
+        try:
+            analysis = await draft_parsing_service.parse(
+                parse_content,
+                source=DraftSource.VOICE,
+                active_workspace=active_workspace(db_session),
+            )
+        except AIError:
+            logger.warning(
+                "telegram_voice_draft_preparse_failed user_id=%s category=ai",
+                telegram_user.id,
+            )
+    current_workspace = active_workspace(db_session) or default_workspace
+    selected_workspace, update_workspace = selected_capture_workspace(
+        analysis,
+        current=current_workspace,
+        explicit=explicit_workspace,
+        high_confidence_threshold=ai_high_confidence_threshold,
+    )
     save_result = await save_note_for_message(
         message,
         event_update,
@@ -128,6 +160,9 @@ async def voice_message(
         create_draft=draft_parsing_service is not None,
         draft_ttl_hours=draft_ttl_hours,
         default_workspace=default_workspace,
+        capture_session=active_capture,
+        workspace_override=selected_workspace,
+        update_active_workspace=update_workspace,
     )
     if save_result.status == "failed":
         await message.answer(NOTE_SAVE_FAILED_MESSAGE)
@@ -145,12 +180,16 @@ async def voice_message(
     await message.answer(DRAFT_ANALYZING_MESSAGE)
     await analyze_note_content(
         message,
-        content=transcription,
+        content=parse_content,
         telegram_user_id=telegram_user.id,
         source=DraftSource.VOICE,
         service=draft_parsing_service,
         db_session=db_session,
         draft=save_result.draft,
         draft_ttl_hours=draft_ttl_hours,
+        precomputed_result=analysis,
         active_workspace=save_result.draft.workspace,
+        high_confidence_threshold=ai_high_confidence_threshold,
+        draft_conversion_service=draft_conversion_service,
+        notification_defaults=notification_defaults,
     )

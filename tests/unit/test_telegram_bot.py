@@ -293,7 +293,9 @@ async def test_help_response() -> None:
         "Встречи: /meeting, /meeting_status, /meeting_notes, /meeting_end, "
         "/meeting_review, /meeting_cancel. "
         "Пространство: /workspace. "
-        "Отправьте текст или голосовое сообщение, чтобы сохранить заметку."
+        "Нажмите «🎙 Записать»: следующая текстовая или голосовая реплика будет "
+        "сохранена как новая запись. Уверенные записи создаются сразу, остальные "
+        "остаются в черновике. «❌ Отмена» завершает текущий временный диалог."
     )
 
 
@@ -504,6 +506,7 @@ async def test_new_voice_note_is_parsed_after_transcription() -> None:
     cast(AsyncMock, draft_service.parse).assert_awaited_once_with(
         "Распознанный текст",
         source=DraftSource.VOICE,
+        active_workspace=None,
     )
     assert [call.args[0] for call in answer.await_args_list[:3]] == [
         PROCESSING_MESSAGE,

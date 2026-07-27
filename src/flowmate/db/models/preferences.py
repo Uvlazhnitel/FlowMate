@@ -61,6 +61,9 @@ class UserNotificationPreferences(Base):
     )
     quiet_hours_start: Mapped[time] = mapped_column(Time(), nullable=False)
     quiet_hours_end: Mapped[time] = mapped_column(Time(), nullable=False)
+    default_reminder_time: Mapped[time] = mapped_column(
+        Time(), nullable=False, default=time(9), server_default="09:00:00"
+    )
     default_snooze_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     send_empty_digests: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"

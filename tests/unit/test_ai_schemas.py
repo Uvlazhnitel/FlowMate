@@ -133,16 +133,15 @@ def test_rejects_inconsistent_or_naive_temporal_values(
         TemporalCandidate.model_validate(payload)
 
 
-def test_converts_resolved_date_only_reminder_to_day_level_due_date() -> None:
+def test_preserves_resolved_date_only_reminder_for_service_policy() -> None:
     reminder = temporal_payload(time_was_explicit=False)
 
     item = DraftItem.model_validate(item_payload(reminder_candidate=reminder))
 
-    assert item.reminder_candidate is None
-    assert item.due_date_candidate is not None
-    assert item.due_date_candidate.status is TemporalStatus.RESOLVED
-    assert item.due_date_candidate.original_phrase == "tomorrow at 09:00"
-    assert item.due_date_candidate.time_was_explicit is False
+    assert item.reminder_candidate is not None
+    assert item.reminder_candidate.status is TemporalStatus.RESOLVED
+    assert item.reminder_candidate.original_phrase == "tomorrow at 09:00"
+    assert item.reminder_candidate.time_was_explicit is False
 
 
 @pytest.mark.parametrize(

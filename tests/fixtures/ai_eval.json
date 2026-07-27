@@ -30,8 +30,8 @@
       "confidence": 0.96
     },
     "expected_types": ["task"],
-    "expected_due": "2026-08-07T23:59:59+03:00",
-    "expected_reminder": null
+    "expected_due": null,
+    "expected_reminder": "2026-08-07T23:59:59+03:00"
   },
   {
     "id": "multiple_actions",

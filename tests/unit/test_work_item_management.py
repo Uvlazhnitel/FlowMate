@@ -311,12 +311,12 @@ async def test_complete_callback_commits_and_refreshes_card() -> None:
     refresh_call = refresh.await_args
     assert refresh_call is not None
     assert refresh_call.kwargs["edit"] is True
-    answer.assert_awaited_once_with("Обрабатываю…")
+    answer.assert_awaited_once_with("Готово")
     assert events == ["acknowledged", "completed"]
     message_answer.assert_awaited_once()
     response_call = message_answer.await_args
     assert response_call is not None
-    assert response_call.args == ("Запись завершена.",)
+    assert response_call.args == (f"✅ Выполнено: {details.item.title}",)
     assert response_call.kwargs["reply_markup"].is_persistent is True
 
 
@@ -371,7 +371,7 @@ async def test_stale_callback_only_refreshes_current_card() -> None:
     cast(AsyncMock, session.commit).assert_not_awaited()
     cast(AsyncMock, session.rollback).assert_awaited_once()
     refresh.assert_awaited_once()
-    answer.assert_awaited_once_with("Обрабатываю…")
+    answer.assert_awaited_once_with("Готово")
     message_answer.assert_awaited_once()
     response_call = message_answer.await_args
     assert response_call is not None
@@ -489,7 +489,7 @@ async def test_high_confidence_management_executes_single_match() -> None:
             app_timezone=ZoneInfo("UTC"),
         )
 
-    assert handled is True
+    assert handled.value == "handled"
     complete.assert_awaited_once_with(
         cast(AsyncSession, session),
         user_id,
@@ -497,7 +497,7 @@ async def test_high_confidence_management_executes_single_match() -> None:
         telegram_update_id=9001,
     )
     cast(AsyncMock, session.commit).assert_awaited_once()
-    answer.assert_awaited_once_with("Запись завершена.")
+    answer.assert_awaited_once_with(f"✅ Выполнено: {item.title}")
 
 
 @pytest.mark.asyncio
@@ -559,7 +559,7 @@ async def test_ambiguous_management_creates_selection_without_mutation() -> None
     assert answer_call is not None
     assert answer_call.args[0].startswith("Выберите запись:\n\n")
     assert "[follow-up] Follow-up 0" in answer_call.args[0]
-    assert "Люди:" in answer_call.args[0]
+    assert "Люди:" not in answer_call.args[0]
     assert len(answer_call.kwargs["reply_markup"].inline_keyboard) == 3
     assert answer_call.kwargs["reply_markup"].inline_keyboard[-1][0].text == "Отмена"
 

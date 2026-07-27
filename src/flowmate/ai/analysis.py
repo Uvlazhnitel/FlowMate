@@ -194,18 +194,9 @@ def classify_readiness(
         return DraftReadiness.UNRESOLVED
     if item.type is DraftItemType.UNKNOWN:
         return DraftReadiness.CLARIFICATION_REQUIRED
-    # Provider-reported missing details remain useful Inbox metadata, but they
-    # must not turn optional fields such as amount, topic, or date into blockers.
-    identity_is_ambiguous = bool(item.ambiguities) and (
-        len(item.person_candidates) > 1 or len(item.topic_candidates) > 1
-    )
-    needs_clarification = (
-        item.confidence < high_threshold
-        or identity_is_ambiguous
-        or any(
-            candidate is not None and candidate.status is TemporalStatus.AMBIGUOUS
-            for candidate in temporal_candidates
-        )
+    needs_clarification = item.confidence < high_threshold or any(
+        candidate is not None and candidate.status is TemporalStatus.AMBIGUOUS
+        for candidate in temporal_candidates
     )
     if needs_clarification:
         return DraftReadiness.CLARIFICATION_REQUIRED
@@ -239,6 +230,8 @@ def build_analysis_result(
         items=assessments,
         ambiguities=result.ambiguities,
         confidence=result.confidence,
+        workspace_candidate=result.workspace_candidate,
+        workspace_confidence=result.workspace_confidence,
     )
 
 
@@ -248,4 +241,6 @@ def analysis_to_parse_result(analysis: DraftAnalysisResult) -> DraftParseResult:
         draft_items=[assessment.item for assessment in analysis.items],
         ambiguities=analysis.ambiguities,
         confidence=analysis.confidence,
+        workspace_candidate=analysis.workspace_candidate,
+        workspace_confidence=analysis.workspace_confidence,
     )

@@ -71,6 +71,10 @@ the isolated database configured by `TEST_DATABASE_URL`.
   originating card reference and refresh it after a successful transaction.
 - Main-menu buttons and slash commands must use the same handlers and
   ownership-safe query services; list callback data must never contain user text.
+- Quick capture must bypass management/search routing, preserve its source Note,
+  and use the same atomic idempotent Draft Conversion service as manual confirmation.
+- Optional people, topics, amounts, descriptions, and dates must not block an
+  otherwise meaningful capture.
 - Search replies belong to an expiring action session and must never create a
   Note or AI draft. Completed search sessions remain readable only until TTL.
 - AI search routing may produce only strict filters; all result selection must

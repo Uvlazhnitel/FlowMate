@@ -25,6 +25,8 @@ from flowmate.db.models import (
     Topic,
     WorkItem,
 )
+from flowmate.reminders.enums import ReminderScheduleKind, ReminderType
+from flowmate.reminders.service import create_reminder
 from flowmate.reminders.sync import ReminderPolicy
 from flowmate.stabilization.audit import record_audit_event
 from flowmate.task_engine.enums import (
@@ -233,6 +235,23 @@ class DraftConversionService:
                 now,
                 status_override=(status_overrides or {}).get(record.id),
             )
+            reminder_candidate = item.reminder_candidate
+            if (
+                item.type is not DraftItemType.FOLLOW_UP
+                and reminder_candidate is not None
+                and reminder_candidate.status is TemporalStatus.RESOLVED
+                and reminder_candidate.normalized_value is not None
+            ):
+                await create_reminder(
+                    session,
+                    user_id,
+                    reminder_type=ReminderType.CUSTOM,
+                    scheduled_at=reminder_candidate.normalized_value,
+                    deduplication_key=f"draft-item:{record.id}:reminder",
+                    work_item_id=work_item.id,
+                    reference_at=reminder_candidate.normalized_value,
+                    schedule_kind=ReminderScheduleKind.MANUAL,
+                )
             work_item.planner_status = (
                 (planner_overrides or {}).get(record.id)
                 or PlannerStatus(work_item.planner_status)

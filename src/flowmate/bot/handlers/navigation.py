@@ -20,14 +20,13 @@ from flowmate.ai.schemas import SearchIntent
 from flowmate.bot.formatting import split_plain_text
 from flowmate.bot.handlers.work_items import OPEN_LABELS, STATUS_LABELS, send_details
 from flowmate.bot.menu import main_menu_keyboard, restore_main_menu
-from flowmate.db.drafts import get_active_draft_for_user
 from flowmate.db.models import WorkItem, WorkItemActionSession
 from flowmate.db.users import get_user_by_telegram_id
+from flowmate.meetings.service import get_active_meeting
 from flowmate.reminders.timezone import resolve_local_datetime
 from flowmate.task_engine.action_sessions import (
     create_action_session,
     finish_action_session,
-    get_active_action_session,
     get_search_session_for_user,
 )
 from flowmate.task_engine.enums import WorkItemAction, WorkItemStatus, WorkItemType
@@ -53,6 +52,7 @@ from flowmate.task_engine.search import (
     search_stale_contacts,
     search_work_items,
 )
+from flowmate.task_engine.transient_dialogs import cancel_transient_dialogs
 
 PAGE_SIZE = 5
 MAX_PAGE = 999
@@ -89,7 +89,15 @@ class NavigationPage:
     keyboard: InlineKeyboardMarkup
 
 
-async def menu_command(message: Message) -> None:
+async def menu_command(
+    message: Message,
+    db_session: AsyncSession | None = None,
+) -> None:
+    if db_session is not None and message.from_user is not None:
+        user = await get_user_by_telegram_id(db_session, message.from_user.id)
+        if user is not None:
+            await cancel_transient_dialogs(db_session, user.id)
+            await db_session.commit()
     await message.answer(
         "Главное меню FlowMate.",
         parse_mode=None,
@@ -97,7 +105,29 @@ async def menu_command(message: Message) -> None:
     )
 
 
-async def record_prompt(message: Message) -> None:
+async def record_prompt(
+    message: Message,
+    event_update: Update,
+    db_session: AsyncSession,
+    work_item_action_ttl_minutes: int,
+) -> None:
+    telegram_user = message.from_user
+    if telegram_user is None:
+        return
+    user = await get_user_by_telegram_id(db_session, telegram_user.id)
+    if user is None:
+        await message.answer("Сначала используйте /start.")
+        return
+    await cancel_transient_dialogs(db_session, user.id)
+    if await get_active_meeting(db_session, user.id) is None:
+        await create_action_session(
+            db_session,
+            user.id,
+            action=WorkItemAction.CAPTURE_NEW,
+            ttl_minutes=work_item_action_ttl_minutes,
+            telegram_update_id=event_update.update_id,
+        )
+    await db_session.commit()
     await message.answer(
         "Отправьте текст или нажмите микрофон Telegram и запишите голосовое сообщение.",
         parse_mode=None,
@@ -158,18 +188,22 @@ def format_work_item_entry(
     people = ", ".join(value.person_names[:2])
     if len(value.person_names) > 2:
         people = f"{people} +{len(value.person_names) - 2}"
-    people_text = normalize_display_text(people, MAX_CONTEXT_LENGTH) if people else "—"
-    topic_text = (
-        normalize_display_text(value.topic_name, MAX_CONTEXT_LENGTH)
-        if value.topic_name
-        else "—"
-    )
-    return (
+    lines = [
         f"{index}. {normalize_display_text(item.title, MAX_TITLE_LENGTH)}\n"
-        f"   Дата: {format_item_date(item, timezone=timezone, now=now)}\n"
-        f"   Люди: {people_text}; тема: {topic_text}\n"
-        f"   Статус: {STATUS_LABELS[item.status]}; тип: {OPEN_LABELS[item.type]}"
-    )
+        f"   Дата: {format_item_date(item, timezone=timezone, now=now)}",
+        f"   Статус: {STATUS_LABELS[item.status]}; тип: {OPEN_LABELS[item.type]}",
+    ]
+    if people:
+        lines.insert(
+            1,
+            f"   Люди: {normalize_display_text(people, MAX_CONTEXT_LENGTH)}",
+        )
+    if value.topic_name:
+        lines.insert(
+            1,
+            f"   Тема: {normalize_display_text(value.topic_name, MAX_CONTEXT_LENGTH)}",
+        )
+    return "\n".join(lines)
 
 
 def format_person_entry(value: PersonCount, index: int) -> str:
@@ -596,6 +630,8 @@ async def show_list_view(
         if user is None:
             await message.answer("Сначала используйте /start.")
             return
+        await cancel_transient_dialogs(db_session, user.id)
+        await db_session.commit()
         value = await build_navigation_page(
             db_session,
             user.id,
@@ -858,13 +894,7 @@ async def search_command(
         if user is None:
             await message.answer("Сначала используйте /start.")
             return
-        if await get_active_draft_for_user(db_session, user.id) is not None:
-            await message.answer("Сначала завершите или отмените активный черновик.")
-            return
-        active_action = await get_active_action_session(db_session, user.id)
-        if active_action is not None:
-            await message.answer("Сначала завершите или отмените текущее действие.")
-            return
+        await cancel_transient_dialogs(db_session, user.id)
         action_session = await create_action_session(
             db_session,
             user.id,
@@ -1012,7 +1042,10 @@ async def search_callback(
         await callback_query.answer(LIST_FAILED_MESSAGE, show_alert=True)
 
 
-async def menu_callback(callback_query: CallbackQuery) -> None:
+async def menu_callback(
+    callback_query: CallbackQuery,
+    db_session: AsyncSession,
+) -> None:
     if callback_query.data != "nav:menu":
         await callback_query.answer("Действие недоступно.")
         return
@@ -1020,5 +1053,5 @@ async def menu_callback(callback_query: CallbackQuery) -> None:
     if not isinstance(message, Message):
         await callback_query.answer("Действие недоступно.")
         return
-    await menu_command(message)
+    await menu_command(message, db_session)
     await callback_query.answer()

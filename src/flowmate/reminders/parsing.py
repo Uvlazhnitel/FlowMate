@@ -1,5 +1,7 @@
+# ruff: noqa: RUF001
 import asyncio
-from datetime import datetime
+import re
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from flowmate.ai.errors import AIError, AIInvalidResponseError, AITimeoutError
@@ -29,11 +31,17 @@ class SnoozeParsingService:
         *,
         timezone: ZoneInfo,
         now: datetime,
+        default_time: time = time(9),
     ) -> datetime:
         normalized = value.strip()
         if not normalized:
             raise SnoozeParsingError("snooze value must not be empty")
-        local = self._parse_exact(normalized, timezone)
+        local = self.parse_deterministic(
+            normalized,
+            timezone=timezone,
+            now=now,
+            default_time=default_time,
+        )
         if local is not None:
             if local <= now:
                 raise SnoozeParsingError("snooze value must be in the future")
@@ -66,11 +74,129 @@ class SnoozeParsingService:
         return result
 
     @staticmethod
-    def _parse_exact(value: str, timezone: ZoneInfo) -> datetime | None:
+    def parse_deterministic(
+        value: str,
+        *,
+        timezone: ZoneInfo,
+        now: datetime,
+        default_time: time,
+    ) -> datetime | None:
+        normalized = " ".join(value.casefold().replace("ё", "е").split())
         for pattern in ("%Y-%m-%d %H:%M", "%d.%m.%Y %H:%M"):
             try:
-                parsed = datetime.strptime(value, pattern)
+                parsed = datetime.strptime(normalized, pattern)
             except ValueError:
                 continue
             return resolve_local_datetime(parsed.date(), parsed.time(), timezone)
+
+        if normalized == "через час":
+            return now + timedelta(hours=1)
+
+        relative = re.fullmatch(
+            r"через\s+(?P<count>\d+|пол|один|одну|два|две)\s+"
+            r"(?P<unit>минут(?:у|ы)?|час(?:а|ов)?|недел(?:ю|и|ь))",
+            normalized,
+        )
+        if relative is not None:
+            raw_count = relative.group("count")
+            count = {
+                "пол": 0.5,
+                "один": 1,
+                "одну": 1,
+                "два": 2,
+                "две": 2,
+            }.get(raw_count, float(raw_count) if raw_count.isdigit() else 1)
+            unit = relative.group("unit")
+            if unit.startswith("минут"):
+                return now + timedelta(minutes=count)
+            if unit.startswith("час"):
+                return now + timedelta(hours=count)
+            return now + timedelta(weeks=count)
+
+        clock_match = re.search(r"(?:\s+в)?\s*(\d{1,2}):(\d{2})$", normalized)
+        explicit_clock: time | None = None
+        date_phrase = normalized
+        if clock_match is not None:
+            try:
+                explicit_clock = time(
+                    int(clock_match.group(1)), int(clock_match.group(2))
+                )
+            except ValueError:
+                return None
+            date_phrase = normalized[: clock_match.start()].strip()
+
+        local_now = now.astimezone(timezone)
+        target_time = explicit_clock or default_time
+        if date_phrase in {"завтра", "завтра утром"}:
+            return resolve_local_datetime(
+                local_now.date() + timedelta(days=1),
+                target_time,
+                timezone,
+            )
+
+        weekdays = {
+            "понедельник": 0,
+            "вторник": 1,
+            "среду": 2,
+            "четверг": 3,
+            "пятницу": 4,
+            "субботу": 5,
+            "воскресенье": 6,
+        }
+        weekday_match = re.fullmatch(
+            r"в\s+(?:(следующ(?:ий|ую|ее))\s+)?(" + "|".join(weekdays) + r")",
+            date_phrase,
+        )
+        if weekday_match is not None:
+            target_weekday = weekdays[weekday_match.group(2)]
+            days = (target_weekday - local_now.weekday()) % 7
+            if days == 0:
+                days = 7
+            if weekday_match.group(1) and days < 7:
+                days += 7
+            return resolve_local_datetime(
+                local_now.date() + timedelta(days=days),
+                target_time,
+                timezone,
+            )
+
+        months = {
+            "января": 1,
+            "февраля": 2,
+            "марта": 3,
+            "апреля": 4,
+            "мая": 5,
+            "июня": 6,
+            "июля": 7,
+            "августа": 8,
+            "сентября": 9,
+            "октября": 10,
+            "ноября": 11,
+            "декабря": 12,
+        }
+        absolute = re.fullmatch(
+            r"(?P<day>\d{1,2})\s+(?P<month>" + "|".join(months) + r")"
+            r"(?:\s+(?P<year>20\d{2}))?",
+            date_phrase,
+        )
+        if absolute is not None:
+            year = int(absolute.group("year") or local_now.year)
+            try:
+                target_date = date(
+                    year,
+                    months[absolute.group("month")],
+                    int(absolute.group("day")),
+                )
+                if absolute.group("year") is None and target_date < local_now.date():
+                    target_date = target_date.replace(year=year + 1)
+            except ValueError:
+                return None
+            return resolve_local_datetime(target_date, target_time, timezone)
+
+        for pattern in ("%Y-%m-%d", "%d.%m.%Y"):
+            try:
+                parsed_date = datetime.strptime(date_phrase, pattern).date()
+            except ValueError:
+                continue
+            return resolve_local_datetime(parsed_date, target_time, timezone)
         return None

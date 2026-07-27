@@ -24,15 +24,14 @@ from flowmate.bot.handlers.navigation import (
     send_navigation_page,
 )
 from flowmate.bot.menu import (
+    CANCEL_BUTTON,
     FOLLOW_UPS_BUTTON,
-    PEOPLE_BUTTON,
     QUESTIONS_BUTTON,
     RECORD_BUTTON,
     SEARCH_BUTTON,
     SETTINGS_BUTTON,
     TASKS_BUTTON,
     TODAY_BUTTON,
-    TOPICS_BUTTON,
     WAITING_BUTTON,
     WORKSPACE_BUTTON,
     main_menu_keyboard,
@@ -58,9 +57,8 @@ def test_main_menu_has_persistent_layout_and_workspace_button() -> None:
         [RECORD_BUTTON, TODAY_BUTTON],
         [TASKS_BUTTON, FOLLOW_UPS_BUTTON],
         [WAITING_BUTTON, QUESTIONS_BUTTON],
-        [PEOPLE_BUTTON, TOPICS_BUTTON],
         [SEARCH_BUTTON, SETTINGS_BUTTON],
-        [WORKSPACE_BUTTON],
+        [WORKSPACE_BUTTON, CANCEL_BUTTON],
     ]
 
 
@@ -203,34 +201,25 @@ async def test_cancel_command_cancels_active_search_action() -> None:
     message = make_message()
     session = AsyncMock(spec=AsyncSession)
     user = SimpleNamespace(id=uuid4())
-    action = SimpleNamespace(id=uuid4())
     with (
         patch(
             "flowmate.bot.handlers.commands.get_user_by_telegram_id",
             new=AsyncMock(return_value=user),
         ),
         patch(
-            "flowmate.bot.handlers.commands.get_active_action_session",
-            new=AsyncMock(return_value=action),
-        ),
-        patch(
-            "flowmate.bot.handlers.commands.finish_action_session",
-            new=AsyncMock(),
-        ) as finish,
+            "flowmate.bot.handlers.commands.cancel_transient_dialogs",
+            new=AsyncMock(return_value=SimpleNamespace(total=1)),
+        ) as cancel_all,
         patch.object(Message, "answer", new_callable=AsyncMock) as answer,
     ):
         await cancel_command(message, cast(AsyncSession, session))
 
-    finish.assert_awaited_once_with(
-        session,
-        cast(object, action),
-        status="cancelled",
-    )
+    cancel_all.assert_awaited_once_with(session, user.id)
     session.commit.assert_awaited_once()
     answer.assert_awaited_once()
     call = answer.await_args
     assert call is not None
-    assert call.args == ("Текущее действие отменено.",)
+    assert call.args == ("Текущее действие отменено",)
     assert call.kwargs["reply_markup"].is_persistent is True
 
 

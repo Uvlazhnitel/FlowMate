@@ -65,24 +65,6 @@ def question_for_item(
                 QuestionOption("Вопрос", "это вопрос"),
             ),
         )
-    if len(item.person_candidates) in {2, 3, 4} and item.ambiguities:
-        return ClarificationQuestion(
-            text=f"С кем связано: {item.title}?",  # noqa: RUF001
-            context=item_context(position, "person"),
-            options=tuple(
-                QuestionOption(candidate, f"выбран человек: {candidate}")
-                for candidate in item.person_candidates
-            ),
-        )
-    if len(item.topic_candidates) in {2, 3, 4} and item.ambiguities:
-        return ClarificationQuestion(
-            text=f"С какой темой связано: {item.title}?",  # noqa: RUF001
-            context=item_context(position, "topic"),
-            options=tuple(
-                QuestionOption(candidate, f"выбрана тема: {candidate}")
-                for candidate in item.topic_candidates
-            ),
-        )
     if assessment.readiness is not DraftReadiness.READY:
         return ClarificationQuestion(
             text=f"Все верно для: {item.title}?",  # noqa: RUF001

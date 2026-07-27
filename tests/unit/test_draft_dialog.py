@@ -299,7 +299,11 @@ async def test_exact_date_refinement_bypasses_ai_and_replaces_month_end() -> Non
     assert due.normalized_value == datetime(
         2026, 8, 7, 23, 59, 59, tzinfo=ZoneInfo("Europe/Riga")
     )
-    assert result.items[0].item.reminder_candidate is None
+    reminder_result = result.items[0].item.reminder_candidate
+    assert reminder_result is not None
+    assert reminder_result.normalized_value == datetime(
+        2026, 8, 7, 9, 0, tzinfo=ZoneInfo("Europe/Riga")
+    )
     assert result.items[0].item.missing_fields == []
     assert result.ambiguities == []
 

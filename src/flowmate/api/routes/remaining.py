@@ -104,6 +104,7 @@ class PreferencesRequest(StrictRequest):
     quiet_hours_enabled: bool
     quiet_hours_start: time
     quiet_hours_end: time
+    default_reminder_time: time
     default_snooze_minutes: int = Field(ge=1, le=10_080)
     send_empty_digests: bool
     date_display_format: Literal["day_month_year", "year_month_day"]
@@ -522,6 +523,7 @@ async def update_user_settings(
         evening = validate_clock_time(payload.evening_digest_time)
         quiet_start = validate_clock_time(payload.quiet_hours_start)
         quiet_end = validate_clock_time(payload.quiet_hours_end)
+        reminder_time = validate_clock_time(payload.default_reminder_time)
         if quiet_start == quiet_end:
             raise ValueError("quiet hours start and end must differ")
     except ValueError as error:
@@ -539,6 +541,7 @@ async def update_user_settings(
     value.quiet_hours_enabled = payload.quiet_hours_enabled
     value.quiet_hours_start = quiet_start
     value.quiet_hours_end = quiet_end
+    value.default_reminder_time = reminder_time
     value.default_snooze_minutes = payload.default_snooze_minutes
     value.send_empty_digests = payload.send_empty_digests
     value.date_display_format = payload.date_display_format

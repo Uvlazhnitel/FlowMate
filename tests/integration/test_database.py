@@ -251,7 +251,7 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
         "ck_users_telegram_user_id_positive"
     }
     assert columns["active_workspace"]["nullable"] is False
-    assert revision == "0021_workspace_separation"
+    assert revision == "0022_fast_capture_defaults"
 
 
 def test_pwa_auth_migration_from_0012(migrated_database: None) -> None:
@@ -346,6 +346,7 @@ async def test_notification_preferences_schema(database_engine: AsyncEngine) -> 
         "quiet_hours_enabled",
         "quiet_hours_start",
         "quiet_hours_end",
+        "default_reminder_time",
         "default_snooze_minutes",
         "send_empty_digests",
     } <= set(columns)

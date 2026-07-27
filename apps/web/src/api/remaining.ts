@@ -103,6 +103,7 @@ export interface PreferencesData {
   quiet_hours_enabled: boolean;
   quiet_hours_start: string;
   quiet_hours_end: string;
+  default_reminder_time: string;
   default_snooze_minutes: number;
   send_empty_digests: boolean;
   date_display_format: "day_month_year" | "year_month_day";

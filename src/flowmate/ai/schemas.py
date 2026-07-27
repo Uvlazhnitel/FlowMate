@@ -198,33 +198,14 @@ class DraftItem(StrictDraftModel):
     dependencies: list[DependencyCandidate]
     confidence: float = Field(ge=0.0, le=1.0)
 
-    @model_validator(mode="after")
-    def normalize_day_level_reminder(self) -> Self:
-        value = self.reminder_candidate
-        if (
-            value is not None
-            and value.status is TemporalStatus.RESOLVED
-            and not value.time_was_explicit
-        ):
-            # A date-only "remind me" request is a day-level deadline. The daily
-            # digest provides the early notification without inventing an exact time.
-            due_date = self.due_date_candidate
-            if due_date is None or due_date.status is not TemporalStatus.RESOLVED:
-                due_date = value
-            return self.model_copy(
-                update={
-                    "due_date_candidate": due_date,
-                    "reminder_candidate": None,
-                }
-            )
-        return self
-
 
 class DraftParseResult(StrictDraftModel):
     overall_intent: DraftItemType
     draft_items: list[DraftItem] = Field(min_length=1)
     ambiguities: list[NonEmptyText]
     confidence: float = Field(ge=0.0, le=1.0)
+    workspace_candidate: Literal["personal", "work"] | None = None
+    workspace_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def validate_items_and_dependencies(self) -> Self:
@@ -318,6 +299,8 @@ class DraftAnalysisResult(StrictDraftModel):
     items: list[DraftItemAssessment] = Field(min_length=1)
     ambiguities: list[NonEmptyText]
     confidence: float = Field(ge=0.0, le=1.0)
+    workspace_candidate: Literal["personal", "work"] | None = None
+    workspace_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 MeetingReviewProposal.model_rebuild()

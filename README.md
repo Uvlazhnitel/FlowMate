@@ -132,6 +132,8 @@ Migration `0021_workspace_separation` persists `personal` and `work` on users,
 topics, work items, notes, drafts, meetings, reminders, and dialog sessions.
 Existing data is assigned to `personal`; topic names are unique within each
 workspace rather than across the whole user account.
+Migration `0022_fast_capture_defaults` adds persistent quick-capture sessions
+and each user's default reminder time.
 
 ## PWA and Login
 
@@ -364,30 +366,36 @@ Choose `AI_MODEL` from the current
 instead of relying on an application default. The same `OPENAI_API_KEY` setting
 is shared with optional speech transcription.
 
-For Telegram text, the bot uses one structured AI request to choose between a
+For ordinary Telegram text, the bot uses one structured AI request to choose between a
 new draft and management of an existing WorkItem. A `new_draft` result creates
 the Note and parsing draft; a management result does not create an unrelated
-Note. Voice input creates its Note/draft after transcription and remains a
-draft-only flow. The provider receives text only. Context includes the current
+Note. After `🎙 Записать`, the next text or voice message always bypasses
+management and search routing and becomes a new capture. High-confidence ready
+captures are converted immediately through the same atomic Draft Conversion
+service; ambiguous captures remain editable drafts. The provider receives text
+only. Context includes the current
 local time, IANA timezone, active workspace, Telegram channel, and source. One
 new-draft message may produce multiple validated items with people, roles,
 topics, dates, supporting notes, and dependencies.
 
 Every temporal candidate retains its original phrase. Resolved values are
 timezone-aware ISO datetimes; date-only due dates use `23:59:59` in the user's
-timezone, while reminders without a time require clarification. Impossible or
-materially ambiguous dates are never silently normalized.
+timezone. Date-only reminders use the user's configured default reminder time;
+impossible or materially ambiguous dates are never silently normalized.
 
-Items at or above the high-confidence threshold are marked ready only when no
-fields or dates need clarification. Items between the two thresholds require
-clarification; lower-confidence or invalid-date items remain unresolved. The
+Items at or above the high-confidence threshold are ready when their type is
+known and any explicitly supplied date is valid and unambiguous. Missing
+optional people, topics, amounts, descriptions, or dates remain Inbox metadata
+and do not block capture. Items between the two thresholds require
+confirmation; lower-confidence or invalid-date items remain unresolved. The
 summary is plain text and includes every detected item. Ready drafts show
 Confirm, Change, and Cancel buttons. Drafts that need clarification ask one
 question at a time; text and voice answers must be sent as a Telegram Reply to
 that question. Clear options are shown as buttons.
 
-Only one open draft is kept per user. `/draft` shows it and `/cancel` cancels
-it. The phrases `сохрани как есть` and `отмена` confirm or cancel the active
+Only one open draft is kept per user. `/draft` shows it and `/cancel` atomically
+cancels every standalone draft and work-item dialog while preserving source
+Notes. The phrases `сохрани как есть` and `отмена` confirm or cancel the active
 draft; corrections such as `не Антон, а Мария`, `это заметка`, or a corrected
 date refine the same session. Accepted answers refresh the default 24-hour TTL.
 Expired drafts reject further answers. New ordinary messages are not saved as
@@ -426,9 +434,9 @@ five records with `Назад`, `Вперёд`, and `Главное меню` in
 WorkItem summary includes its date, people, topic, status, and a details button.
 
 The main reply keyboard contains `🎙 Записать`, `📅 Сегодня`, `✅ Задачи`,
-`🔁 Follow-up`, `⏳ Ждём`, `❓ Вопросы`, `👥 Люди`, `🗂 Темы`, `🔍 Поиск`, and
-`⚙️ Настройки`. `🎙 Записать` explains how to send text or voice; it cannot open
-Telegram's microphone directly. `/search query` searches the current user's
+`🔁 Follow-up`, `⏳ Ждём`, `❓ Вопросы`, `🔍 Поиск`, `⚙️ Настройки`,
+`🔀 Работа / Личное`, and `❌ Отмена`. `/people` and `/topics` remain available
+as compatibility commands. `/search query` searches the current user's
 open WorkItems by title, description, person, topic, type, or status. `/search`
 without a query and `🔍 Поиск` open a short-lived Reply prompt. Search replies
 are not stored as Notes or AI drafts. Completed records are included only with
@@ -464,8 +472,8 @@ changes `due_at` or `next_follow_up_at` and synchronizes reminders. Reschedule
 presets include later today, tomorrow morning, and the next working day. Custom
 dates and linked notes use an expiring Reply prompt; their text or voice input
 does not create an unrelated Note or AI draft. Every significant mutation is
-recorded as a `WorkItemEvent`. `/cancel` cancels an active work-item input
-session before it cancels an AI draft.
+recorded as a `WorkItemEvent`. `/cancel` atomically closes all standalone
+work-item input and draft sessions without deleting their source Notes.
 
 When AI is configured, ordinary Telegram text is routed once as a new
 Note/draft, a search, or a management intent. A high-confidence intent with one
@@ -500,6 +508,7 @@ DEFAULT_MORNING_DIGEST_TIME=09:00
 DEFAULT_EVENING_DIGEST_TIME=18:00
 DEFAULT_QUIET_HOURS_START=22:00
 DEFAULT_QUIET_HOURS_END=08:00
+DEFAULT_REMINDER_TIME=09:00
 DEFAULT_SNOOZE_MINUTES=60
 ```
 
@@ -543,6 +552,7 @@ Configure preferences in Telegram:
 /reminders timezone Europe/Riga
 /reminders morning 09:00
 /reminders evening 18:00
+/reminders default 09:00
 /reminders snooze 60
 /reminders empty off
 /quiet 22:00 08:00

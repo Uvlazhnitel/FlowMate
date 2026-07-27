@@ -50,6 +50,8 @@ def format_preferences(preferences: UserNotificationPreferences) -> str:
         f"Утренний обзор: {morning}\n"
         f"Вечерний обзор: {evening}\n"
         f"Тихие часы: {quiet}\n"
+        "Время напоминаний по умолчанию: "
+        f"{preferences.default_reminder_time:%H:%M}\n"
         f"Snooze по умолчанию: {preferences.default_snooze_minutes} мин.\n"
         f"Пустые обзоры: {empty}"
     )
@@ -105,6 +107,8 @@ async def reminders_settings_command(
                 if not 1 <= minutes <= 10_080:
                     raise ValueError("snooze minutes out of range")
                 preferences.default_snooze_minutes = minutes
+            elif operation == "default" and value:
+                preferences.default_reminder_time = parse_time(value)
             elif operation == "empty" and value.casefold() in {"on", "off"}:
                 preferences.send_empty_digests = value.casefold() == "on"
             else:
@@ -115,7 +119,7 @@ async def reminders_settings_command(
         await db_session.rollback()
         await message.answer(
             "Формат: /reminders timezone Europe/Riga, morning 09:00, "
-            "evening off, snooze 60 или empty on."
+            "evening off, default 09:00, snooze 60 или empty on."
         )
     except SQLAlchemyError:
         await db_session.rollback()
