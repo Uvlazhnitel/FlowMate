@@ -177,6 +177,7 @@ def _draft_parsing_service(
         clarification_confidence_threshold=(
             settings.ai_clarification_confidence_threshold
         ),
+        split_confidence_threshold=settings.ai_split_confidence_threshold,
     )
 
 

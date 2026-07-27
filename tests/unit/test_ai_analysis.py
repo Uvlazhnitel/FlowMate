@@ -1,11 +1,13 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from flowmate.ai.analysis import build_analysis_result
+from flowmate.ai.analysis import apply_itemization_policy, build_analysis_result
 from flowmate.ai.schemas import (
     DependencyCandidate,
     DependencyRelation,
     DraftReadiness,
+    ItemizationBasis,
+    ItemizationDecision,
     TemporalStatus,
 )
 from tests.ai_factories import (
@@ -184,3 +186,93 @@ def test_duplicates_are_merged_and_dependency_targets_are_remapped() -> None:
     assert merged.confidence == 0.7
     assert merged.dependencies[0].target_item_number == 2
     assert analysis.items[1].item.dependencies[0].target_item_number == 1
+
+
+def test_uncertain_multiple_outcomes_collapse_to_consolidated_item() -> None:
+    consolidated = make_draft_item(
+        title="Подготовить отчёт и отправить его клиенту"  # noqa: RUF001
+    )
+    result = make_parse_result(
+        [
+            make_draft_item(title="Подготовить отчёт"),
+            make_draft_item(title="Отправить отчёт клиенту"),
+        ],
+        itemization_basis=ItemizationBasis.UNCERTAIN,
+        itemization_confidence=0.89,
+        consolidated_item=consolidated,
+    )
+
+    normalized = apply_itemization_policy(
+        result,
+        source_text="Подготовить отчёт и отправить его клиенту",  # noqa: RUF001
+        split_threshold=0.90,
+    )
+
+    assert normalized.itemization_decision is ItemizationDecision.SINGLE
+    assert normalized.draft_items == [consolidated]
+    assert normalized.consolidated_item is None
+
+
+def test_high_confidence_independent_outcomes_remain_multiple() -> None:
+    result = make_parse_result(
+        [
+            make_draft_item(title="Купить молоко"),
+            make_draft_item(title="Забрать посылку"),
+        ],
+        itemization_basis=ItemizationBasis.INDEPENDENT_OUTCOMES,
+        itemization_confidence=0.90,
+    )
+
+    normalized = apply_itemization_policy(
+        result,
+        source_text="Купить молоко и забрать посылку",
+        split_threshold=0.90,
+    )
+
+    assert normalized.itemization_decision is ItemizationDecision.MULTIPLE
+    assert len(normalized.draft_items) == 2
+
+
+def test_explicit_single_directive_overrides_confident_split() -> None:
+    consolidated = make_draft_item(title="Подготовить и отправить отчёт")
+    result = make_parse_result(
+        [
+            make_draft_item(title="Подготовить отчёт"),
+            make_draft_item(title="Отправить отчёт"),
+        ],
+        itemization_basis=ItemizationBasis.SEPARATE_SENTENCES,
+        itemization_confidence=0.99,
+        consolidated_item=consolidated,
+    )
+
+    normalized = apply_itemization_policy(
+        result,
+        source_text=(
+            "Подготовить отчёт. Отправить его клиенту. Не разделяй."  # noqa: RUF001
+        ),
+        split_threshold=0.90,
+    )
+
+    assert normalized.draft_items == [consolidated]
+
+
+def test_explicit_multiple_directive_overrides_low_split_confidence() -> None:
+    result = make_parse_result(
+        [
+            make_draft_item(title="Добавить Личи Home Office"),
+            make_draft_item(title="Отправить сообщение клиенту"),
+        ],
+        itemization_basis=ItemizationBasis.UNCERTAIN,
+        itemization_confidence=0.60,
+    )
+
+    normalized = apply_itemization_policy(
+        result,
+        source_text=(
+            "Сделай две задачи: добавить Личи Home Office и отправить сообщение клиенту"
+        ),
+        split_threshold=0.90,
+    )
+
+    assert normalized.itemization_decision is ItemizationDecision.MULTIPLE
+    assert len(normalized.draft_items) == 2

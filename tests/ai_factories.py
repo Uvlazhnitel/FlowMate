@@ -8,6 +8,8 @@ from flowmate.ai.schemas import (
     DraftItemType,
     DraftParseResult,
     DraftSource,
+    ItemizationBasis,
+    ItemizationDecision,
     TemporalCandidate,
     TemporalStatus,
 )
@@ -48,9 +50,21 @@ def make_parse_result(
     items: list[DraftItem] | None = None,
     **overrides: object,
 ) -> DraftParseResult:
+    draft_items = items or [make_draft_item()]
+    is_multiple = len(draft_items) > 1
     values: dict[str, object] = {
         "overall_intent": DraftItemType.TASK,
-        "draft_items": items or [make_draft_item()],
+        "draft_items": draft_items,
+        "itemization_decision": (
+            ItemizationDecision.MULTIPLE if is_multiple else ItemizationDecision.SINGLE
+        ),
+        "itemization_basis": (
+            ItemizationBasis.INDEPENDENT_OUTCOMES
+            if is_multiple
+            else ItemizationBasis.SINGLE_GOAL
+        ),
+        "itemization_confidence": 0.95,
+        "consolidated_item": draft_items[0] if is_multiple else None,
         "ambiguities": [],
         "confidence": 0.9,
     }

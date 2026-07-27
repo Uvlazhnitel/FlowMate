@@ -167,6 +167,12 @@ class Settings(BaseSettings):
         le=1.0,
         validation_alias="AI_CLARIFICATION_CONFIDENCE_THRESHOLD",
     )
+    ai_split_confidence_threshold: float = Field(
+        default=0.90,
+        ge=0.0,
+        le=1.0,
+        validation_alias="AI_SPLIT_CONFIDENCE_THRESHOLD",
+    )
     draft_ttl_hours: int = Field(
         default=24,
         gt=0,
@@ -474,6 +480,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AI clarification threshold must be lower than high threshold"
             )
+        if self.ai_split_confidence_threshold < self.ai_high_confidence_threshold:
+            raise ValueError("AI split threshold must not be lower than high threshold")
         if self.default_quiet_hours_start == self.default_quiet_hours_end:
             raise ValueError("default quiet hours start and end must differ")
         if (

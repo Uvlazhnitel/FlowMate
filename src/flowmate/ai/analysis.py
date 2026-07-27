@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
@@ -10,9 +11,25 @@ from flowmate.ai.schemas import (
     DraftItemType,
     DraftParseResult,
     DraftReadiness,
+    ItemizationBasis,
+    ItemizationDecision,
     TemporalCandidate,
     TemporalStatus,
 )
+
+SINGLE_ITEM_DIRECTIVE = re.compile(
+    r"\b(?:одна\s+задача|одним\s+пунктом|не\s+разделяй)\b",
+    re.IGNORECASE,
+)
+MULTIPLE_ITEMS_DIRECTIVE = re.compile(
+    r"\b(?:две\s+задачи|несколько\s+задач)\b",
+    re.IGNORECASE,
+)
+MULTIPLE_ITEM_BASES = {
+    ItemizationBasis.EXPLICIT_LIST,
+    ItemizationBasis.SEPARATE_SENTENCES,
+    ItemizationBasis.INDEPENDENT_OUTCOMES,
+}
 
 
 def normalize_text(value: str | None) -> str:
@@ -53,6 +70,50 @@ def unique_texts(*groups: list[str]) -> list[str]:
                 seen.add(key)
                 values.append(value)
     return values
+
+
+def explicit_itemization_decision(value: str) -> ItemizationDecision | None:
+    if SINGLE_ITEM_DIRECTIVE.search(value):
+        return ItemizationDecision.SINGLE
+    if MULTIPLE_ITEMS_DIRECTIVE.search(value):
+        return ItemizationDecision.MULTIPLE
+    return None
+
+
+def apply_itemization_policy(
+    result: DraftParseResult,
+    *,
+    source_text: str,
+    split_threshold: float,
+) -> DraftParseResult:
+    if result.itemization_decision is ItemizationDecision.SINGLE:
+        return result
+
+    explicit = explicit_itemization_decision(source_text)
+    keep_multiple = explicit is ItemizationDecision.MULTIPLE or (
+        explicit is not ItemizationDecision.SINGLE
+        and result.itemization_basis in MULTIPLE_ITEM_BASES
+        and result.itemization_confidence >= split_threshold
+    )
+    if keep_multiple:
+        return result
+
+    fallback = result.consolidated_item
+    if fallback is None:  # Protected by DraftParseResult validation.
+        raise ValueError("multiple itemization has no consolidated fallback")
+    return result.model_copy(
+        update={
+            "overall_intent": fallback.type,
+            "draft_items": [fallback],
+            "itemization_decision": ItemizationDecision.SINGLE,
+            "itemization_basis": (
+                ItemizationBasis.SINGLE_GOAL
+                if explicit is ItemizationDecision.SINGLE
+                else ItemizationBasis.UNCERTAIN
+            ),
+            "consolidated_item": None,
+        }
+    )
 
 
 def normalize_due_date(item: DraftItem, timezone: ZoneInfo) -> DraftItem:
@@ -228,6 +289,16 @@ def build_analysis_result(
         context=context,
         overall_intent=result.overall_intent,
         items=assessments,
+        itemization_decision=(
+            result.itemization_decision
+            if len(items) > 1
+            else ItemizationDecision.SINGLE
+        ),
+        itemization_basis=(
+            result.itemization_basis if len(items) > 1 else ItemizationBasis.SINGLE_GOAL
+        ),
+        itemization_confidence=result.itemization_confidence,
+        consolidated_item=result.consolidated_item if len(items) > 1 else None,
         ambiguities=result.ambiguities,
         confidence=result.confidence,
         workspace_candidate=result.workspace_candidate,
@@ -236,9 +307,21 @@ def build_analysis_result(
 
 
 def analysis_to_parse_result(analysis: DraftAnalysisResult) -> DraftParseResult:
+    items = [assessment.item for assessment in analysis.items]
+    is_multiple = len(items) > 1
     return DraftParseResult(
         overall_intent=analysis.overall_intent,
-        draft_items=[assessment.item for assessment in analysis.items],
+        draft_items=items,
+        itemization_decision=(
+            ItemizationDecision.MULTIPLE if is_multiple else ItemizationDecision.SINGLE
+        ),
+        itemization_basis=(
+            analysis.itemization_basis if is_multiple else ItemizationBasis.SINGLE_GOAL
+        ),
+        itemization_confidence=analysis.itemization_confidence,
+        consolidated_item=(
+            analysis.consolidated_item or items[0] if is_multiple else None
+        ),
         ambiguities=analysis.ambiguities,
         confidence=analysis.confidence,
         workspace_candidate=analysis.workspace_candidate,

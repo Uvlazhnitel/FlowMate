@@ -313,8 +313,11 @@ def build_review_prompt() -> str:
 Create a concise structured meeting review from the supplied captures.
 Use only supplied capture_id, draft_item_id and agenda work_item_id values. Every
 proposal must reference its source capture. Preserve unresolved uncertainty and
-never claim to create, update, complete or send records. Split independent next
-actions. Amounts, descriptions, topics, people, dates, and times are optional
+never claim to create, update, complete or send records. Preserve the validated
+capture draft-item boundaries: one source draft item may produce at most one
+proposal and must never be split into separate verb-level proposals. Captures
+without parsed draft items may produce at most one conservative proposal. Amounts,
+descriptions, topics, people, dates, and times are optional
 unless the capture explicitly makes them essential. Do not turn absent optional
 details into clarification questions. Decisions may reference related proposal
 numbers. Return only the requested schema; do not include technical logs or raw
@@ -380,6 +383,7 @@ async def _store_review_result(
         delete(MeetingReviewItem).where(MeetingReviewItem.review_id == review.id)
     )
     seen_draft_items: set[UUID] = set()
+    synthetic_captures: set[UUID] = set()
     for position, proposal in enumerate(result.proposals, start=1):
         capture = captures.get(proposal.source_capture_id)
         if capture is None:
@@ -407,6 +411,15 @@ async def _store_review_result(
         if proposal.source_draft_item_id is not None and record is None:
             raise MeetingReviewError("review references an unknown draft item")
         if record is None:
+            if capture.items:
+                raise MeetingReviewError(
+                    "review proposal must reference an existing draft item"
+                )
+            if capture.id in synthetic_captures:
+                raise MeetingReviewError(
+                    "capture without draft items has multiple proposals"
+                )
+            synthetic_captures.add(capture.id)
             next_position = (
                 max((value.position for value in capture.items), default=0) + 1
             )

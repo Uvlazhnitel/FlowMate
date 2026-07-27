@@ -10,6 +10,8 @@ from flowmate.ai.schemas import (
     DraftItem,
     DraftItemType,
     DraftParseResult,
+    ItemizationBasis,
+    ItemizationDecision,
     ManagementAction,
     ManagementIntent,
     SearchIntent,
@@ -195,8 +197,40 @@ def test_rejects_self_or_out_of_range_dependency(target: int) -> None:
         DraftParseResult(
             overall_intent=DraftItemType.TASK,
             draft_items=items,
+            itemization_decision=ItemizationDecision.MULTIPLE,
+            itemization_basis=ItemizationBasis.INDEPENDENT_OUTCOMES,
+            itemization_confidence=0.95,
+            consolidated_item=make_draft_item(title="Combined item"),
             ambiguities=[],
             confidence=0.9,
+        )
+
+
+def test_itemization_metadata_must_match_returned_items() -> None:
+    with pytest.raises(ValidationError, match="single itemization"):
+        DraftParseResult.model_validate(
+            result_payload(
+                draft_items=[
+                    item_payload(title="First"),
+                    item_payload(title="Second"),
+                ],
+                itemization_decision=ItemizationDecision.SINGLE,
+                itemization_basis=ItemizationBasis.SINGLE_GOAL,
+                consolidated_item=None,
+            )
+        )
+
+    with pytest.raises(ValidationError, match="consolidated fallback"):
+        DraftParseResult.model_validate(
+            result_payload(
+                draft_items=[
+                    item_payload(title="First"),
+                    item_payload(title="Second"),
+                ],
+                itemization_decision=ItemizationDecision.MULTIPLE,
+                itemization_basis=ItemizationBasis.INDEPENDENT_OUTCOMES,
+                consolidated_item=None,
+            )
         )
 
 

@@ -1,5 +1,8 @@
 from flowmate.ai.schemas import DraftInputContext, DraftItemType, DraftParseResult
 
+SINGLE_GOAL_EXAMPLE = "Подготовить отчёт и отправить его клиенту"  # noqa: RUF001
+INDEPENDENT_OUTCOMES_EXAMPLE = "Купить молоко и забрать посылку"
+
 
 def build_reference_context(context: DraftInputContext) -> str:
     offset = context.current_datetime.strftime("%z")
@@ -39,15 +42,29 @@ Supported item types: {item_types}.
 - agenda_item: a subject to discuss at a future meeting.
 - unknown: content that cannot be classified reliably.
 
-Split one message into every independent item it contains. Extract Russian and
-English names, roles, topic candidates, supporting notes, and dependencies.
+An item is an independently completable outcome, not every verb. Prefer one
+item when actions are steps toward the same result, operate on the same
+deliverable, or one action prepares, sends, checks, approves, or completes the
+other. For example, "{SINGLE_GOAL_EXAMPLE}" is one task.
+Split only explicit lists, separate imperative sentences with separate results,
+or genuinely independent outcomes. For example,
+"{INDEPENDENT_OUTCOMES_EXAMPLE}" is two tasks. When uncertain, return one item.
+
+Set itemization_decision, itemization_basis, and itemization_confidence for this
+choice. A multiple result must also include consolidated_item containing a safe
+single-item interpretation of the complete message. A single result must set
+consolidated_item=null. Prefixes "одна задача", "одним пунктом", and "не
+разделяй" force one item. Prefixes "две задачи" and "несколько задач" request
+multiple items; do not include these control words in titles.
+
+Extract Russian and English names, roles, topic candidates, supporting notes,
+and dependencies.
 Represent "сначала"/"first" and "после этого"/"after that" with before/after
 dependencies and a 1-based target item number. Represent "если"/"if" as a
 conditional dependency with the original condition. Use blocked_by when work
 cannot proceed until another item is completed, and waiting_for when it depends
 on receiving the target item's result. Both require a 1-based target item
-number. Do not merge independent actions merely because they occur in one
-sentence.
+number.
 
 Keep each temporal expression's exact original phrase. Resolve relative and
 absolute dates against the reference context below. A normalized temporal value
@@ -92,6 +109,8 @@ changes supported by the answer. Preserve unaffected items and their order.
 Return the complete updated draft, not a patch. Reassess confidence,
 missing_fields, ambiguities, temporal candidates, and dependencies. The answer
 may correct a person, date, item type, or request that incomplete data be kept.
+Preserve the current item count and itemization metadata unless the answer
+explicitly asks to split or merge items.
 Do not introduce missing optional amounts, descriptions, topics, people, dates,
 or times merely because the user did not provide them.
 Do not create records or execute tools.
@@ -134,7 +153,16 @@ search only open records. Set include_all_statuses=true only when the user
 explicitly asks for everything; otherwise include closed states only when they
 are named. Exactly one payload must match the selected mode.
 
-For new_draft, split independent items and preserve exact temporal phrases.
+For new_draft, treat an item as an independently completable outcome rather than
+every verb. Keep preparation, sending, checking, approval, and completion steps
+for one deliverable together. Split only explicit lists, separate sentences
+with separate results, or genuinely independent outcomes. When uncertain,
+return one item. "{SINGLE_GOAL_EXAMPLE}" is one task;
+"{INDEPENDENT_OUTCOMES_EXAMPLE}" is two. Return itemization decision, basis,
+confidence, and a consolidated fallback for every multiple result. Respect
+"одна задача"/"одним пунктом"/"не разделяй" and
+"две задачи"/"несколько задач" prefixes.
+Preserve exact temporal phrases.
 Date-only due values use 23:59:59. Date-only reminder values remain reminder
 candidates with time_was_explicit=false. Never invent people, topics,
 dates, database results, or completed actions. Optional amounts, descriptions,

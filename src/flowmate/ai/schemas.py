@@ -50,6 +50,19 @@ class DraftReadiness(StrEnum):
     UNRESOLVED = "unresolved"
 
 
+class ItemizationDecision(StrEnum):
+    SINGLE = "single"
+    MULTIPLE = "multiple"
+
+
+class ItemizationBasis(StrEnum):
+    SINGLE_GOAL = "single_goal"
+    EXPLICIT_LIST = "explicit_list"
+    SEPARATE_SENTENCES = "separate_sentences"
+    INDEPENDENT_OUTCOMES = "independent_outcomes"
+    UNCERTAIN = "uncertain"
+
+
 class ManagementAction(StrEnum):
     COMPLETE = "complete"
     CANCEL = "cancel"
@@ -202,6 +215,10 @@ class DraftItem(StrictDraftModel):
 class DraftParseResult(StrictDraftModel):
     overall_intent: DraftItemType
     draft_items: list[DraftItem] = Field(min_length=1)
+    itemization_decision: ItemizationDecision
+    itemization_basis: ItemizationBasis
+    itemization_confidence: float = Field(ge=0.0, le=1.0)
+    consolidated_item: DraftItem | None
     ambiguities: list[NonEmptyText]
     confidence: float = Field(ge=0.0, le=1.0)
     workspace_candidate: Literal["personal", "work"] | None = None
@@ -212,6 +229,13 @@ class DraftParseResult(StrictDraftModel):
         item_count = len(self.draft_items)
         if item_count == 0:
             raise ValueError("at least one draft item is required")
+        if self.itemization_decision is ItemizationDecision.SINGLE:
+            if item_count != 1 or self.consolidated_item is not None:
+                raise ValueError("single itemization requires exactly one item")
+        elif item_count < 2 or self.consolidated_item is None:
+            raise ValueError(
+                "multiple itemization requires items and a consolidated fallback"
+            )
         for item_number, item in enumerate(self.draft_items, start=1):
             for dependency in item.dependencies:
                 target = dependency.target_item_number
@@ -297,6 +321,10 @@ class DraftAnalysisResult(StrictDraftModel):
     context: DraftInputContext
     overall_intent: DraftItemType
     items: list[DraftItemAssessment] = Field(min_length=1)
+    itemization_decision: ItemizationDecision = ItemizationDecision.SINGLE
+    itemization_basis: ItemizationBasis = ItemizationBasis.SINGLE_GOAL
+    itemization_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    consolidated_item: DraftItem | None = None
     ambiguities: list[NonEmptyText]
     confidence: float = Field(ge=0.0, le=1.0)
     workspace_candidate: Literal["personal", "work"] | None = None

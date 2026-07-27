@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
-from flowmate.ai.analysis import build_analysis_result
+from flowmate.ai.analysis import apply_itemization_policy, build_analysis_result
 from flowmate.ai.prompt import build_system_prompt, build_text_routing_prompt
 from flowmate.ai.prompt_versions import PROMPT_VERSIONS
 from flowmate.ai.schemas import DraftInputContext, DraftParseResult, DraftSource
@@ -55,6 +55,11 @@ def run_evaluation() -> tuple[int, int]:
             continue
         parsed = DraftParseResult.model_validate_json(
             json.dumps(case["recorded_output"], ensure_ascii=False)
+        )
+        parsed = apply_itemization_policy(
+            parsed,
+            source_text=case["input"],
+            split_threshold=0.90,
         )
         actual_types = [item.type.value for item in parsed.draft_items]
         if actual_types != case["expected_types"]:
@@ -115,6 +120,12 @@ def run_evaluation() -> tuple[int, int]:
         or "optional" not in routing_prompt.casefold()
     ):
         failures.append("optional-field policy missing from prompt")
+    if (
+        "Подготовить отчёт" not in draft_prompt
+        or "consolidated_item" not in draft_prompt
+        or "independently completable outcome" not in routing_prompt
+    ):
+        failures.append("conservative itemization policy missing from prompt")
     if len(set(PROMPT_VERSIONS.values())) != len(PROMPT_VERSIONS):
         failures.append("prompt versions are not independently versioned")
     if failures:

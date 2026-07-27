@@ -114,6 +114,7 @@ async def run_bot(settings: Settings | None = None) -> None:
                 clarification_confidence_threshold=(
                     app_settings.ai_clarification_confidence_threshold
                 ),
+                split_confidence_threshold=(app_settings.ai_split_confidence_threshold),
             )
             if ai_provider is not None
             else None

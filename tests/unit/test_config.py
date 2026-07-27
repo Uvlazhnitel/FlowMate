@@ -48,6 +48,7 @@ def test_loads_development_defaults_without_environment() -> None:
     assert settings.app_active_workspace == "personal"
     assert settings.ai_high_confidence_threshold == 0.8
     assert settings.ai_clarification_confidence_threshold == 0.5
+    assert settings.ai_split_confidence_threshold == 0.9
     assert settings.draft_ttl_hours == 24
     assert settings.scheduler_interval_seconds == 30
     assert settings.reminder_batch_size == 50
@@ -179,6 +180,7 @@ def test_parses_ai_configuration() -> None:
         app_active_workspace=" work ",
         ai_high_confidence_threshold=0.85,
         ai_clarification_confidence_threshold=0.6,
+        ai_split_confidence_threshold=0.95,
     )
 
     assert settings.ai_provider == "openai"
@@ -188,6 +190,7 @@ def test_parses_ai_configuration() -> None:
     assert settings.app_active_workspace == "work"
     assert settings.ai_high_confidence_threshold == 0.85
     assert settings.ai_clarification_confidence_threshold == 0.6
+    assert settings.ai_split_confidence_threshold == 0.95
 
 
 def test_empty_ai_configuration_is_disabled() -> None:
@@ -210,6 +213,7 @@ def test_empty_ai_configuration_is_disabled() -> None:
         ("app_active_workspace", " "),
         ("ai_high_confidence_threshold", 1.01),
         ("ai_clarification_confidence_threshold", -0.01),
+        ("ai_split_confidence_threshold", 1.01),
         ("draft_ttl_hours", 0),
         ("draft_ttl_hours", 721),
         ("scheduler_interval_seconds", 0),
@@ -232,6 +236,13 @@ def test_rejects_overlapping_confidence_thresholds() -> None:
             _env_file=None,
             ai_high_confidence_threshold=0.5,
             ai_clarification_confidence_threshold=0.5,
+        )
+
+    with pytest.raises(ValidationError, match="split threshold"):
+        Settings(
+            _env_file=None,
+            ai_high_confidence_threshold=0.8,
+            ai_split_confidence_threshold=0.79,
         )
 
 

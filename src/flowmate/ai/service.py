@@ -4,7 +4,11 @@ from collections.abc import Callable
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
-from flowmate.ai.analysis import analysis_to_parse_result, build_analysis_result
+from flowmate.ai.analysis import (
+    analysis_to_parse_result,
+    apply_itemization_policy,
+    build_analysis_result,
+)
 from flowmate.ai.errors import AIInvalidResponseError, AITimeoutError
 from flowmate.ai.prompt import (
     build_refinement_prompt,
@@ -211,6 +215,7 @@ class DraftParsingService:
         timeout_seconds: int,
         high_confidence_threshold: float,
         clarification_confidence_threshold: float,
+        split_confidence_threshold: float = 0.90,
         clock: Clock = current_time,
     ) -> None:
         self._provider = provider
@@ -219,6 +224,7 @@ class DraftParsingService:
         self._timeout_seconds = timeout_seconds
         self._high_confidence_threshold = high_confidence_threshold
         self._clarification_confidence_threshold = clarification_confidence_threshold
+        self._split_confidence_threshold = split_confidence_threshold
         self._clock = clock
 
     async def parse(
@@ -314,8 +320,13 @@ class DraftParsingService:
             return parsed.search
         if parsed.draft is None:
             raise AIInvalidResponseError("draft payload is missing")
-        return build_analysis_result(
+        draft = apply_itemization_policy(
             parsed.draft,
+            source_text=normalized,
+            split_threshold=self._split_confidence_threshold,
+        )
+        return build_analysis_result(
+            draft,
             context=context,
             high_threshold=self._high_confidence_threshold,
             clarification_threshold=self._clarification_confidence_threshold,
@@ -371,6 +382,11 @@ class DraftParsingService:
 
         if not isinstance(parsed, DraftParseResult):
             raise AIInvalidResponseError("AI provider returned an invalid draft")
+        parsed = apply_itemization_policy(
+            parsed,
+            source_text=user_text,
+            split_threshold=self._split_confidence_threshold,
+        )
         return build_analysis_result(
             parsed,
             context=context,

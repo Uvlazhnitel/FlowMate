@@ -358,6 +358,7 @@ AI_MODEL=replace-with-a-structured-outputs-model
 AI_TIMEOUT_SECONDS=60
 AI_HIGH_CONFIDENCE_THRESHOLD=0.80
 AI_CLARIFICATION_CONFIDENCE_THRESHOLD=0.50
+AI_SPLIT_CONFIDENCE_THRESHOLD=0.90
 DRAFT_TTL_HOURS=24
 ```
 
@@ -377,6 +378,15 @@ only. Context includes the current
 local time, IANA timezone, active workspace, Telegram channel, and source. One
 new-draft message may produce multiple validated items with people, roles,
 topics, dates, supporting notes, and dependencies.
+
+Itemization is deliberately conservative. Actions that serve one result stay
+in one item, so `Подготовить отчёт и отправить его клиенту` is one task.
+Independent outcomes such as `Купить молоко и забрать посылку` may be split only
+when the provider reports at least the configured split confidence. Otherwise
+the backend uses the provider's validated single-item fallback. The phrases
+`одна задача`, `одним пунктом`, and `не разделяй` force one item; `две задачи`
+and `несколько задач` explicitly request multiple items. The same policy is
+used for text, voice, Meeting captures, and Meeting review source boundaries.
 
 Every temporal candidate retains its original phrase. Resolved values are
 timezone-aware ISO datetimes; date-only due dates use `23:59:59` in the user's

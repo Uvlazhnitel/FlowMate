@@ -26,6 +26,10 @@
           "confidence": 0.96
         }
       ],
+      "itemization_decision": "single",
+      "itemization_basis": "single_goal",
+      "itemization_confidence": 0.98,
+      "consolidated_item": null,
       "ambiguities": [],
       "confidence": 0.96
     },
@@ -68,6 +72,23 @@
           "confidence": 0.9
         }
       ],
+      "itemization_decision": "multiple",
+      "itemization_basis": "independent_outcomes",
+      "itemization_confidence": 0.96,
+      "consolidated_item": {
+        "type": "task",
+        "title": "Проверить план Ани и получение бюджета от Бориса",
+        "description": null,
+        "person_candidates": ["Аня", "Борис"],
+        "topic_candidates": [],
+        "due_date_candidate": null,
+        "reminder_candidate": null,
+        "notes": [],
+        "missing_fields": [],
+        "ambiguities": [],
+        "dependencies": [],
+        "confidence": 0.81
+      },
       "ambiguities": [],
       "confidence": 0.81
     },
@@ -102,6 +123,10 @@
           "confidence": 0.7
         }
       ],
+      "itemization_decision": "single",
+      "itemization_basis": "single_goal",
+      "itemization_confidence": 0.99,
+      "consolidated_item": null,
       "ambiguities": [],
       "confidence": 0.7
     },
@@ -130,6 +155,10 @@
           "confidence": 0.78
         }
       ],
+      "itemization_decision": "single",
+      "itemization_basis": "single_goal",
+      "itemization_confidence": 0.99,
+      "consolidated_item": null,
       "ambiguities": [],
       "confidence": 0.78
     },
@@ -158,6 +187,10 @@
           "confidence": 0.92
         }
       ],
+      "itemization_decision": "single",
+      "itemization_basis": "single_goal",
+      "itemization_confidence": 0.98,
+      "consolidated_item": null,
       "ambiguities": ["Сумма не указана"],
       "confidence": 0.92
     },
@@ -165,6 +198,156 @@
     "expected_due": null,
     "expected_reminder": null,
     "expected_readiness": ["ready"]
+  },
+  {
+    "id": "single_goal_multiple_steps",
+    "input": "Подготовить отчёт и отправить его клиенту",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Подготовить и отправить отчёт клиенту",
+          "description": null,
+          "person_candidates": [],
+          "topic_candidates": [],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.96
+        }
+      ],
+      "itemization_decision": "single",
+      "itemization_basis": "single_goal",
+      "itemization_confidence": 0.98,
+      "consolidated_item": null,
+      "ambiguities": [],
+      "confidence": 0.96
+    },
+    "expected_types": ["task"],
+    "expected_due": null,
+    "expected_reminder": null
+  },
+  {
+    "id": "independent_outcomes_one_sentence",
+    "input": "Купить молоко и забрать посылку",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Купить молоко",
+          "description": null,
+          "person_candidates": [],
+          "topic_candidates": [],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.97
+        },
+        {
+          "type": "task",
+          "title": "Забрать посылку",
+          "description": null,
+          "person_candidates": [],
+          "topic_candidates": [],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.97
+        }
+      ],
+      "itemization_decision": "multiple",
+      "itemization_basis": "independent_outcomes",
+      "itemization_confidence": 0.96,
+      "consolidated_item": {
+        "type": "task",
+        "title": "Купить молоко и забрать посылку",
+        "description": null,
+        "person_candidates": [],
+        "topic_candidates": [],
+        "due_date_candidate": null,
+        "reminder_candidate": null,
+        "notes": [],
+        "missing_fields": [],
+        "ambiguities": [],
+        "dependencies": [],
+        "confidence": 0.96
+      },
+      "ambiguities": [],
+      "confidence": 0.97
+    },
+    "expected_types": ["task", "task"],
+    "expected_due": null,
+    "expected_reminder": null
+  },
+  {
+    "id": "uncertain_split_collapses",
+    "input": "Согласовать документ и отправить клиенту",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Согласовать документ",
+          "description": null,
+          "person_candidates": [],
+          "topic_candidates": [],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.91
+        },
+        {
+          "type": "task",
+          "title": "Отправить документ клиенту",
+          "description": null,
+          "person_candidates": [],
+          "topic_candidates": [],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.91
+        }
+      ],
+      "itemization_decision": "multiple",
+      "itemization_basis": "uncertain",
+      "itemization_confidence": 0.72,
+      "consolidated_item": {
+        "type": "task",
+        "title": "Согласовать документ и отправить его клиенту",
+        "description": null,
+        "person_candidates": [],
+        "topic_candidates": [],
+        "due_date_candidate": null,
+        "reminder_candidate": null,
+        "notes": [],
+        "missing_fields": [],
+        "ambiguities": [],
+        "dependencies": [],
+        "confidence": 0.91
+      },
+      "ambiguities": [],
+      "confidence": 0.91
+    },
+    "expected_types": ["task"],
+    "expected_due": null,
+    "expected_reminder": null
   },
   {
     "kind": "exact_date",
