@@ -343,7 +343,7 @@ function SettingsContent({
             />
           </label>
           <label>
-            Snooze по умолчанию, минут
+            Отложить по умолчанию, минут
             <input
               type="number"
               min="1"

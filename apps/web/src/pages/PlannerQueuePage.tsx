@@ -97,7 +97,7 @@ function PlannerCard({
         )}
       </div>
       {mutation.isError && (
-        <p className="inline-error">Не удалось изменить Planner status.</p>
+        <p className="inline-error">Не удалось изменить статус Planner.</p>
       )}
     </article>
   );
@@ -123,24 +123,24 @@ export function PlannerQueuePage({
       queryClient.invalidateQueries({ queryKey: operationsKeys.all }),
     ]);
   };
-  if (query.isPending) return <LoadingState label="Загружаем Planner Queue" />;
+  if (query.isPending) return <LoadingState label="Загружаем очередь Planner" />;
   if (query.isError)
     return (
       <ErrorState
-        title="Не удалось загрузить Planner Queue"
+        title="Не удалось загрузить очередь Planner"
         onRetry={() => void query.refetch()}
       />
     );
   return (
     <OperationalLayout
       eyebrow="Ручная передача"
-      title="Planner Queue"
+      title="Очередь Planner"
       description="Контроль переноса без фоновой интеграции с Microsoft Planner."
       controls={
         <div className="filter-row">
           <input
             className="search-field"
-            aria-label="Поиск Planner Queue"
+            aria-label="Поиск по очереди Planner"
             placeholder="Найти запись"
             value={q}
             onChange={(event) =>
@@ -151,7 +151,7 @@ export function PlannerQueuePage({
             }
           />
           <select
-            aria-label="Planner status"
+            aria-label="Статус Planner"
             value={status}
             onChange={(event) =>
               setParams({ status: event.target.value, ...(q ? { q } : {}) })

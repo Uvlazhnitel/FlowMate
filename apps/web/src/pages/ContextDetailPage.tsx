@@ -25,7 +25,7 @@ const topicSections = [
   ["history", "История"],
 ] as const;
 const personSections = [
-  ["follow_ups", "Follow-up"],
+  ["follow_ups", "Фоллоу-апы"],
   ["waiting", "Ожидания"],
   ["questions", "Вопросы"],
   ["topics", "Темы"],

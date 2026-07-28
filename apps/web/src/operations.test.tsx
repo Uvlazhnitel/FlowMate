@@ -156,7 +156,7 @@ describe("operational screens", () => {
       .find((navigation) => navigation.classList.contains("mobile-nav"));
     expect(mobileNavigation).toBeDefined();
     const mobile = within(mobileNavigation!);
-    for (const label of ["Обзор", "Сегодня", "Повестка", "Темы", "Люди"]) {
+    for (const label of ["Сегодня", "Входящие", "Панель", "Повестка", "Люди"]) {
       expect(mobile.getByRole("link", { name: label })).toBeVisible();
     }
     expect(mobile.getByText("Ещё")).toBeVisible();

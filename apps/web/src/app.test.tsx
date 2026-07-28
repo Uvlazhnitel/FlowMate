@@ -95,7 +95,7 @@ describe("protected application", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderApplication("/dashboard");
-    await screen.findByRole("heading", { name: "Обзор" });
+    await screen.findByRole("heading", { name: "Панель" });
     const switchers = screen.getAllByLabelText("Рабочее пространство");
     expect(switchers).toHaveLength(2);
     for (const switcher of switchers) {
@@ -148,14 +148,14 @@ describe("protected application", () => {
   });
 
   it.each([
-    ["/dashboard", "Обзор"],
+    ["/dashboard", "Панель"],
     ["/today", "Сегодня"],
     ["/topics", "Темы"],
     ["/people", "Люди"],
     ["/agenda", "Повестка"],
-    ["/inbox", "Inbox"],
-    ["/planner-queue", "Planner Queue"],
-    ["/timeline", "Timeline"],
+    ["/inbox", "Входящие"],
+    ["/planner-queue", "Очередь Planner"],
+    ["/timeline", "Лента"],
     ["/settings", "Настройки"],
   ])("renders protected route %s", async (path, title) => {
     stubEmptyApplication();
@@ -172,7 +172,10 @@ describe("protected application", () => {
     renderApplication("/dashboard");
 
     expect(
-      await screen.findByRole("heading", { name: "Всё спокойно", level: 2 }),
+      await screen.findByRole("heading", {
+        name: "Главное на сегодня разобрано",
+        level: 2,
+      }),
     ).toBeVisible();
   });
 
@@ -208,7 +211,7 @@ describe("login and logout", () => {
     await user.type(input, "123456");
     await user.click(screen.getByRole("button", { name: "Продолжить" }));
 
-    expect(await screen.findByRole("heading", { name: "Обзор", level: 1 })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Панель", level: 1 })).toBeVisible();
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/api/v1/auth/session",

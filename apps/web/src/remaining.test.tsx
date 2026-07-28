@@ -95,7 +95,7 @@ afterEach(() => {
 });
 
 describe("remaining operational screens", () => {
-  it("keeps a low-confidence draft explicit and preserves Inbox URL filters", async () => {
+  it("keeps a low-confidence draft explicit and preserves inbox URL filters", async () => {
     document.cookie = "flowmate_csrf=test-csrf; path=/";
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const draft = {
@@ -212,7 +212,7 @@ describe("remaining operational screens", () => {
     });
   });
 
-  it("applies Timeline filters and exposes remaining screens in mobile overflow", async () => {
+  it("applies timeline filters and exposes remaining screens in mobile overflow", async () => {
     const event = {
       id: "7a525364-5948-41f8-8976-4d0324115ea2",
       entity_kind: "work_item",
@@ -263,7 +263,7 @@ describe("remaining operational screens", () => {
       .find((navigation) => navigation.classList.contains("mobile-nav"));
     expect(mobileNavigation).toBeDefined();
     await user.click(within(mobileNavigation!).getByText("Ещё"));
-    for (const label of ["Входящие", "Планирование", "Лента", "Настройки"]) {
+    for (const label of ["Лента", "Темы", "Очередь Planner", "Настройки"]) {
       expect(within(mobileNavigation!).getByRole("link", { name: label })).toBeVisible();
     }
   });
@@ -350,7 +350,7 @@ describe("remaining operational screens", () => {
     );
 
     await user.type(screen.getByLabelText("Название темы Migration"), " updated");
-    await user.click(screen.getAllByRole("link", { name: "Обзор" })[0]!);
+    await user.click(screen.getAllByRole("link", { name: "Панель" })[0]!);
     expect(confirm).toHaveBeenCalledWith(
       "Есть несохранённые изменения. Покинуть страницу?",
     );

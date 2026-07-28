@@ -26,22 +26,22 @@ interface NavigationItem {
 }
 
 const navigationItems: NavigationItem[] = [
-  { to: "/dashboard", label: "Обзор", icon: LayoutDashboard },
   { to: "/today", label: "Сегодня", icon: CalendarDays },
   { to: "/inbox", label: "Входящие", icon: Inbox },
-  { to: "/planner-queue", label: "Планирование", icon: ListChecks },
+  { to: "/dashboard", label: "Панель", icon: LayoutDashboard },
   { to: "/agenda", label: "Повестка", icon: CircleHelp },
   { to: "/timeline", label: "Лента", icon: Clock3 },
   { to: "/topics", label: "Темы", icon: Tags },
   { to: "/people", label: "Люди", icon: Users },
+  { to: "/planner-queue", label: "Очередь Planner", icon: ListChecks },
   { to: "/settings", label: "Настройки", icon: Settings },
 ];
 
 const primaryMobilePaths = new Set([
-  "/dashboard",
   "/today",
+  "/inbox",
+  "/dashboard",
   "/agenda",
-  "/topics",
   "/people",
 ]);
 

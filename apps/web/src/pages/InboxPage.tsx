@@ -52,6 +52,15 @@ const itemTypes = [
   "agenda_item",
 ];
 const priorities = ["low", "normal", "high", "urgent"];
+const itemTypeLabels: Record<string, string> = {
+  task: "Задача",
+  follow_up: "Фоллоу-ап",
+  waiting: "Ожидание",
+  question: "Вопрос",
+  note: "Заметка",
+  decision: "Решение",
+  agenda_item: "Повестка",
+};
 
 function localParts(value: string | null, timezone: string) {
   if (!value) return { date: "", time: "09:00" };
@@ -128,7 +137,7 @@ function DraftItemEditor({
         <select value={type} onChange={(event) => setType(event.target.value)}>
           {itemTypes.map((value) => (
             <option value={value} key={value}>
-              {value}
+              {itemTypeLabels[value] ?? value}
             </option>
           ))}
         </select>
@@ -199,7 +208,7 @@ function DraftItemEditor({
       </label>
       {mutation.isError && <p className="inline-error">Не удалось сохранить изменения.</p>}
       <button className="button button--primary" disabled={mutation.isPending}>
-        <Save size={16} aria-hidden /> Сохранить item
+        <Save size={16} aria-hidden /> Сохранить запись
       </button>
     </form>
   );
@@ -264,7 +273,7 @@ function WorkItemEditor({
             .filter((value) => value !== "note")
             .map((value) => (
               <option value={value} key={value}>
-                {value}
+                {itemTypeLabels[value] ?? value}
               </option>
             ))}
         </select>
@@ -456,26 +465,29 @@ export function InboxPage({
   if (query.isPending) return <LoadingState label="Собираем входящие" />;
   if (query.isError)
     return (
-      <ErrorState title="Не удалось загрузить Inbox" onRetry={() => void query.refetch()} />
+      <ErrorState
+        title="Не удалось загрузить входящее"
+        onRetry={() => void query.refetch()}
+      />
     );
   const topics = options.data?.topics ?? [];
   const people = options.data?.people ?? [];
   return (
     <OperationalLayout
       eyebrow="Разобрать"
-      title="Inbox"
-      description="Неопределённые записи остаются здесь, пока вы явно не решите, что с ними делать."
+      title="Входящие"
+      description="Здесь мы разбираем всё новое: уточняем, превращаем в записи или оставляем заметкой."
       controls={
         <div className="filter-row">
           <select
-            aria-label="Тип Inbox"
+            aria-label="Тип входящего"
             value={kind}
             onChange={(event) =>
               setParams(event.target.value ? { kind: event.target.value } : {})
             }
           >
             <option value="">Все типы</option>
-            <option value="draft">AI drafts</option>
+            <option value="draft">Черновики AI</option>
             <option value="work_item">Записи</option>
             <option value="note">Заметки</option>
           </select>
@@ -513,7 +525,7 @@ export function InboxPage({
                   bulkMutation.mutate("cancel");
               }}
             >
-              Отменить выбранные
+              Отменить черновики
             </button>
           )}
           {commonKind === "note" && (
@@ -551,8 +563,8 @@ export function InboxPage({
       )}
       {!query.data.items.length ? (
         <EmptyState
-          title="Inbox разобран"
-          description="Неопределённых записей и неструктурированных заметок нет."
+          title="Входящее разобрано"
+          description="Нечего уточнять: все новые записи уже разобраны или отправлены дальше."
         />
       ) : (
         <div className="inbox-list">
@@ -589,7 +601,9 @@ export function InboxPage({
                   <>
                     <div className="inbox-card__heading">
                       <div>
-                        <span className="directory-kicker">AI draft · {entry.status}</span>
+                        <span className="directory-kicker">
+                          Черновик AI · {entry.status}
+                        </span>
                         <h2>{entry.items[0]?.title ?? "Черновик"}</h2>
                       </div>
                       <span>
@@ -642,7 +656,7 @@ export function InboxPage({
                           draftMutation.mutate({ draft: entry, action: "save_as_note" })
                         }
                       >
-                        <Save size={15} /> Оставить заметкой
+                        <Save size={15} /> Превратить в заметку
                       </button>
                       <button
                         className="card-action card-action--danger"
@@ -692,7 +706,7 @@ export function InboxPage({
                     />
                     <details className="edit-panel">
                       <summary>
-                        <FilePenLine size={16} /> Заполнить поля
+                        <FilePenLine size={16} /> Уточнить поля
                       </summary>
                       <WorkItemEditor
                         item={entry.item}

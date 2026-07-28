@@ -9,13 +9,13 @@ import { WorkItemCard } from "../components/WorkItemCard";
 import { formatRelative, type DateTimePreferences } from "../lib/dates";
 
 const summaryDefinitions = [
+  ["inbox", "Входящие", "/inbox"],
   ["overdue", "Просрочено", "/today?section=overdue"],
   ["due_today", "На сегодня", "/today?section=due_today"],
-  ["follow_ups", "Follow-up", "/today?section=follow_ups"],
-  ["waiting_overdue", "Ждём дольше срока", "/today?section=waiting"],
-  ["questions", "Открытые вопросы", "/today?section=questions"],
-  ["inbox", "Inbox", "/inbox"],
-  ["planner_queue", "Planner Queue", "/planner-queue"],
+  ["follow_ups", "Фоллоу-апы", "/today?section=follow_ups"],
+  ["waiting_overdue", "Ждём ответа", "/today?section=waiting"],
+  ["questions", "Вопросы", "/today?section=questions"],
+  ["planner_queue", "Очередь Planner", "/planner-queue"],
 ] as const;
 
 export function DashboardPage({
@@ -32,9 +32,9 @@ export function DashboardPage({
   const data = query.data;
   return (
     <OperationalLayout
-      eyebrow="Командный центр"
-      title="Обзор"
-      description="Рабочий день без слепых зон: сначала то, что действительно требует внимания."
+      eyebrow="Фокус дня"
+      title="Панель"
+      description="Сначала разобрать входящее, потом сделать главное на сегодня."
     >
       <div className="summary-grid">
         {summaryDefinitions.map(([key, label, to]) => (
@@ -51,7 +51,7 @@ export function DashboardPage({
       </div>
       <div className="dashboard-layout">
         <div className="dashboard-main">
-          <SectionHeading title="Следующие действия" count={data.recommended.length} />
+          <SectionHeading title="Главное сейчас" count={data.recommended.length} />
           {data.recommended.length ? (
             <div className="work-list">
               {data.recommended.map((item) => (
@@ -64,8 +64,8 @@ export function DashboardPage({
             </div>
           ) : (
             <EmptyState
-              title="Всё спокойно"
-              description="Срочных рекомендаций сейчас нет."
+              title="Главное на сегодня разобрано"
+              description="Срочных записей сейчас нет, можно вернуться к входящему или планированию."
             />
           )}
         </div>
@@ -83,11 +83,18 @@ export function DashboardPage({
                 </div>
               ))
             ) : (
-              <p className="muted-copy">Нет ближайших сроков.</p>
+              <p className="muted-copy">Жёстких сроков рядом нет.</p>
             )}
           </section>
           <section className="rail-panel">
-            <SectionHeading title="Последняя активность" />
+            <SectionHeading title="Вторичный контур" />
+            <div className="compact-row">
+              <ArrowUpRight size={16} aria-hidden />
+              <div>
+                <strong>Очередь Planner</strong>
+                <span>{data.summary.planner_queue} записей ждут ручной передачи</span>
+              </div>
+            </div>
             {data.activity.length ? (
               data.activity.map((event) => (
                 <div className="compact-row" key={event.id}>
@@ -99,7 +106,7 @@ export function DashboardPage({
                 </div>
               ))
             ) : (
-              <p className="muted-copy">История пока пуста.</p>
+              <p className="muted-copy">Свежих изменений пока нет.</p>
             )}
           </section>
         </aside>

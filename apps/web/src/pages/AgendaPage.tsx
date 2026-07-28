@@ -42,9 +42,9 @@ export function AgendaPage({
   }
   return (
     <OperationalLayout
-      eyebrow="Разговоры"
+      eyebrow="Следующий разговор"
       title="Повестка"
-      description="Вопросы и темы, которые важно не забыть в следующем разговоре."
+      description="Записи, которые стоит поднять при следующем разговоре с человеком или по теме."
       controls={
         <select
           aria-label="Группа повестки"
@@ -53,7 +53,7 @@ export function AgendaPage({
             setParams(event.target.value ? { group_kind: event.target.value } : {})
           }
         >
-          <option value="">Все группы</option>
+          <option value="">Все контексты</option>
           <option value="person">По людям</option>
           <option value="topic">По темам</option>
           <option value="unassigned">Без привязки</option>
@@ -63,7 +63,7 @@ export function AgendaPage({
       {!items.length ? (
         <EmptyState
           title="Повестка пуста"
-          description="Открытые вопросы и agenda items появятся здесь автоматически."
+          description="Когда появятся вопросы для обсуждения, они соберутся здесь автоматически."
         />
       ) : (
         <div className="agenda-groups">

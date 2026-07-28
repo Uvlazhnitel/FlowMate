@@ -14,7 +14,7 @@ import { formatDateTime, type DateTimePreferences } from "../lib/dates";
 
 const eventLabels: Record<string, string> = {
   created: "Создано",
-  converted_from_draft: "Создано из draft",
+  converted_from_draft: "Создано из черновика",
   completed: "Завершено",
   reopened: "Возвращено",
   cancelled: "Отменено",
@@ -24,8 +24,17 @@ const eventLabels: Record<string, string> = {
   topic_changed: "Изменена тема",
   person_changed: "Изменены люди",
   waiting_received: "Ожидание получено",
-  planner_status_changed: "Изменён Planner status",
+  planner_status_changed: "Изменён статус Planner",
   archived: "Архивировано",
+};
+
+const workItemTypeLabels: Record<string, string> = {
+  task: "Задача",
+  follow_up: "Фоллоу-ап",
+  waiting: "Ожидание",
+  question: "Вопрос",
+  decision: "Решение",
+  agenda_item: "Повестка",
 };
 
 const workItemTypes = [
@@ -68,23 +77,20 @@ export function TimelinePage({
   if (query.isPending) return <LoadingState label="Собираем хронологию" />;
   if (query.isError)
     return (
-      <ErrorState
-        title="Не удалось загрузить Timeline"
-        onRetry={() => void query.refetch()}
-      />
+      <ErrorState title="Не удалось загрузить ленту" onRetry={() => void query.refetch()} />
     );
   return (
     <OperationalLayout
-      eyebrow="История"
-      title="Timeline"
-      description="Безопасная хронология рабочих изменений без AI payloads и технических логов."
+      eyebrow="История работы"
+      title="Лента"
+      description="Только история записей: что создавалось, переносилось, завершалось и архивировалось."
       controls={
         <button className="button button--secondary" onClick={() => setParams({})}>
           Сбросить фильтры
         </button>
       }
     >
-      <div className="timeline-filters" aria-label="Фильтры Timeline">
+      <div className="timeline-filters" aria-label="Фильтры ленты">
         <label>
           С
           <input
@@ -124,7 +130,7 @@ export function TimelinePage({
             <option value="">Все</option>
             {workItemTypes.map((value) => (
               <option value={value} key={value}>
-                {value}
+                {workItemTypeLabels[value] ?? value}
               </option>
             ))}
           </select>
@@ -159,7 +165,10 @@ export function TimelinePage({
         </label>
       </div>
       {!query.data.items.length ? (
-        <EmptyState title="Событий не найдено" description="Измените период или фильтры." />
+        <EmptyState
+          title="История по фильтрам пуста"
+          description="Попробуйте другой период или уберите часть ограничений."
+        />
       ) : (
         <div className="timeline-list">
           {query.data.items.map((event) => (

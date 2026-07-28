@@ -14,9 +14,9 @@ import type { DateTimePreferences } from "../lib/dates";
 const sections = [
   ["overdue", "Просрочено"],
   ["due_today", "На сегодня"],
-  ["follow_ups", "Follow-up"],
-  ["waiting", "Ожидания"],
-  ["questions", "Открытые вопросы"],
+  ["follow_ups", "Фоллоу-апы"],
+  ["waiting", "Ждём ответа"],
+  ["questions", "Нужно прояснить"],
 ] as const;
 
 export function TodayPage({
@@ -33,9 +33,9 @@ export function TodayPage({
   );
   return (
     <OperationalLayout
-      eyebrow="Фокус"
+      eyebrow="Исполнение"
       title="Сегодня"
-      description="Один спокойный список для решений, сообщений и обещаний."
+      description="Главный экран на день: сделать срочное, ответить вовремя, не потерять важное."
       controls={
         <select
           aria-label="Раздел Сегодня"
@@ -44,7 +44,7 @@ export function TodayPage({
             setParams(event.target.value === "all" ? {} : { section: event.target.value })
           }
         >
-          <option value="all">Все группы</option>
+          <option value="all">Все приоритеты дня</option>
           {sections.map(([key, label]) => (
             <option key={key} value={key}>
               {label}
@@ -98,8 +98,8 @@ function TodaySection({
   if (!items.length && focused) {
     return (
       <EmptyState
-        title="В этой группе пусто"
-        description="Сейчас здесь нет записей, требующих внимания."
+        title="Здесь всё закрыто"
+        description="В этой группе сейчас нет ничего, что требовало бы действий сегодня."
       />
     );
   }
@@ -118,7 +118,7 @@ function TodaySection({
           ))}
         </div>
       ) : (
-        <p className="muted-copy">Нет записей.</p>
+        <p className="muted-copy">Здесь пока можно не отвлекаться.</p>
       )}
       {query.hasNextPage && (
         <LoadMoreButton

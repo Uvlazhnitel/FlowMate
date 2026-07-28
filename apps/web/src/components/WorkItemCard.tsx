@@ -21,7 +21,7 @@ import { formatDateTime, type DateTimePreferences } from "../lib/dates";
 
 const typeLabels: Record<string, string> = {
   task: "Задача",
-  follow_up: "Follow-up",
+  follow_up: "Фоллоу-ап",
   waiting: "Ожидание",
   question: "Вопрос",
   decision: "Решение",
@@ -181,7 +181,7 @@ export function WorkItemCard({
               })
             }
           >
-            Snooze
+            Отложить напоминание
           </button>
         )}
         {agenda && (
