@@ -49,13 +49,7 @@ def run_evaluation() -> tuple[int, int]:
                 continue
             failures.append(f"{case['id']}: invalid output accepted")
             continue
-        if kind == "meeting_context":
-            context = DraftInputContext.model_validate_json(
-                json.dumps(case["context"], ensure_ascii=False)
-            )
-            prompt = build_system_prompt(context)
-            if any(value not in prompt for value in case["expected_fragments"]):
-                failures.append(f"{case['id']}: meeting context")
+        if kind != "recorded_parse":
             continue
         parsed = DraftParseResult.model_validate_json(
             json.dumps(case["recorded_output"], ensure_ascii=False)

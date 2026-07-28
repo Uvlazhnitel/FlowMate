@@ -17,19 +17,6 @@ Input source: {context.source.value}"""
 
 def build_system_prompt(context: DraftInputContext) -> str:
     item_types = ", ".join(item_type.value for item_type in DraftItemType)
-    meeting_context = ""
-    if context.meeting is not None:
-        participants = ", ".join(context.meeting.participants) or "none"
-        topics = ", ".join(context.meeting.topics) or "none"
-        meeting_context = f"""
-Active meeting ID: {context.meeting.meeting_id}
-Active meeting type: {context.meeting.meeting_type}
-Known meeting participants: {participants}
-Linked meeting topics: {topics}
-Primary meeting topic: {context.meeting.primary_topic or "none"}
-Use this context only to resolve explicit or clearly implied references. Do not
-assign every participant or topic to every item.
-"""
     return f"""You convert a user's Telegram note into structured draft data.
 
 Supported item types: {item_types}.
@@ -97,7 +84,6 @@ normally mean personal. Leave the candidate empty when the distinction is
 unclear.
 
 {build_reference_context(context)}
-{meeting_context}
 """
 
 

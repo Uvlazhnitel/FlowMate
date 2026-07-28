@@ -2,7 +2,6 @@ from typing import Protocol, runtime_checkable
 
 from flowmate.ai.schemas import (
     DraftParseResult,
-    MeetingReviewParseResult,
     SnoozeTimeParseResult,
     TelegramTextParseResult,
 )
@@ -16,15 +15,6 @@ class AIProvider(Protocol):
 
     async def close(self) -> None:
         """Release provider resources."""
-        ...
-
-
-@runtime_checkable
-class MeetingReviewProvider(Protocol):
-    async def parse_meeting_review(
-        self, *, system_prompt: str, user_text: str
-    ) -> MeetingReviewParseResult:
-        """Produce a structured review without writing domain records."""
         ...
 
 

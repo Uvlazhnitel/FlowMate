@@ -156,7 +156,6 @@ describe("protected application", () => {
     ["/inbox", "Inbox"],
     ["/planner-queue", "Planner Queue"],
     ["/timeline", "Timeline"],
-    ["/meetings", "Встречи"],
     ["/settings", "Настройки"],
   ])("renders protected route %s", async (path, title) => {
     stubEmptyApplication();

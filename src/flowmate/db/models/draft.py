@@ -54,37 +54,9 @@ class DraftSession(WorkspaceScoped, Base):
             "user_id",
             unique=True,
             postgresql_where=text(
-                "meeting_id IS NULL AND "
                 "status IN ('parsing', 'needs_clarification', 'ready')"
             ),
         ),
-        UniqueConstraint(
-            "meeting_id",
-            "capture_sequence",
-            name="uq_draft_sessions_meeting_capture_sequence",
-        ),
-        CheckConstraint(
-            "capture_sequence IS NULL OR capture_sequence > 0",
-            name="ck_draft_sessions_capture_sequence_positive",
-        ),
-        CheckConstraint(
-            "capture_review_status IS NULL OR capture_review_status IN "
-            "('pending', 'edited', 'removed')",
-            name="ck_draft_sessions_capture_review_status",
-        ),
-        CheckConstraint(
-            "overall_confidence IS NULL OR "
-            "(overall_confidence >= 0 AND overall_confidence <= 1)",
-            name="ck_draft_sessions_overall_confidence",
-        ),
-        CheckConstraint(
-            "(meeting_id IS NULL AND capture_sequence IS NULL AND "
-            "capture_review_status IS NULL) OR "
-            "(meeting_id IS NOT NULL AND capture_sequence IS NOT NULL AND "
-            "capture_review_status IS NOT NULL)",
-            name="ck_draft_sessions_capture_fields",
-        ),
-        Index("ix_draft_sessions_meeting_capture", "meeting_id", "capture_sequence"),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -101,15 +73,6 @@ class DraftSession(WorkspaceScoped, Base):
         nullable=False,
         unique=True,
     )
-    meeting_id: Mapped[UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("meetings.id", ondelete="CASCADE")
-    )
-    capture_sequence: Mapped[int | None] = mapped_column(Integer)
-    capture_review_status: Mapped[str | None] = mapped_column(String(16))
-    capture_context: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict, server_default="{}"
-    )
-    overall_confidence: Mapped[float | None] = mapped_column(Float)
     prompt_version: Mapped[str] = mapped_column(
         String(32), nullable=False, default="draft-v2", server_default="legacy-v1"
     )

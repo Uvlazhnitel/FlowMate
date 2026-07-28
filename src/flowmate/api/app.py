@@ -11,7 +11,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from flowmate.ai.errors import AIConfigurationError
 from flowmate.ai.factory import create_ai_provider
-from flowmate.ai.provider import AIProvider, MeetingReviewProvider
+from flowmate.ai.provider import AIProvider
 from flowmate.api.errors import register_exception_handlers
 from flowmate.api.middleware import RequestContextMiddleware
 from flowmate.api.routes import create_router
@@ -25,7 +25,6 @@ def create_app(
     settings: Settings | None = None,
     engine: AsyncEngine | None = None,
     login_code_sender: LoginCodeSender | None = None,
-    meeting_review_provider: MeetingReviewProvider | None = None,
 ) -> FastAPI:
     app_settings = (settings or get_settings()).require_api()
     configure_logging(
@@ -40,15 +39,12 @@ def create_app(
         login_bot: Bot | None = None
         owned_ai_provider: AIProvider | None = None
         app.state.login_code_sender = login_code_sender
-        app.state.meeting_review_provider = meeting_review_provider
-        if meeting_review_provider is None:
-            try:
-                owned_ai_provider = create_ai_provider(app_settings)
-            except AIConfigurationError:
-                logging.getLogger(__name__).warning(
-                    "meeting_review_provider_disabled category=incomplete_configuration"
-                )
-            app.state.meeting_review_provider = owned_ai_provider
+        try:
+            owned_ai_provider = create_ai_provider(app_settings)
+        except AIConfigurationError:
+            logging.getLogger(__name__).warning(
+                "ai_provider_disabled category=incomplete_configuration"
+            )
         if (
             login_code_sender is None
             and app_settings.pwa_telegram_user_id is not None

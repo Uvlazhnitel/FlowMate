@@ -366,11 +366,6 @@ async def test_all_pwa_routes_reject_unauthenticated_requests(
         "/api/v1/settings",
         "/api/v1/settings/topics",
         "/api/v1/settings/people",
-        "/api/v1/meetings/active",
-        "/api/v1/meetings",
-        f"/api/v1/meetings/{identifier}",
-        f"/api/v1/meetings/{identifier}/captures",
-        f"/api/v1/meetings/{identifier}/review",
     ]
     write_requests: list[tuple[str, str, dict[str, object] | None]] = [
         ("DELETE", "/api/v1/auth/session", None),
@@ -447,72 +442,6 @@ async def test_all_pwa_routes_reject_unauthenticated_requests(
             "PATCH",
             f"/api/v1/settings/people/{identifier}",
             {"display_name": "Protected", "aliases": [], "is_active": True},
-        ),
-        (
-            "POST",
-            "/api/v1/meetings",
-            {
-                "client_action_id": identifier,
-                "type": "team",
-                "participant_ids": [],
-                "topic_ids": [],
-            },
-        ),
-        (
-            "POST",
-            f"/api/v1/meetings/{identifier}/actions",
-            {
-                "action": "end",
-                "client_action_id": identifier,
-                "expected_revision": 0,
-            },
-        ),
-        (
-            "PATCH",
-            f"/api/v1/meetings/{identifier}/captures/{identifier}/items/{identifier}",
-            {
-                "expected_revision": 0,
-                "item_type": "task",
-                "title": "Protected",
-            },
-        ),
-        (
-            "POST",
-            f"/api/v1/meetings/{identifier}/captures/{identifier}/actions",
-            {
-                "action": "remove",
-                "client_action_id": identifier,
-                "expected_revision": 0,
-            },
-        ),
-        (
-            "POST",
-            f"/api/v1/meetings/{identifier}/review/actions",
-            {
-                "action": "confirm_ready",
-                "client_action_id": identifier,
-                "expected_revision": 0,
-            },
-        ),
-        (
-            "POST",
-            f"/api/v1/meetings/{identifier}/review/items/{identifier}/actions",
-            {"action": "exclude", "expected_revision": 0},
-        ),
-        (
-            "POST",
-            f"/api/v1/meetings/{identifier}/review/items/{identifier}/clarification",
-            {"answer": "Protected", "expected_revision": 0},
-        ),
-        (
-            "POST",
-            f"/api/v1/meetings/{identifier}/review/agenda/{identifier}",
-            {"outcome": "discussed"},
-        ),
-        (
-            "POST",
-            f"/api/v1/meetings/{identifier}/review/agenda",
-            {"title": "Protected"},
         ),
     ]
     sender = CapturingLoginCodeSender()

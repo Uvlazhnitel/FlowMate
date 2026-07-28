@@ -9,9 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowmate.db.models import (
     DraftItemRecord,
     DraftSession,
-    Meeting,
-    MeetingNote,
-    MeetingSetupSession,
     Note,
     PwaLoginCode,
     PwaSession,
@@ -63,7 +60,6 @@ async def run_database_cleanup(
     expired = await session.execute(
         update(DraftSession)
         .where(
-            DraftSession.meeting_id.is_(None),
             DraftSession.status.in_(("parsing", "needs_clarification", "ready")),
             DraftSession.expires_at <= current,
         )
@@ -78,22 +74,11 @@ async def run_database_cleanup(
         )
     )
 
-    terminal_note = or_(
-        exists(
-            select(WorkItem.id).where(
-                WorkItem.source_note_id == Note.id,
-                WorkItem.user_id == Note.user_id,
-            )
-        ),
-        exists(
-            select(MeetingNote.id)
-            .join(Meeting, Meeting.id == MeetingNote.meeting_id)
-            .where(
-                MeetingNote.note_id == Note.id,
-                MeetingNote.user_id == Note.user_id,
-                Meeting.status == "completed",
-            )
-        ),
+    terminal_note = exists(
+        select(WorkItem.id).where(
+            WorkItem.source_note_id == Note.id,
+            WorkItem.user_id == Note.user_id,
+        )
     )
     redacted = await session.execute(
         update(Note)
@@ -109,7 +94,6 @@ async def run_database_cleanup(
     )
 
     old_draft_ids = select(DraftSession.id).where(
-        DraftSession.meeting_id.is_(None),
         DraftSession.status.in_(("expired", "cancelled", "failed")),
         DraftSession.updated_at <= expired_cutoff,
     )
@@ -154,18 +138,12 @@ async def run_database_cleanup(
             WorkItemActionSession.expires_at <= expired_cutoff
         )
     )
-    setup_sessions = await session.execute(
-        delete(MeetingSetupSession).where(
-            MeetingSetupSession.expires_at <= expired_cutoff
-        )
-    )
     result = CleanupResult(
         expired_drafts=affected_rows(expired),
         redacted_transcripts=affected_rows(redacted),
         purged_draft_payloads=affected_rows(purged_items),
         deleted_auth_records=affected_rows(login_codes) + affected_rows(pwa_sessions),
-        deleted_action_sessions=affected_rows(action_sessions)
-        + affected_rows(setup_sessions),
+        deleted_action_sessions=affected_rows(action_sessions),
     )
     await record_audit_event(
         session,

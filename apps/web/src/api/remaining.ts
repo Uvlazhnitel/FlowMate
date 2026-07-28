@@ -1,7 +1,7 @@
 import { apiRequest } from "./client";
 import type { PageResponse, WorkItemCardData } from "./operations";
 
-export type InboxKind = "draft" | "work_item" | "note" | "meeting_review";
+export type InboxKind = "draft" | "work_item" | "note";
 export type PlannerStatus =
   | "not_required"
   | "needs_transfer"
@@ -60,20 +60,7 @@ export interface NoteInboxEntry {
   created_at: string;
 }
 
-export interface MeetingReviewInboxEntry {
-  id: string;
-  kind: "meeting_review";
-  reasons: string[];
-  meeting_id: string;
-  meeting_title: string;
-  review_id: string;
-  category: string;
-  title: string;
-  created_at: string;
-}
-
-export type InboxEntry =
-  DraftInboxEntry | WorkItemInboxEntry | NoteInboxEntry | MeetingReviewInboxEntry;
+export type InboxEntry = DraftInboxEntry | WorkItemInboxEntry | NoteInboxEntry;
 
 export interface PlannerEntry {
   item: WorkItemCardData;
@@ -83,7 +70,7 @@ export interface PlannerEntry {
 
 export interface TimelineEntry {
   id: string;
-  entity_kind: "work_item" | "meeting";
+  entity_kind: "work_item";
   entity_id: string;
   event_type: string;
   occurred_at: string;

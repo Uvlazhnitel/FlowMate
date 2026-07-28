@@ -8,9 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.db.models import (
     DraftSession,
-    Meeting,
-    MeetingReview,
-    MeetingSetupSession,
     User,
     WorkItemActionSession,
 )
@@ -35,22 +32,11 @@ async def workspace_switch_blocker(
 ) -> WorkspaceSwitchBlocker | None:
     checks = (
         (
-            "active_meeting",
-            "Сначала завершите или отмените активную встречу.",
-            select(
-                exists().where(
-                    Meeting.user_id == user_id,
-                    Meeting.status == "active",
-                )
-            ),
-        ),
-        (
             "active_draft",
             "Сначала подтвердите или отмените текущий черновик.",
             select(
                 exists().where(
                     DraftSession.user_id == user_id,
-                    DraftSession.meeting_id.is_(None),
                     DraftSession.status.in_(
                         ("parsing", "needs_clarification", "ready")
                     ),
@@ -64,26 +50,6 @@ async def workspace_switch_blocker(
                 exists().where(
                     WorkItemActionSession.user_id == user_id,
                     WorkItemActionSession.status == "open",
-                )
-            ),
-        ),
-        (
-            "meeting_setup",
-            "Сначала завершите или отмените настройку встречи.",
-            select(
-                exists().where(
-                    MeetingSetupSession.user_id == user_id,
-                    MeetingSetupSession.status == "open",
-                )
-            ),
-        ),
-        (
-            "meeting_review",
-            "Сначала ответьте на текущее уточнение по встрече.",
-            select(
-                exists().where(
-                    MeetingReview.user_id == user_id,
-                    MeetingReview.current_item_id.is_not(None),
                 )
             ),
         ),

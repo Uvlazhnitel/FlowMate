@@ -6,7 +6,6 @@ from pydantic import ValidationError
 from flowmate.ai.errors import AIInvalidResponseError, AIProviderError
 from flowmate.ai.schemas import (
     DraftParseResult,
-    MeetingReviewParseResult,
     SnoozeTimeParseResult,
     TelegramTextParseResult,
 )
@@ -16,7 +15,6 @@ StructuredResult = TypeVar(
     DraftParseResult,
     TelegramTextParseResult,
     SnoozeTimeParseResult,
-    MeetingReviewParseResult,
 )
 
 
@@ -61,15 +59,6 @@ class OpenAIAIProvider:
             system_prompt=system_prompt,
             user_text=user_text,
             response_type=SnoozeTimeParseResult,
-        )
-
-    async def parse_meeting_review(
-        self, *, system_prompt: str, user_text: str
-    ) -> MeetingReviewParseResult:
-        return await self._parse_response(
-            system_prompt=system_prompt,
-            user_text=user_text,
-            response_type=MeetingReviewParseResult,
         )
 
     async def _parse_response(

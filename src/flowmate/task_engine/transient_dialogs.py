@@ -42,7 +42,6 @@ async def cancel_transient_dialogs(
             select(DraftSession)
             .where(
                 DraftSession.user_id == user_id,
-                DraftSession.meeting_id.is_(None),
                 DraftSession.status.in_(OPEN_DRAFT_STATUSES),
             )
             .with_for_update()

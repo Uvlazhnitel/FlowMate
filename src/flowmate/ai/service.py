@@ -24,7 +24,6 @@ from flowmate.ai.schemas import (
     DraftParseResult,
     DraftSource,
     ManagementIntent,
-    MeetingDraftContext,
     SearchIntent,
     TelegramTextParseResult,
     TemporalCandidate,
@@ -346,24 +345,6 @@ class DraftParsingService:
             active_workspace=active_workspace or self._active_workspace,
             channel="telegram",
             source=source,
-        )
-
-    def build_meeting_context(
-        self,
-        *,
-        source: DraftSource,
-        timezone: ZoneInfo,
-        current_datetime: datetime,
-        meeting: MeetingDraftContext,
-        active_workspace: str | None = None,
-    ) -> DraftInputContext:
-        return DraftInputContext(
-            current_datetime=current_datetime.astimezone(timezone),
-            timezone=timezone.key,
-            active_workspace=active_workspace or self._active_workspace,
-            channel="telegram",
-            source=source,
-            meeting=meeting,
         )
 
     async def _parse_with_prompt(

@@ -1,16 +1,4 @@
 from flowmate.db.models.draft import DraftItemPerson, DraftItemRecord, DraftSession
-from flowmate.db.models.meeting import (
-    Meeting,
-    MeetingAgendaEntry,
-    MeetingEvent,
-    MeetingNote,
-    MeetingParticipant,
-    MeetingReview,
-    MeetingReviewItem,
-    MeetingSetupSession,
-    MeetingTopic,
-    MeetingWorkItem,
-)
 from flowmate.db.models.note import Note
 from flowmate.db.models.preferences import UserNotificationPreferences
 from flowmate.db.models.pwa_auth import PwaLoginCode, PwaSession
@@ -38,16 +26,6 @@ __all__ = [
     "DraftItemPerson",
     "DraftItemRecord",
     "DraftSession",
-    "Meeting",
-    "MeetingAgendaEntry",
-    "MeetingEvent",
-    "MeetingNote",
-    "MeetingParticipant",
-    "MeetingReview",
-    "MeetingReviewItem",
-    "MeetingSetupSession",
-    "MeetingTopic",
-    "MeetingWorkItem",
     "Note",
     "NoteLink",
     "Person",

@@ -17,8 +17,6 @@ import { PeoplePage } from "./pages/PeoplePage";
 import { TodayPage } from "./pages/TodayPage";
 import { TimelinePage } from "./pages/TimelinePage";
 import { TopicsPage } from "./pages/TopicsPage";
-import { MeetingsPage } from "./pages/MeetingsPage";
-import { MeetingDetailPage } from "./pages/MeetingDetailPage";
 import type { DateTimePreferences } from "./lib/dates";
 
 function UserRoute({
@@ -34,9 +32,7 @@ function UserRoute({
     | "person"
     | "inbox"
     | "planner"
-    | "timeline"
-    | "meetings"
-    | "meeting";
+    | "timeline";
 }) {
   const user = useOutletContext<Awaited<ReturnType<typeof getCurrentUser>>>();
   const dateTimePreferences: DateTimePreferences = {
@@ -60,10 +56,6 @@ function UserRoute({
     return <PlannerQueuePage dateTimePreferences={dateTimePreferences} />;
   if (page === "timeline")
     return <TimelinePage dateTimePreferences={dateTimePreferences} />;
-  if (page === "meetings")
-    return <MeetingsPage dateTimePreferences={dateTimePreferences} />;
-  if (page === "meeting")
-    return <MeetingDetailPage dateTimePreferences={dateTimePreferences} />;
   if (page === "agenda")
     return (
       <AgendaPage
@@ -121,8 +113,6 @@ export function AppRoutes() {
         <Route path="inbox" element={<UserRoute page="inbox" />} />
         <Route path="planner-queue" element={<UserRoute page="planner" />} />
         <Route path="timeline" element={<UserRoute page="timeline" />} />
-        <Route path="meetings" element={<UserRoute page="meetings" />} />
-        <Route path="meetings/:id" element={<UserRoute page="meeting" />} />
         {pageDefinitions
           .filter(
             (page) =>
@@ -135,7 +125,6 @@ export function AppRoutes() {
                 "/inbox",
                 "/planner-queue",
                 "/timeline",
-                "/meetings",
               ].includes(page.path),
           )
           .map((page) => (

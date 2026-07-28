@@ -414,24 +414,5 @@
       "ambiguities": [],
       "confidence": 0.8
     }
-  },
-  {
-    "kind": "meeting_context",
-    "id": "meeting_people_and_topics",
-    "context": {
-      "current_datetime": "2026-07-22T12:00:00+03:00",
-      "timezone": "Europe/Riga",
-      "active_workspace": "anonymized-evaluation",
-      "channel": "telegram",
-      "source": "voice",
-      "meeting": {
-        "meeting_id": "00000000-0000-0000-0000-000000000008",
-        "meeting_type": "team",
-        "participants": ["Алексей", "Алексей П."],
-        "topics": ["Запуск", "Поддержка"],
-        "primary_topic": "Запуск"
-      }
-    },
-    "expected_fragments": ["Алексей, Алексей П.", "Запуск, Поддержка"]
   }
 ]

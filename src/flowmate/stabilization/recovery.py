@@ -1,19 +1,16 @@
 import logging
 from datetime import timedelta
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from flowmate.ai.provider import MeetingReviewProvider
-from flowmate.ai.schemas import DraftSource, MeetingDraftContext
+from flowmate.ai.schemas import DraftSource
 from flowmate.ai.service import DraftParsingService
 from flowmate.db.drafts import load_analysis, replace_draft_analysis
 from flowmate.db.models import AIProcessingJob, DraftSession, Note
 from flowmate.db.session import session_scope
 from flowmate.drafts.questions import next_clarification_question
-from flowmate.meetings.review import generate_review
 from flowmate.stabilization.audit import record_audit_event
 from flowmate.stabilization.jobs import (
     ClaimedAIJob,
@@ -30,7 +27,6 @@ class AIRecoveryProcessor:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         parsing_service: DraftParsingService | None,
-        meeting_review_provider: MeetingReviewProvider | None,
         *,
         draft_ttl_hours: int,
         high_threshold: float,
@@ -41,7 +37,6 @@ class AIRecoveryProcessor:
     ) -> None:
         self._session_factory = session_factory
         self._parsing_service = parsing_service
-        self._meeting_review_provider = meeting_review_provider
         self._draft_ttl_hours = draft_ttl_hours
         self._high_threshold = high_threshold
         self._clarification_threshold = clarification_threshold
@@ -50,7 +45,7 @@ class AIRecoveryProcessor:
         self._batch_size = batch_size
 
     async def process_due_jobs(self) -> None:
-        if self._parsing_service is None and self._meeting_review_provider is None:
+        if self._parsing_service is None:
             return
         async with session_scope(self._session_factory) as session:
             claims = await claim_due_ai_jobs(
@@ -88,19 +83,10 @@ class AIRecoveryProcessor:
             )
             if job is None:
                 return
-            if job.job_kind in {"draft_parse", "meeting_capture_parse"}:
+            if job.job_kind == "draft_parse":
                 await self._recover_draft(session, job)
             elif job.job_kind == "draft_refine":
                 await self._recover_refinement(session, job)
-            elif job.job_kind == "meeting_review_generate":
-                await generate_review(
-                    session,
-                    job.user_id,
-                    job.entity_id,
-                    self._meeting_review_provider,
-                    high_threshold=self._high_threshold,
-                    clarification_threshold=self._clarification_threshold,
-                )
             else:
                 raise ValueError("unsupported recovery job")
             await complete_ai_job(session, claim)
@@ -142,41 +128,9 @@ class AIRecoveryProcessor:
         if note is None or note.content is None:
             raise ValueError("draft source is unavailable")
         source = DraftSource(note.source)
-        context = None
-        if draft.meeting_id is not None:
-            raw = draft.capture_context
-            timezone = ZoneInfo(str(raw["timezone"]))
-            topics = list(raw.get("topics", []))
-            primary_id = raw.get("primary_topic_id")
-            meeting_context = MeetingDraftContext.model_validate(
-                {
-                    "meeting_id": raw["meeting_id"],
-                    "meeting_type": raw["meeting_type"],
-                    "participants": [
-                        value["name"] for value in raw.get("participants", [])
-                    ],
-                    "topics": [value["name"] for value in topics],
-                    "primary_topic": next(
-                        (
-                            value["name"]
-                            for value in topics
-                            if value.get("id") == primary_id
-                        ),
-                        None,
-                    ),
-                }
-            )
-            context = self._parsing_service.build_meeting_context(
-                source=source,
-                timezone=timezone,
-                current_datetime=draft.created_at,
-                meeting=meeting_context,
-                active_workspace=draft.workspace,
-            )
         analysis = await self._parsing_service.parse(
             note.content,
             source=source,
-            context=context,
             active_workspace=draft.workspace,
         )
         await replace_draft_analysis(
@@ -198,7 +152,6 @@ class AIRecoveryProcessor:
             .where(
                 DraftSession.id == job.entity_id,
                 DraftSession.user_id == job.user_id,
-                DraftSession.meeting_id.is_(None),
             )
             .with_for_update()
         )

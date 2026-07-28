@@ -19,12 +19,6 @@ from flowmate.ai.schemas import (
 from flowmate.db.models import (
     DraftItemPerson,
     DraftSession,
-    Meeting,
-    MeetingEvent,
-    MeetingParticipant,
-    MeetingReview,
-    MeetingReviewItem,
-    MeetingTopic,
     Note,
     NoteLink,
     Person,
@@ -44,7 +38,7 @@ from flowmate.task_engine.service import (
     normalize_required_text,
 )
 
-InboxKind = Literal["draft", "work_item", "note", "meeting_review"]
+InboxKind = Literal["draft", "work_item", "note"]
 TimelineEventType = Literal[
     "created",
     "converted_from_draft",
@@ -59,16 +53,6 @@ TimelineEventType = Literal[
     "waiting_received",
     "planner_status_changed",
     "archived",
-    "meeting_created",
-    "meeting_started",
-    "meeting_ended",
-    "meeting_cancelled",
-    "meeting_review_generated",
-    "meeting_review_failed",
-    "meeting_clarification_answered",
-    "meeting_converted",
-    "meeting_completed",
-    "meeting_agenda_updated",
 ]
 
 
@@ -212,7 +196,6 @@ async def list_inbox(
                 .options(selectinload(DraftSession.items))
                 .where(
                     DraftSession.user_id == user_id,
-                    DraftSession.meeting_id.is_(None),
                     DraftSession.status.in_(
                         ("parsing", "needs_clarification", "ready", "expired", "failed")
                     ),
@@ -305,44 +288,6 @@ async def list_inbox(
                     )
                 )
 
-    if kind in {None, "meeting_review"} and reason in {None, "meeting_review"}:
-        review_rows = list(
-            (
-                await session.execute(
-                    select(MeetingReviewItem, MeetingReview, Meeting)
-                    .join(
-                        MeetingReview, MeetingReview.id == MeetingReviewItem.review_id
-                    )
-                    .join(Meeting, Meeting.id == MeetingReview.meeting_id)
-                    .where(
-                        MeetingReviewItem.user_id == user_id,
-                        MeetingReview.user_id == user_id,
-                        Meeting.user_id == user_id,
-                        MeetingReviewItem.status == "inbox",
-                    )
-                    .order_by(MeetingReviewItem.updated_at.desc(), MeetingReviewItem.id)
-                )
-            ).all()
-        )
-        for review_item, review, meeting in review_rows:
-            entries.append(
-                (
-                    review_item.updated_at,
-                    str(review_item.id),
-                    {
-                        "id": review_item.id,
-                        "kind": "meeting_review",
-                        "reasons": ["meeting_review"],
-                        "meeting_id": meeting.id,
-                        "meeting_title": meeting.title,
-                        "review_id": review.id,
-                        "category": review_item.category,
-                        "title": review_item.title,
-                        "created_at": review_item.created_at,
-                    },
-                )
-            )
-
     entries.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
     page = entries[offset : offset + limit + 1]
     return PageResult(
@@ -359,20 +304,11 @@ async def get_owned_draft(
     draft_id: UUID,
     *,
     for_update: bool = False,
-    meeting_id: UUID | None = None,
 ) -> DraftSession | None:
     statement = (
         select(DraftSession)
         .options(selectinload(DraftSession.items))
-        .where(
-            DraftSession.id == draft_id,
-            DraftSession.user_id == user_id,
-            (
-                DraftSession.meeting_id.is_(None)
-                if meeting_id is None
-                else DraftSession.meeting_id == meeting_id
-            ),
-        )
+        .where(DraftSession.id == draft_id, DraftSession.user_id == user_id)
     )
     if for_update:
         statement = statement.with_for_update()
@@ -391,14 +327,12 @@ async def edit_draft_item(
     clarification_threshold: float,
     ttl_hours: int,
     now: datetime,
-    meeting_id: UUID | None = None,
 ) -> DraftSession:
     draft = await get_owned_draft(
         session,
         user_id,
         draft_id,
         for_update=True,
-        meeting_id=meeting_id,
     )
     if draft is None:
         raise ValueError("draft not found")
@@ -573,10 +507,6 @@ async def list_timeline(
     validate_pagination(limit, offset)
     if limit > 100:
         raise ValueError("limit must not exceed 100")
-    include_work_items = event_type is None or not event_type.startswith("meeting_")
-    include_meetings = work_item_type is None and (
-        event_type is None or event_type.startswith("meeting_")
-    )
     statement = (
         select(WorkItemEvent, WorkItem, Topic)
         .join(WorkItem, WorkItem.id == WorkItemEvent.work_item_id)
@@ -614,78 +544,24 @@ async def list_timeline(
     elif event_type is not None:
         statement = statement.where(WorkItemEvent.event_type == event_type)
     fetch_limit = offset + limit + 1
-    work_rows = (
-        list(
-            (
-                await session.execute(
-                    statement.order_by(
-                        WorkItemEvent.created_at.desc(), WorkItemEvent.id.desc()
-                    ).limit(fetch_limit)
-                )
-            ).all()
-        )
-        if include_work_items
-        else []
-    )
-
-    meeting_statement = (
-        select(MeetingEvent, Meeting)
-        .join(Meeting, Meeting.id == MeetingEvent.meeting_id)
-        .where(MeetingEvent.user_id == user_id, Meeting.user_id == user_id)
-    )
-    if start is not None:
-        meeting_statement = meeting_statement.where(MeetingEvent.created_at >= start)
-    if end is not None:
-        meeting_statement = meeting_statement.where(MeetingEvent.created_at < end)
-    if topic_id is not None:
-        meeting_statement = meeting_statement.where(
-            exists().where(
-                MeetingTopic.meeting_id == Meeting.id,
-                MeetingTopic.topic_id == topic_id,
-                MeetingTopic.user_id == user_id,
+    work_rows = list(
+        (
+            await session.execute(
+                statement.order_by(
+                    WorkItemEvent.created_at.desc(), WorkItemEvent.id.desc()
+                ).limit(fetch_limit)
             )
-        )
-    if person_id is not None:
-        meeting_statement = meeting_statement.where(
-            exists().where(
-                MeetingParticipant.meeting_id == Meeting.id,
-                MeetingParticipant.person_id == person_id,
-                MeetingParticipant.user_id == user_id,
-            )
-        )
-    if event_type is not None and event_type.startswith("meeting_"):
-        meeting_statement = meeting_statement.where(
-            MeetingEvent.event_type == event_type.removeprefix("meeting_")
-        )
-    meeting_rows = (
-        list(
-            (
-                await session.execute(
-                    meeting_statement.order_by(
-                        MeetingEvent.created_at.desc(), MeetingEvent.id.desc()
-                    ).limit(fetch_limit)
-                )
-            ).all()
-        )
-        if include_meetings
-        else []
+        ).all()
     )
-
     combined = [
         (event.created_at, event.id, "work_item", event, item, topic)
         for event, item, topic in work_rows
-    ] + [
-        (event.created_at, event.id, "meeting", event, meeting, None)
-        for event, meeting in meeting_rows
     ]
     combined.sort(key=lambda value: (value[0], value[1]), reverse=True)
     rows = combined[offset : offset + limit + 1]
     visible = rows[:limit]
     item_ids = {
         entity.id for _, _, kind, _, entity, _ in visible if kind == "work_item"
-    }
-    meeting_ids = {
-        entity.id for _, _, kind, _, entity, _ in visible if kind == "meeting"
     }
     people: dict[UUID, list[dict[str, object]]] = {item_id: [] for item_id in item_ids}
     if item_ids:
@@ -700,74 +576,25 @@ async def list_timeline(
         )
         for item_id, linked_id, name in person_rows:
             people[item_id].append({"id": linked_id, "display_name": name})
-    meeting_people: dict[UUID, list[dict[str, object]]] = {
-        meeting_id: [] for meeting_id in meeting_ids
-    }
-    meeting_topics: dict[UUID, list[dict[str, object]]] = {
-        meeting_id: [] for meeting_id in meeting_ids
-    }
-    if meeting_ids:
-        participant_rows = await session.execute(
-            select(MeetingParticipant.meeting_id, Person.id, Person.display_name)
-            .join(Person, Person.id == MeetingParticipant.person_id)
-            .where(
-                MeetingParticipant.user_id == user_id,
-                MeetingParticipant.meeting_id.in_(meeting_ids),
-                Person.user_id == user_id,
-            )
-            .order_by(Person.display_name, Person.id)
-        )
-        for meeting_id, linked_id, name in participant_rows:
-            meeting_people[meeting_id].append({"id": linked_id, "display_name": name})
-        topic_rows = await session.execute(
-            select(MeetingTopic.meeting_id, Topic.id, Topic.name)
-            .join(Topic, Topic.id == MeetingTopic.topic_id)
-            .where(
-                MeetingTopic.user_id == user_id,
-                MeetingTopic.meeting_id.in_(meeting_ids),
-                Topic.user_id == user_id,
-            )
-            .order_by(Topic.name, Topic.id)
-        )
-        for meeting_id, linked_id, name in topic_rows:
-            meeting_topics[meeting_id].append({"id": linked_id, "name": name})
 
     serialized: list[dict[str, object]] = []
-    for _, _, kind, event, entity, topic in visible:
-        if kind == "work_item":
-            serialized.append(
-                {
-                    "id": event.id,
-                    "entity_kind": "work_item",
-                    "entity_id": entity.id,
-                    "event_type": _public_event_type(event, entity),
-                    "occurred_at": event.created_at,
-                    "title": entity.title,
-                    "work_item_type": entity.type,
-                    "status": entity.status,
-                    "topics": (
-                        [{"id": topic.id, "name": topic.name}]
-                        if topic is not None
-                        else []
-                    ),
-                    "people": people[entity.id],
-                }
-            )
-        else:
-            serialized.append(
-                {
-                    "id": event.id,
-                    "entity_kind": "meeting",
-                    "entity_id": entity.id,
-                    "event_type": f"meeting_{event.event_type}",
-                    "occurred_at": event.created_at,
-                    "title": entity.title,
-                    "work_item_type": None,
-                    "status": event.new_status,
-                    "topics": meeting_topics[entity.id],
-                    "people": meeting_people[entity.id],
-                }
-            )
+    for _, _, _, event, entity, topic in visible:
+        serialized.append(
+            {
+                "id": event.id,
+                "entity_kind": "work_item",
+                "entity_id": entity.id,
+                "event_type": _public_event_type(event, entity),
+                "occurred_at": event.created_at,
+                "title": entity.title,
+                "work_item_type": entity.type,
+                "status": entity.status,
+                "topics": (
+                    [{"id": topic.id, "name": topic.name}] if topic is not None else []
+                ),
+                "people": people[entity.id],
+            }
+        )
     return PageResult(
         items=serialized,
         limit=limit,

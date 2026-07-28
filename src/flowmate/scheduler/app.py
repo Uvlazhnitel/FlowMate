@@ -9,7 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from flowmate.ai.errors import AIConfigurationError
 from flowmate.ai.factory import create_ai_provider
-from flowmate.ai.provider import AIProvider, MeetingReviewProvider
+from flowmate.ai.provider import AIProvider
 from flowmate.ai.service import DraftParsingService
 from flowmate.core.config import Settings, get_settings
 from flowmate.core.logging import configure_logging
@@ -112,7 +112,6 @@ async def run_scheduler(
         recovery_processor = AIRecoveryProcessor(
             session_factory,
             parsing_service,
-            ai_provider if isinstance(ai_provider, MeetingReviewProvider) else None,
             draft_ttl_hours=app_settings.draft_ttl_hours,
             high_threshold=app_settings.ai_high_confidence_threshold,
             clarification_threshold=app_settings.ai_clarification_confidence_threshold,

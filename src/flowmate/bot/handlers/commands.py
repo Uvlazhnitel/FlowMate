@@ -6,36 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from flowmate.bot.filters import (
     ActiveDraftFilter,
-    ActiveMeetingCaptureFilter,
     ActiveWorkItemActionFilter,
     CaptureNewFilter,
-    MeetingReviewReplyFilter,
-    MeetingTitleReplyFilter,
 )
 from flowmate.bot.handlers.clarification import active_draft_message
 from flowmate.bot.handlers.drafts import (
     DRAFT_NOT_FOUND_MESSAGE,
     draft_callback,
     show_draft,
-)
-from flowmate.bot.handlers.meeting_capture import (
-    meeting_capture_undo_callback,
-    meeting_notes_command,
-    meeting_text_capture,
-    meeting_voice_capture,
-)
-from flowmate.bot.handlers.meeting_review import (
-    meeting_review_callback,
-    meeting_review_command,
-    meeting_review_reply,
-)
-from flowmate.bot.handlers.meetings import (
-    meeting_callback,
-    meeting_cancel_command,
-    meeting_command,
-    meeting_end_command,
-    meeting_status_command,
-    meeting_title_reply,
 )
 from flowmate.bot.handlers.navigation import (
     followups_command,
@@ -134,11 +112,6 @@ async def help_command(message: Message) -> None:
         "/waiting — ожидания\n"
         "/questions — вопросы\n"
         "/search — поиск\n\n"
-        "🎙 <b>Встречи</b>\n"
-        "/meeting — начать встречу\n"
-        "/meeting_status — текущая встреча\n"
-        "/meeting_notes — записанные пункты\n"
-        "/meeting_end — завершить встречу\n\n"
         "⚙️ <b>Настройки</b>\n"
         "/workspace — Работа / Личное\n"
         "/reminders — напоминания\n"
@@ -234,12 +207,6 @@ def create_router(
     router.message.register(quiet_command, Command("quiet"))
     router.message.register(snooze_command, Command("snooze"))
     router.message.register(search_command, Command("search"))
-    router.message.register(meeting_command, Command("meeting"))
-    router.message.register(meeting_status_command, Command("meeting_status"))
-    router.message.register(meeting_notes_command, Command("meeting_notes"))
-    router.message.register(meeting_end_command, Command("meeting_end"))
-    router.message.register(meeting_review_command, Command("meeting_review"))
-    router.message.register(meeting_cancel_command, Command("meeting_cancel"))
     router.message.register(record_prompt, F.text == RECORD_BUTTON)
     router.message.register(today_command, F.text == TODAY_BUTTON)
     router.message.register(tasks_command, F.text == TASKS_BUTTON)
@@ -250,16 +217,6 @@ def create_router(
     router.message.register(reminders_settings_command, F.text == SETTINGS_BUTTON)
     router.message.register(workspace_toggle, F.text == WORKSPACE_BUTTON)
     router.callback_query.register(workspace_callback, F.data.startswith("ws:"))
-    router.message.register(
-        meeting_title_reply,
-        MeetingTitleReplyFilter(),
-        F.text,
-    )
-    router.message.register(
-        meeting_review_reply,
-        MeetingReviewReplyFilter(),
-        F.text | F.voice,
-    )
     router.message.register(
         voice_message,
         CaptureNewFilter(),
@@ -280,16 +237,6 @@ def create_router(
         ActiveDraftFilter(),
         F.text | F.voice,
     )
-    router.message.register(
-        meeting_voice_capture,
-        ActiveMeetingCaptureFilter(),
-        F.voice,
-    )
-    router.message.register(
-        meeting_text_capture,
-        ActiveMeetingCaptureFilter(),
-        F.text & ~F.text.startswith("/"),
-    )
     router.message.register(voice_message, F.voice)
     router.message.register(text_note, F.text & ~F.text.startswith("/"))
     router.message.register(unsupported_message)
@@ -300,11 +247,6 @@ def create_router(
     router.callback_query.register(search_callback, F.data.startswith("lq:"))
     router.callback_query.register(menu_callback, F.data == "nav:menu")
     router.callback_query.register(work_item_callback, F.data.startswith("wi:"))
-    router.callback_query.register(meeting_callback, F.data.startswith("mt:"))
-    router.callback_query.register(
-        meeting_capture_undo_callback, F.data.startswith("mc:undo:")
-    )
-    router.callback_query.register(meeting_review_callback, F.data.startswith("mr:"))
     router.callback_query.register(
         work_item_selection_callback,
         F.data.startswith("wis:"),

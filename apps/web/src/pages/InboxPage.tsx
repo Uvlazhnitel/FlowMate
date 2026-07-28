@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, CheckCheck, FilePenLine, Plus, Save, XCircle } from "lucide-react";
 import { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import {
   operationsKeys,
@@ -40,7 +40,6 @@ const reasonLabels: Record<string, string> = {
   missing_topic: "Нет темы",
   missing_person: "Нет человека",
   unstructured_note: "Неразобранная заметка",
-  meeting_review: "После встречи",
 };
 
 const itemTypes = [
@@ -479,7 +478,6 @@ export function InboxPage({
             <option value="draft">AI drafts</option>
             <option value="work_item">Записи</option>
             <option value="note">Заметки</option>
-            <option value="meeting_review">Итоги встреч</option>
           </select>
           <select
             aria-label="Причина"
@@ -565,23 +563,21 @@ export function InboxPage({
                 className={`inbox-card inbox-card--${entry.kind}`}
                 key={`${entry.kind}-${id}`}
               >
-                {entry.kind !== "meeting_review" && (
-                  <label className="select-control">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(selected[id])}
-                      onChange={(event) =>
-                        setSelected((current) => {
-                          const next = { ...current };
-                          if (event.target.checked) next[id] = entry;
-                          else delete next[id];
-                          return next;
-                        })
-                      }
-                    />
-                    <span className="sr-only">Выбрать запись</span>
-                  </label>
-                )}
+                <label className="select-control">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(selected[id])}
+                    onChange={(event) =>
+                      setSelected((current) => {
+                        const next = { ...current };
+                        if (event.target.checked) next[id] = entry;
+                        else delete next[id];
+                        return next;
+                      })
+                    }
+                  />
+                  <span className="sr-only">Выбрать запись</span>
+                </label>
                 <div className="reason-row">
                   {entry.reasons.map((value) => (
                     <span className="reason-chip" key={value}>
@@ -706,22 +702,6 @@ export function InboxPage({
                         onSaved={() => void refresh()}
                       />
                     </details>
-                  </>
-                )}
-                {entry.kind === "meeting_review" && (
-                  <>
-                    <span className="directory-kicker">
-                      {entry.category} ·{" "}
-                      {formatDateTime(entry.created_at, dateTimePreferences)}
-                    </span>
-                    <h2>{entry.title}</h2>
-                    <p>Встреча: {entry.meeting_title}</p>
-                    <Link
-                      className="button button--primary"
-                      to={`/meetings/${entry.meeting_id}`}
-                    >
-                      Открыть итог встречи
-                    </Link>
                   </>
                 )}
               </article>

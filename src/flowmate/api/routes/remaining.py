@@ -84,7 +84,7 @@ class NoteActionRequest(StrictRequest):
 
 
 class BulkEntry(StrictRequest):
-    kind: Literal["draft", "note", "work_item", "meeting_review"]
+    kind: Literal["draft", "note", "work_item"]
     id: UUID
     expected_revision: int | None = Field(default=None, ge=0)
     client_action_id: UUID | None = None
@@ -175,7 +175,7 @@ async def inbox(
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_pwa_session)],
     settings: Annotated[Settings, Depends(get_settings)],
-    kind: Literal["draft", "work_item", "note", "meeting_review"] | None = None,
+    kind: Literal["draft", "work_item", "note"] | None = None,
     reason: str | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,

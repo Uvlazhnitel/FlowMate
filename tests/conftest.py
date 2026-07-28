@@ -44,16 +44,6 @@ APPLICATION_TABLES = (
     "user_notification_preferences",
     "pwa_login_codes",
     "pwa_sessions",
-    "meetings",
-    "meeting_participants",
-    "meeting_topics",
-    "meeting_notes",
-    "meeting_events",
-    "meeting_setup_sessions",
-    "meeting_reviews",
-    "meeting_review_items",
-    "meeting_work_items",
-    "meeting_agenda_entries",
     "telegram_operation_receipts",
 )
 

@@ -60,8 +60,7 @@ class AIProcessingJob(Base):
     __tablename__ = "ai_processing_jobs"
     __table_args__ = (
         CheckConstraint(
-            "job_kind IN ('draft_parse','draft_refine','meeting_capture_parse',"
-            "'meeting_review_generate')",
+            "job_kind IN ('draft_parse','draft_refine')",
             name="ck_ai_processing_jobs_kind",
         ),
         CheckConstraint(

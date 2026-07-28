@@ -1,6 +1,5 @@
 from enum import StrEnum
 from typing import Annotated, Literal, Self
-from uuid import UUID
 
 from pydantic import (
     AwareDatetime,
@@ -100,58 +99,12 @@ class StrictDraftModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-class MeetingDraftContext(StrictDraftModel):
-    meeting_id: UUID
-    meeting_type: Literal[
-        "lead", "team", "client_sync", "steering", "one_to_one", "other"
-    ]
-    participants: list[NonEmptyText]
-    topics: list[NonEmptyText]
-    primary_topic: NonEmptyText | None = None
-
-
 class DraftInputContext(StrictDraftModel):
     current_datetime: AwareDatetime
     timezone: NonEmptyText
     active_workspace: NonEmptyText
     channel: Literal["telegram"]
     source: DraftSource
-    meeting: MeetingDraftContext | None = None
-
-
-class MeetingReviewProposal(StrictDraftModel):
-    source_capture_id: UUID
-    source_draft_item_id: UUID | None = None
-    category: Literal[
-        "task",
-        "follow_up",
-        "waiting",
-        "answered_question",
-        "unresolved_question",
-        "note",
-        "decision",
-        "agenda_item",
-    ]
-    item: "DraftItem"
-    suggested_next_action: NonEmptyText | None = None
-    clarification_question: NonEmptyText | None = None
-    consequences: list[NonEmptyText] = Field(default_factory=list, max_length=20)
-    related_proposal_numbers: list[int] = Field(default_factory=list, max_length=50)
-
-
-class MeetingAgendaSuggestion(StrictDraftModel):
-    work_item_id: UUID
-    outcome: Literal["pending", "discussed", "answered", "deferred", "unresolved"]
-    result: NonEmptyText | None = None
-
-
-class MeetingReviewParseResult(StrictDraftModel):
-    summary: NonEmptyText
-    proposals: list[MeetingReviewProposal] = Field(max_length=500)
-    agenda: list[MeetingAgendaSuggestion] = Field(default_factory=list, max_length=500)
-    suggested_next_actions: list[NonEmptyText] = Field(
-        default_factory=list, max_length=50
-    )
 
 
 class TemporalCandidate(StrictDraftModel):
@@ -329,6 +282,3 @@ class DraftAnalysisResult(StrictDraftModel):
     confidence: float = Field(ge=0.0, le=1.0)
     workspace_candidate: Literal["personal", "work"] | None = None
     workspace_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-
-
-MeetingReviewProposal.model_rebuild()

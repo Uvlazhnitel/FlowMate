@@ -28,7 +28,6 @@ from flowmate.bot.presentation import (
 )
 from flowmate.db.models import WorkItem, WorkItemActionSession
 from flowmate.db.users import get_user_by_telegram_id
-from flowmate.meetings.service import get_active_meeting
 from flowmate.reminders.timezone import resolve_local_datetime
 from flowmate.task_engine.action_sessions import (
     create_action_session,
@@ -124,14 +123,13 @@ async def record_prompt(
         await message.answer("Сначала используйте /start.")
         return
     await cancel_transient_dialogs(db_session, user.id)
-    if await get_active_meeting(db_session, user.id) is None:
-        await create_action_session(
-            db_session,
-            user.id,
-            action=WorkItemAction.CAPTURE_NEW,
-            ttl_minutes=work_item_action_ttl_minutes,
-            telegram_update_id=event_update.update_id,
-        )
+    await create_action_session(
+        db_session,
+        user.id,
+        action=WorkItemAction.CAPTURE_NEW,
+        ttl_minutes=work_item_action_ttl_minutes,
+        telegram_update_id=event_update.update_id,
+    )
     await db_session.commit()
     await message.answer(
         "Отправьте текст или нажмите микрофон Telegram и запишите голосовое сообщение.",

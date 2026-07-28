@@ -215,12 +215,12 @@ describe("remaining operational screens", () => {
   it("applies Timeline filters and exposes remaining screens in mobile overflow", async () => {
     const event = {
       id: "7a525364-5948-41f8-8976-4d0324115ea2",
-      entity_kind: "meeting",
-      entity_id: "e105aeb6-39f2-48e0-8088-ec3e774fb81d",
-      event_type: "meeting_started",
+      entity_kind: "work_item",
+      entity_id: item.id,
+      event_type: "created",
       occurred_at: "2026-07-22T10:00:00Z",
       title: "Migration sync",
-      work_item_type: null,
+      work_item_type: "task",
       status: "active",
       topics: [{ id: item.topic_id, name: "Migration" }],
       people: [],
@@ -248,16 +248,14 @@ describe("remaining operational screens", () => {
     const user = userEvent.setup();
 
     renderApplication(
-      `/timeline?from=2026-07-01&event_type=meeting_started&topic_id=${item.topic_id}`,
+      `/timeline?from=2026-07-01&event_type=created&topic_id=${item.topic_id}`,
     );
 
     const meetingTitle = await screen.findByText("Migration sync");
     expect(meetingTitle).toBeVisible();
-    expect(
-      within(meetingTitle.closest("article")!).getByText("Встреча началась"),
-    ).toBeVisible();
+    expect(within(meetingTitle.closest("article")!).getByText("Создано")).toBeVisible();
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("event_type=meeting_started"),
+      expect.stringContaining("event_type=created"),
       expect.anything(),
     );
     const mobileNavigation = screen
@@ -265,7 +263,7 @@ describe("remaining operational screens", () => {
       .find((navigation) => navigation.classList.contains("mobile-nav"));
     expect(mobileNavigation).toBeDefined();
     await user.click(within(mobileNavigation!).getByText("Ещё"));
-    for (const label of ["Входящие", "Планирование", "Встречи", "Лента", "Настройки"]) {
+    for (const label of ["Входящие", "Планирование", "Лента", "Настройки"]) {
       expect(within(mobileNavigation!).getByRole("link", { name: label })).toBeVisible();
     }
   });
