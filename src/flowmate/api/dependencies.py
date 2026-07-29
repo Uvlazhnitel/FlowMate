@@ -4,6 +4,7 @@ from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from flowmate.db.session import session_scope
+from flowmate.task_engine.rescheduling import ReschedulingService
 
 
 def get_engine(request: Request) -> AsyncEngine:
@@ -22,3 +23,8 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
     session_factory = get_session_factory(request)
     async with session_scope(session_factory) as session:
         yield session
+
+
+def get_rescheduling_service(request: Request) -> ReschedulingService:
+    service: ReschedulingService = request.app.state.rescheduling_service
+    return service

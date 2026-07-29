@@ -21,6 +21,7 @@ from flowmate.speech.provider import SpeechToTextProvider
 from flowmate.speech.service import TranscriptionService
 from flowmate.speech.temp_files import TemporaryAudioFileService
 from flowmate.task_engine.conversion import DraftConversionService
+from flowmate.task_engine.rescheduling import ReschedulingService
 
 
 def create_dispatcher(
@@ -34,6 +35,10 @@ def create_dispatcher(
         deadline_lead_minutes=settings.deadline_reminder_lead_minutes
     )
     notification_defaults = NotificationDefaults.from_settings(settings)
+    snooze_parsing_service = SnoozeParsingService(
+        None,
+        timeout_seconds=settings.ai_timeout_seconds,
+    )
     dispatcher = Dispatcher(
         transcription_service=transcription_service,
         draft_parsing_service=draft_parsing_service,
@@ -49,10 +54,8 @@ def create_dispatcher(
         ),
         work_item_action_ttl_minutes=settings.work_item_action_ttl_minutes,
         notification_defaults=notification_defaults,
-        snooze_parsing_service=SnoozeParsingService(
-            None,
-            timeout_seconds=settings.ai_timeout_seconds,
-        ),
+        snooze_parsing_service=snooze_parsing_service,
+        rescheduling_service=ReschedulingService(snooze_parsing_service),
         default_workspace=settings.app_active_workspace,
     )
     dispatcher.include_router(
@@ -124,10 +127,12 @@ async def run_bot(settings: Settings | None = None) -> None:
             transcription_service,
             draft_parsing_service,
         )
-        dispatcher["snooze_parsing_service"] = SnoozeParsingService(
+        snooze_parsing_service = SnoozeParsingService(
             ai_provider if isinstance(ai_provider, SnoozeTimeProvider) else None,
             timeout_seconds=app_settings.ai_timeout_seconds,
         )
+        dispatcher["snooze_parsing_service"] = snooze_parsing_service
+        dispatcher["rescheduling_service"] = ReschedulingService(snooze_parsing_service)
         async with Bot(token=bot_token) as bot:
             logger.info("telegram_bot_started")
             await dispatcher.start_polling(

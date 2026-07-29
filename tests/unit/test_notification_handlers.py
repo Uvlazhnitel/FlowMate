@@ -6,13 +6,18 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from aiogram import Bot
-from aiogram.types import Chat, Message, Update, User, Voice
+from aiogram.types import CallbackQuery, Chat, Message, Update, User, Voice
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.bot.handlers.preferences import reminders_settings_command
+from flowmate.bot.handlers.reminders import reminder_callback
 from flowmate.bot.handlers.work_items import action_session_message
 from flowmate.db.models import User as DatabaseUser
-from flowmate.db.models import UserNotificationPreferences, WorkItemActionSession
+from flowmate.db.models import (
+    UserNotificationPreferences,
+    WorkItem,
+    WorkItemActionSession,
+)
 from flowmate.reminders.parsing import SnoozeParsingService
 from flowmate.reminders.preferences import NotificationDefaults
 from flowmate.speech.service import TranscriptionService
@@ -145,4 +150,73 @@ async def test_voice_custom_snooze_updates_reminder_without_note_flow() -> None:
     snooze_call = snooze.await_args
     assert snooze_call is not None
     assert snooze_call.kwargs["until"] == target
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reminder_tomorrow_button_uses_default_reminder_time() -> None:
+    message = make_message("reminder")
+    reminder_id = uuid4()
+    callback = CallbackQuery(
+        id="callback-id",
+        from_user=cast(User, message.from_user),
+        chat_instance="test",
+        message=message,
+        data=f"rem:snoozetomorrow:{reminder_id}",
+    )
+    update = Update(update_id=970_002, callback_query=callback)
+    session = MagicMock(spec=AsyncSession)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    user = DatabaseUser(id=uuid4(), telegram_user_id=123)
+    item = WorkItem(
+        id=uuid4(),
+        user_id=user.id,
+        type="task",
+        title="Test",
+        status="active",
+        priority="normal",
+    )
+    preferences = MagicMock(
+        zoneinfo=ZoneInfo("UTC"),
+        default_reminder_time=time(7, 45),
+        default_snooze_minutes=60,
+    )
+    with (
+        patch(
+            "flowmate.bot.handlers.reminders.get_user_by_telegram_id",
+            new=AsyncMock(return_value=user),
+        ),
+        patch(
+            "flowmate.bot.handlers.reminders.get_active_draft_for_user",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "flowmate.bot.handlers.reminders.get_reminder_action_target",
+            new=AsyncMock(return_value=MagicMock(work_item=item)),
+        ),
+        patch(
+            "flowmate.bot.handlers.reminders.get_effective_notification_preferences",
+            new=AsyncMock(return_value=preferences),
+        ),
+        patch(
+            "flowmate.bot.handlers.reminders.snooze_work_item_reminder",
+            new=AsyncMock(return_value=(MagicMock(), True)),
+        ) as snooze,
+        patch.object(Message, "answer", new_callable=AsyncMock),
+        patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
+    ):
+        await reminder_callback(
+            callback,
+            update,
+            cast(AsyncSession, session),
+            30,
+            DEFAULTS,
+        )
+
+    snooze_call = snooze.await_args
+    assert snooze_call is not None
+    until = snooze_call.kwargs["until"]
+    assert isinstance(until, datetime)
+    assert until.astimezone(ZoneInfo("UTC")).time() == time(7, 45)
     session.commit.assert_awaited_once()

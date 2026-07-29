@@ -114,6 +114,8 @@ export type WorkItemAction =
   | "reopen"
   | "cancel"
   | "reschedule"
+  | "reschedule_preset"
+  | "reschedule_text"
   | "snooze"
   | "add_note"
   | "waiting_received"
@@ -130,11 +132,31 @@ export type WorkItemAction =
   | "planner_update_required"
   | "planner_needs_transfer";
 
+export type ReschedulePreset =
+  "later_today" | "tomorrow_morning" | "next_working_day" | "next_week";
+
+export type RescheduleSelection =
+  | {
+      action: "reschedule";
+      local_date: string;
+      local_time: string;
+    }
+  | {
+      action: "reschedule_preset";
+      preset: ReschedulePreset;
+    }
+  | {
+      action: "reschedule_text";
+      phrase: string;
+    };
+
 export interface ActionPayload {
   action: WorkItemAction;
   client_action_id: string;
   expected_revision: number;
   content?: string;
+  preset?: ReschedulePreset;
+  phrase?: string;
   local_date?: string;
   local_time?: string;
   duration_minutes?: number;

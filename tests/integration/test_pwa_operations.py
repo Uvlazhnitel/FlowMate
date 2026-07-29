@@ -26,6 +26,7 @@ from flowmate.task_engine.operational import (
     list_today_section,
     today_overview_snapshot,
 )
+from flowmate.task_engine.rescheduling import UNKNOWN_PHRASE_MESSAGE
 from flowmate.task_engine.service import (
     create_person,
     create_topic,
@@ -482,6 +483,57 @@ async def test_pwa_work_item_action_variants(database_engine: AsyncEngine) -> No
                 local_date=(now + timedelta(days=2)).date().isoformat(),
                 local_time="09:30:00",
             )
+            preset_action_id = str(uuid4())
+            preset_payload = {
+                "action": "reschedule_preset",
+                "client_action_id": preset_action_id,
+                "expected_revision": task_result["work_item"]["revision"],
+                "preset": "tomorrow_morning",
+            }
+            preset = await client.post(
+                f"/api/v1/work-items/{ids['task']}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json=preset_payload,
+            )
+            assert preset.status_code == 200, preset.text
+            task_result = preset.json()
+            assert datetime.fromisoformat(
+                task_result["work_item"]["effective_at"]
+            ).time() == time(9)
+            duplicate_preset = await client.post(
+                f"/api/v1/work-items/{ids['task']}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json=preset_payload,
+            )
+            assert duplicate_preset.status_code == 200
+            assert duplicate_preset.json()["changed"] is False
+
+            task_result = await run_action(
+                ids["task"],
+                "reschedule_text",
+                task_result["work_item"]["revision"],
+                phrase="в пятницу после обеда",
+            )
+            assert datetime.fromisoformat(
+                task_result["work_item"]["effective_at"]
+            ).time() == time(15)
+            assert (
+                task_result["work_item"]["reminder"]["effective_at"]
+                == (task_result["work_item"]["effective_at"])
+            )
+            due_before_unknown = task_result["work_item"]["effective_at"]
+            unknown = await client.post(
+                f"/api/v1/work-items/{ids['task']}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "reschedule_text",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": task_result["work_item"]["revision"],
+                    "phrase": "когда получится",
+                },
+            )
+            assert unknown.status_code == 422
+            assert unknown.json()["error"]["message"] == UNKNOWN_PHRASE_MESSAGE
             stale = await client.post(
                 f"/api/v1/work-items/{ids['task']}/actions",
                 headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
@@ -605,6 +657,21 @@ async def test_pwa_work_item_action_variants(database_engine: AsyncEngine) -> No
                     )
                 )
                 assert task_reminders
+                persisted_task = await session.get(WorkItem, ids["task"])
+                assert persisted_task is not None
+                assert persisted_task.due_at is not None
+                assert persisted_task.due_at == datetime.fromisoformat(
+                    due_before_unknown
+                )
+                task_event_types = list(
+                    await session.scalars(
+                        select(WorkItemEvent.event_type).where(
+                            WorkItemEvent.work_item_id == ids["task"]
+                        )
+                    )
+                )
+                assert "rescheduled" in task_event_types
+                assert task_event_types.count("rescheduled") == 3
                 assert all(
                     item.status == ReminderStatus.CANCELLED.value
                     for item in task_reminders

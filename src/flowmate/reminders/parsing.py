@@ -97,20 +97,36 @@ class SnoozeParsingService:
             r"(?P<unit>минут(?:у|ы)?|час(?:а|ов)?|недел(?:ю|и|ь))",
             normalized,
         )
+        if normalized == "через неделю":
+            local_now = now.astimezone(timezone)
+            return resolve_local_datetime(
+                local_now.date() + timedelta(days=7),
+                default_time,
+                timezone,
+            )
         if relative is not None:
             raw_count = relative.group("count")
-            count = {
-                "пол": 0.5,
-                "один": 1,
-                "одну": 1,
-                "два": 2,
-                "две": 2,
-            }.get(raw_count, float(raw_count) if raw_count.isdigit() else 1)
+            count = float(
+                {
+                    "пол": 0.5,
+                    "один": 1,
+                    "одну": 1,
+                    "два": 2,
+                    "две": 2,
+                }.get(raw_count, float(raw_count) if raw_count.isdigit() else 1)
+            )
             unit = relative.group("unit")
             if unit.startswith("минут"):
                 return now + timedelta(minutes=count)
             if unit.startswith("час"):
                 return now + timedelta(hours=count)
+            if count.is_integer():
+                local_now = now.astimezone(timezone)
+                return resolve_local_datetime(
+                    local_now.date() + timedelta(days=7 * int(count)),
+                    default_time,
+                    timezone,
+                )
             return now + timedelta(weeks=count)
 
         clock_match = re.search(r"(?:\s+в)?\s*(\d{1,2}):(\d{2})$", normalized)
@@ -125,9 +141,23 @@ class SnoozeParsingService:
                 return None
             date_phrase = normalized[: clock_match.start()].strip()
 
+        day_part_match = re.search(
+            r"(?:\s+)(утром|днем|после обеда|вечером)$",
+            date_phrase,
+        )
+        day_part_time: time | None = None
+        if day_part_match is not None:
+            day_part_time = {
+                "утром": time(9),
+                "днем": time(14),
+                "после обеда": time(15),
+                "вечером": time(19),
+            }[day_part_match.group(1)]
+            date_phrase = date_phrase[: day_part_match.start()].strip()
+
         local_now = now.astimezone(timezone)
-        target_time = explicit_clock or default_time
-        if date_phrase in {"завтра", "завтра утром"}:
+        target_time = explicit_clock or day_part_time or default_time
+        if date_phrase == "завтра":
             return resolve_local_datetime(
                 local_now.date() + timedelta(days=1),
                 target_time,

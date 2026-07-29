@@ -34,3 +34,32 @@ export function formatRelative(value: string, preferences: DateTimePreferences):
   if (delta >= 0 && delta < 60_000) return "только что";
   return formatted;
 }
+
+export function formatRescheduledDateTime(
+  value: string,
+  preferences: DateTimePreferences,
+): string {
+  const instant = new Date(value);
+  const weekday = new Intl.DateTimeFormat("ru-RU", {
+    timeZone: preferences.timezone,
+    weekday: "long",
+  }).format(instant);
+  const weekdayAfterOn =
+    {
+      среда: "среду",
+      пятница: "пятницу",
+      суббота: "субботу",
+    }[weekday] ?? weekday;
+  const date = new Intl.DateTimeFormat("ru-RU", {
+    timeZone: preferences.timezone,
+    day: "numeric",
+    month: "long",
+  }).format(instant);
+  const time = new Intl.DateTimeFormat("ru-RU", {
+    timeZone: preferences.timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: preferences.timeDisplayFormat === "12h",
+  }).format(instant);
+  return `${weekdayAfterOn}, ${date}, ${time}`;
+}

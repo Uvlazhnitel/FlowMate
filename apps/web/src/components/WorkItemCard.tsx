@@ -14,10 +14,17 @@ import {
   operationsKeys,
   runWorkItemAction,
   type ActionPayload,
+  type RescheduleSelection,
   type WorkItemAction,
   type WorkItemCardData,
 } from "../api/operations";
-import { formatDateTime, type DateTimePreferences } from "../lib/dates";
+import { ApiError } from "../api/client";
+import {
+  formatDateTime,
+  formatRescheduledDateTime,
+  type DateTimePreferences,
+} from "../lib/dates";
+import { RescheduleDialog } from "./RescheduleDialog";
 
 const typeLabels: Record<string, string> = {
   task: "Задача",
@@ -30,7 +37,11 @@ const typeLabels: Record<string, string> = {
 
 const UNDO_WINDOW_MS = 8_000;
 
-type DialogMode = "note" | "result" | "decision" | "date" | null;
+type DialogMode = "note" | "result" | "decision" | null;
+
+function isRescheduleAction(action: WorkItemAction) {
+  return ["reschedule", "reschedule_preset", "reschedule_text"].includes(action);
+}
 
 export function StatusBadge({ item }: { item: WorkItemCardData }) {
   return (
@@ -53,9 +64,9 @@ export function WorkItemCard({
 }) {
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<DialogMode>(null);
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [rescheduleStatus, setRescheduleStatus] = useState<string | null>(null);
   const [content, setContent] = useState("");
-  const [localDate, setLocalDate] = useState("");
-  const [localTime, setLocalTime] = useState("09:00");
   const [hidden, setHidden] = useState(false);
   const [undoItem, setUndoItem] = useState<WorkItemCardData | null>(null);
   const [undoError, setUndoError] = useState(false);
@@ -75,6 +86,15 @@ export function WorkItemCard({
         client_action_id: crypto.randomUUID(),
       }),
     onSuccess: (response, variables) => {
+      if (isRescheduleAction(variables.action) && response.work_item?.effective_at) {
+        setRescheduleStatus(
+          `✓ Перенесено на ${formatRescheduledDateTime(
+            response.work_item.effective_at,
+            dateTimePreferences,
+          )}`,
+        );
+        setRescheduleOpen(false);
+      }
       if (
         ["complete", "waiting_received", "agenda_discussed", "question_answered"].includes(
           variables.action,
@@ -95,6 +115,15 @@ export function WorkItemCard({
       setDialog(null);
       setContent("");
     },
+    onError: (error, variables) => {
+      if (
+        isRescheduleAction(variables.action) &&
+        error instanceof ApiError &&
+        error.status === 409
+      ) {
+        void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
+      }
+    },
   });
 
   function act(action: WorkItemAction, extra: Partial<ActionPayload> = {}) {
@@ -104,6 +133,28 @@ export function WorkItemCard({
   function confirmAction(action: "cancel" | "convert_to_task", message: string) {
     if (window.confirm(message)) act(action);
   }
+
+  function openReschedule() {
+    mutation.reset();
+    setRescheduleStatus(null);
+    setRescheduleOpen(true);
+  }
+
+  function submitReschedule(selection: RescheduleSelection) {
+    mutation.mutate({
+      ...selection,
+      expected_revision: item.revision,
+    });
+  }
+
+  const rescheduleError =
+    rescheduleOpen && mutation.isError
+      ? mutation.error instanceof ApiError && mutation.error.status === 409
+        ? "Задача уже изменилась. Данные обновлены — выберите срок ещё раз."
+        : mutation.error instanceof ApiError
+          ? mutation.error.message
+          : "Не удалось перенести задачу. Попробуйте ещё раз."
+      : null;
 
   async function undo() {
     if (!undoItem) return;
@@ -180,7 +231,7 @@ export function WorkItemCard({
         >
           <Check size={15} aria-hidden /> {primaryLabel}
         </button>
-        <button className="card-action" type="button" onClick={() => setDialog("date")}>
+        <button className="card-action" type="button" onClick={openReschedule}>
           <Clock3 size={15} aria-hidden /> {agenda ? "Отложить" : "Перенести"}
         </button>
         <button
@@ -236,10 +287,31 @@ export function WorkItemCard({
           <Trash2 size={15} aria-hidden />
         </button>
       </div>
-      {mutation.isError && (
+      {rescheduleStatus && (
+        <p className="reschedule-status" role="status">
+          {rescheduleStatus}
+        </p>
+      )}
+      {mutation.isError && !rescheduleOpen && (
         <p className="inline-error">
           Не удалось выполнить действие. Обновите данные и повторите.
         </p>
+      )}
+      {rescheduleOpen && (
+        <RescheduleDialog
+          dialogId={`reschedule-${item.id}`}
+          currentDueAt={item.effective_at}
+          dateTimePreferences={dateTimePreferences}
+          pending={mutation.isPending}
+          error={rescheduleError}
+          onSubmit={submitReschedule}
+          onCancel={() => {
+            if (!mutation.isPending) {
+              mutation.reset();
+              setRescheduleOpen(false);
+            }
+          }}
+        />
       )}
       {dialog && (
         <div className="dialog-backdrop" role="presentation">
@@ -258,62 +330,28 @@ export function WorkItemCard({
               <X size={18} aria-hidden />
             </button>
             <h2 id={`dialog-${item.id}`}>
-              {dialog === "date"
-                ? "Новая дата"
-                : dialog === "decision"
-                  ? "Зафиксировать решение"
-                  : "Добавить контекст"}
+              {dialog === "decision" ? "Зафиксировать решение" : "Добавить контекст"}
             </h2>
-            {dialog === "date" ? (
-              <div className="date-fields">
-                <label>
-                  Дата
-                  <input
-                    type="date"
-                    value={localDate}
-                    onChange={(event) => setLocalDate(event.target.value)}
-                  />
-                </label>
-                <label>
-                  Время
-                  <input
-                    type="time"
-                    value={localTime}
-                    onChange={(event) => setLocalTime(event.target.value)}
-                  />
-                </label>
-              </div>
-            ) : (
-              <label className="dialog-field">
-                Текст
-                <textarea
-                  autoFocus
-                  value={content}
-                  onChange={(event) => setContent(event.target.value)}
-                />
-              </label>
-            )}
+            <label className="dialog-field">
+              Текст
+              <textarea
+                autoFocus
+                value={content}
+                onChange={(event) => setContent(event.target.value)}
+              />
+            </label>
             <button
               className="button button--primary button--wide"
               type="button"
-              disabled={
-                mutation.isPending || (dialog === "date" ? !localDate : !content.trim())
-              }
+              disabled={mutation.isPending || !content.trim()}
               onClick={() => {
-                if (dialog === "date") {
-                  act(agenda ? "defer" : "reschedule", {
-                    local_date: localDate,
-                    local_time: localTime,
-                  });
-                } else {
-                  const action =
-                    dialog === "decision"
-                      ? "add_decision"
-                      : dialog === "result"
-                        ? "add_result"
-                        : "add_note";
-                  act(action, { content });
-                }
+                const action =
+                  dialog === "decision"
+                    ? "add_decision"
+                    : dialog === "result"
+                      ? "add_result"
+                      : "add_note";
+                act(action, { content });
               }}
             >
               Сохранить

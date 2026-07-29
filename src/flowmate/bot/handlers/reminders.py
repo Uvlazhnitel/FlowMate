@@ -204,7 +204,7 @@ async def reminder_callback(
                 tomorrow_at(
                     datetime.now(UTC),
                     timezone=preferences.zoneinfo,
-                    local_time=preferences.morning_digest_time,
+                    local_time=preferences.default_reminder_time,
                 )
                 if action == "snoozetomorrow"
                 else None

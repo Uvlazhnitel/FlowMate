@@ -7,6 +7,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from sqlalchemy.exc import SQLAlchemyError
@@ -19,13 +20,13 @@ from flowmate.ai.schemas import (
 )
 from flowmate.bot.handlers.navigation import today_command
 from flowmate.bot.handlers.work_items import (
+    action_session_message,
     apply_management_intent,
     details_keyboard,
     encode_revision,
     execute_management_intent,
     format_datetime,
     format_work_item_details,
-    next_working_day,
     parse_user_datetime,
     parse_work_item_callback,
     refresh_work_item_card,
@@ -34,11 +35,13 @@ from flowmate.bot.handlers.work_items import (
     work_item_callback,
     work_item_selection_callback,
 )
-from flowmate.db.models import Note, WorkItem, WorkItemEvent
+from flowmate.db.models import Note, WorkItem, WorkItemActionSession, WorkItemEvent
+from flowmate.reminders.parsing import SnoozeParsingService
 from flowmate.reminders.preferences import NotificationDefaults
 from flowmate.task_engine.details import WorkItemDetails
 from flowmate.task_engine.enums import WorkItemAction
 from flowmate.task_engine.management import StaleWorkItemError
+from flowmate.task_engine.rescheduling import ReschedulePreset, ReschedulingService
 
 
 def make_message(text: str) -> Message:
@@ -183,23 +186,22 @@ def test_completed_detail_has_only_reopen_and_history() -> None:
     ]
 
 
-def test_reschedule_presets_use_local_working_days() -> None:
+def test_reschedule_keyboard_contains_all_presets() -> None:
     details = make_details("follow_up")
     details.item.next_follow_up_at = datetime(2026, 7, 24, 14, tzinfo=UTC)
     now = datetime(2026, 7, 24, 18, tzinfo=UTC)
 
-    target = next_working_day(
-        now,
-        details.item,
-        ZoneInfo("UTC"),
-        datetime.min.time().replace(hour=9),
-    )
     keyboard = reschedule_options_keyboard(details.item, now)
+    labels = {button.text for row in keyboard.inline_keyboard for button in row}
 
-    assert target == datetime(2026, 7, 27, 14, tzinfo=UTC)
-    assert "Позже сегодня" in {
-        button.text for row in keyboard.inline_keyboard for button in row
-    }
+    assert {
+        "Позже сегодня",
+        "Завтра утром",
+        "Следующий рабочий день",
+        "Через неделю",
+        "Другая дата",
+        "Отмена",
+    } == labels
     revision = encode_revision(int(details.item.updated_at.timestamp() * 1_000_000))
     assert any(
         (button.callback_data or "").endswith(revision)
@@ -318,6 +320,208 @@ async def test_complete_callback_commits_and_refreshes_card() -> None:
     assert response_call is not None
     assert response_call.args == (f"✅ Выполнено: {details.item.title}",)
     assert response_call.kwargs["reply_markup"].is_persistent is True
+
+
+@pytest.mark.asyncio
+async def test_reschedule_preset_callback_uses_shared_service() -> None:
+    details = make_details()
+    callback, update = make_callback(details.item, "rn")
+    session = MagicMock(spec=AsyncSession)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    target = datetime(2026, 7, 29, 14, tzinfo=UTC)
+    details.item.due_at = target
+    preferences = SimpleNamespace(
+        zoneinfo=ZoneInfo("UTC"),
+        default_reminder_time=time(8, 30),
+        default_snooze_minutes=60,
+    )
+    service = MagicMock(spec=ReschedulingService)
+    service.reschedule_preset = AsyncMock(
+        return_value=SimpleNamespace(work_item=details.item, changed=True)
+    )
+
+    with (
+        patch(
+            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
+            new=AsyncMock(return_value=SimpleNamespace(id=details.item.user_id)),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.get_work_item",
+            new=AsyncMock(return_value=details.item),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.get_active_draft_for_user",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.get_active_action_session",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.get_effective_notification_preferences",
+            new=AsyncMock(return_value=preferences),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.send_details",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
+        patch.object(Message, "answer", new_callable=AsyncMock),
+    ):
+        await work_item_callback(
+            callback,
+            update,
+            cast(AsyncSession, session),
+            ZoneInfo("UTC"),
+            30,
+            notification_defaults(),
+            rescheduling_service=cast(ReschedulingService, service),
+        )
+
+    service.reschedule_preset.assert_awaited_once()
+    call = service.reschedule_preset.await_args
+    assert call is not None
+    assert call.args[4] is ReschedulePreset.NEXT_WEEK
+    assert call.kwargs["preferences"] is preferences
+    cast(AsyncMock, session.commit).assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_card_tomorrow_snooze_uses_default_reminder_time() -> None:
+    details = make_details()
+    reminder_id = uuid4()
+    message = make_message("card")
+    callback = CallbackQuery(
+        id="callback-id",
+        from_user=cast(User, message.from_user),
+        chat_instance="test",
+        message=message,
+        data=f"wi:zt:{reminder_id}:{encode_revision(42)}",
+    )
+    update = Update(update_id=9150, callback_query=callback)
+    session = MagicMock(spec=AsyncSession)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    preferences = SimpleNamespace(
+        zoneinfo=ZoneInfo("UTC"),
+        default_reminder_time=time(7, 45),
+        default_snooze_minutes=60,
+    )
+
+    with (
+        patch(
+            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
+            new=AsyncMock(return_value=SimpleNamespace(id=details.item.user_id)),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.get_work_item",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.get_reminder_action_target",
+            new=AsyncMock(return_value=SimpleNamespace(work_item=details.item)),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.get_active_draft_for_user",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.get_active_action_session",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.get_effective_notification_preferences",
+            new=AsyncMock(return_value=preferences),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.snooze_work_item_reminder",
+            new=AsyncMock(return_value=(MagicMock(), True)),
+        ) as snooze,
+        patch(
+            "flowmate.bot.handlers.work_items.send_details",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
+        patch.object(Message, "answer", new_callable=AsyncMock),
+    ):
+        await work_item_callback(
+            callback,
+            update,
+            cast(AsyncSession, session),
+            ZoneInfo("UTC"),
+            30,
+            notification_defaults(),
+        )
+
+    snooze_call = snooze.await_args
+    assert snooze_call is not None
+    until = snooze_call.kwargs["until"]
+    assert isinstance(until, datetime)
+    assert until.astimezone(ZoneInfo("UTC")).time() == time(7, 45)
+    cast(AsyncMock, session.commit).assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reschedule_text_reply_uses_shared_service() -> None:
+    message = make_message("в пятницу после обеда")
+    session = MagicMock(spec=AsyncSession)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    item = make_details().item
+    item.due_at = datetime(2026, 7, 24, 15, tzinfo=UTC)
+    action = WorkItemActionSession(
+        id=uuid4(),
+        user_id=item.user_id,
+        work_item_id=item.id,
+        action=WorkItemAction.RESCHEDULE.value,
+        status="open",
+        context={"work_item_revision": 12},
+        expires_at=datetime.now(UTC),
+    )
+    preferences = SimpleNamespace(
+        zoneinfo=ZoneInfo("UTC"),
+        default_reminder_time=time(8, 30),
+    )
+    service = MagicMock(spec=ReschedulingService)
+    service.reschedule_text = AsyncMock(
+        return_value=SimpleNamespace(work_item=item, changed=True)
+    )
+
+    with (
+        patch(
+            "flowmate.bot.handlers.work_items.get_effective_notification_preferences",
+            new=AsyncMock(return_value=preferences),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.finish_action_session",
+            new=AsyncMock(),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.answer_with_main_menu",
+            new=AsyncMock(),
+        ),
+    ):
+        await action_session_message(
+            message,
+            cast(Bot, MagicMock(spec=Bot)),
+            Update(update_id=9200, message=message),
+            cast(AsyncSession, session),
+            action,
+            item.user_id,
+            ZoneInfo("UTC"),
+            notification_defaults(),
+            SnoozeParsingService(None, timeout_seconds=1),
+            None,
+            rescheduling_service=cast(ReschedulingService, service),
+        )
+
+    service.reschedule_text.assert_awaited_once()
+    call = service.reschedule_text.await_args
+    assert call is not None
+    assert call.args[4] == "в пятницу после обеда"
+    assert call.kwargs["expected_revision"] == 12
+    cast(AsyncMock, session.commit).assert_awaited_once()
 
 
 @pytest.mark.asyncio

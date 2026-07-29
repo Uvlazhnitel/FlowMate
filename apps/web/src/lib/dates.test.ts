@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { formatDateTime, formatRelative } from "./dates";
+import { formatDateTime, formatRelative, formatRescheduledDateTime } from "./dates";
 
 describe("date display preferences", () => {
   it("uses day-first dates and a 24-hour clock", () => {
@@ -34,5 +34,15 @@ describe("date display preferences", () => {
       }),
     ).toBe("только что");
     vi.useRealTimers();
+  });
+
+  it("formats a reschedule confirmation with the real weekday and time", () => {
+    expect(
+      formatRescheduledDateTime("2026-08-07T15:00:00Z", {
+        timezone: "UTC",
+        dateDisplayFormat: "day_month_year",
+        timeDisplayFormat: "24h",
+      }),
+    ).toBe("пятницу, 7 августа, 15:00");
   });
 });

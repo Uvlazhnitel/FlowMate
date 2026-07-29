@@ -4,10 +4,10 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from flowmate.api.dependencies import get_session
+from flowmate.api.dependencies import get_rescheduling_service, get_session
 from flowmate.auth.dependencies import PwaIdentity, require_csrf, require_pwa_session
 from flowmate.core.config import Settings, get_settings
 from flowmate.reminders.actions import snooze_work_item_reminder
@@ -16,6 +16,7 @@ from flowmate.reminders.preferences import (
     NotificationDefaults,
     get_effective_notification_preferences,
 )
+from flowmate.reminders.sync import ReminderPolicy
 from flowmate.reminders.timezone import resolve_local_datetime
 from flowmate.task_engine.enums import PlannerStatus, WorkItemPriority, WorkItemType
 from flowmate.task_engine.management import (
@@ -47,6 +48,10 @@ from flowmate.task_engine.operational import (
     today_overview_snapshot,
 )
 from flowmate.task_engine.queries import PersonScope
+from flowmate.task_engine.rescheduling import (
+    ReschedulePreset,
+    ReschedulingService,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["pwa-operations"])
 
@@ -92,6 +97,19 @@ class DateWorkItemAction(WorkItemActionBase):
     local_time: time
 
 
+class PresetWorkItemAction(WorkItemActionBase):
+    action: Literal["reschedule_preset"]
+    preset: ReschedulePreset
+
+
+class TextWorkItemAction(WorkItemActionBase):
+    action: Literal["reschedule_text"]
+    phrase: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
+    ]
+
+
 class SnoozeWorkItemAction(WorkItemActionBase):
     action: Literal["snooze"]
     duration_minutes: int | None = Field(default=None, ge=1, le=10_080)
@@ -118,6 +136,8 @@ WorkItemActionRequest = Annotated[
     SimpleWorkItemAction
     | ContentWorkItemAction
     | DateWorkItemAction
+    | PresetWorkItemAction
+    | TextWorkItemAction
     | SnoozeWorkItemAction
     | EditWorkItemAction,
     Field(discriminator="action"),
@@ -365,6 +385,9 @@ async def work_item_action(
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_csrf)],
     settings: Annotated[Settings, Depends(get_settings)],
+    rescheduling_service: Annotated[
+        ReschedulingService, Depends(get_rescheduling_service)
+    ],
 ) -> dict[str, object]:
     bind_client_action(session, payload.client_action_id)
     user_id = identity.user.id
@@ -402,6 +425,37 @@ async def work_item_action(
                 work_item_id,
                 None,
                 _target_datetime(date_payload, preferences.timezone),
+                reminder_policy=ReminderPolicy(
+                    deadline_lead_minutes=settings.deadline_reminder_lead_minutes
+                ),
+                expected_revision=payload.expected_revision,
+            )
+        elif payload.action == "reschedule_preset":
+            preferences = await _preferences(session, identity, settings)
+            result = await rescheduling_service.reschedule_preset(
+                session,
+                user_id,
+                work_item_id,
+                None,
+                payload.preset,
+                preferences=preferences,
+                reminder_policy=ReminderPolicy(
+                    deadline_lead_minutes=settings.deadline_reminder_lead_minutes
+                ),
+                expected_revision=payload.expected_revision,
+            )
+        elif payload.action == "reschedule_text":
+            preferences = await _preferences(session, identity, settings)
+            result = await rescheduling_service.reschedule_text(
+                session,
+                user_id,
+                work_item_id,
+                None,
+                payload.phrase,
+                preferences=preferences,
+                reminder_policy=ReminderPolicy(
+                    deadline_lead_minutes=settings.deadline_reminder_lead_minutes
+                ),
                 expected_revision=payload.expected_revision,
             )
         elif payload.action in {"add_note", "add_result"}:

@@ -11,7 +11,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from flowmate.ai.errors import AIConfigurationError
 from flowmate.ai.factory import create_ai_provider
-from flowmate.ai.provider import AIProvider
+from flowmate.ai.provider import AIProvider, SnoozeTimeProvider
 from flowmate.api.errors import register_exception_handlers
 from flowmate.api.middleware import RequestContextMiddleware
 from flowmate.api.routes import create_router
@@ -19,6 +19,8 @@ from flowmate.auth.delivery import LoginCodeSender, TelegramLoginCodeSender
 from flowmate.core.config import Settings, get_settings
 from flowmate.core.logging import configure_logging
 from flowmate.db.session import create_engine, create_session_factory
+from flowmate.reminders.parsing import SnoozeParsingService
+from flowmate.task_engine.rescheduling import ReschedulingService
 
 
 def create_app(
@@ -45,6 +47,17 @@ def create_app(
             logging.getLogger(__name__).warning(
                 "ai_provider_disabled category=incomplete_configuration"
             )
+        snooze_provider = (
+            owned_ai_provider
+            if isinstance(owned_ai_provider, SnoozeTimeProvider)
+            else None
+        )
+        app.state.rescheduling_service = ReschedulingService(
+            SnoozeParsingService(
+                snooze_provider,
+                timeout_seconds=app_settings.ai_timeout_seconds,
+            )
+        )
         if (
             login_code_sender is None
             and app_settings.pwa_telegram_user_id is not None

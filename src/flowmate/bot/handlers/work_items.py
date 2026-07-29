@@ -1,7 +1,7 @@
 # ruff: noqa: RUF001
 import json
 import logging
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from uuid import UUID
@@ -52,7 +52,7 @@ from flowmate.reminders.preferences import (
     get_effective_notification_preferences,
 )
 from flowmate.reminders.sync import ReminderPolicy
-from flowmate.reminders.timezone import resolve_local_datetime, tomorrow_at
+from flowmate.reminders.timezone import tomorrow_at
 from flowmate.speech.errors import AudioTooLargeError, SpeechError, SpeechTimeoutError
 from flowmate.speech.service import TranscriptionService
 from flowmate.task_engine.action_sessions import (
@@ -86,6 +86,12 @@ from flowmate.task_engine.management import (
     work_item_revision,
 )
 from flowmate.task_engine.queries import WorkItemListEntry, enrich_work_item_list
+from flowmate.task_engine.rescheduling import (
+    LaterTodayUnavailableError,
+    ReschedulePreset,
+    ReschedulingService,
+    effective_schedule,
+)
 from flowmate.task_engine.service import (
     get_work_item,
     list_work_item_events,
@@ -495,7 +501,12 @@ def snooze_options_keyboard(details: WorkItemDetails) -> InlineKeyboardMarkup | 
     )
 
 
-def reschedule_options_keyboard(item: WorkItem, now: datetime) -> InlineKeyboardMarkup:
+def reschedule_options_keyboard(
+    item: WorkItem,
+    now: datetime,
+    *,
+    later_today_available: bool | None = None,
+) -> InlineKeyboardMarkup:
     revision = encode_revision(work_item_revision(item.updated_at))
 
     def data(action: str) -> str:
@@ -503,7 +514,12 @@ def reschedule_options_keyboard(item: WorkItem, now: datetime) -> InlineKeyboard
 
     rows: list[list[InlineKeyboardButton]] = []
     local_now = now.astimezone(now.tzinfo)
-    if (local_now + timedelta(hours=3)).date() == local_now.date():
+    show_later_today = (
+        (local_now + timedelta(hours=3, minutes=14)).date() == local_now.date()
+        if later_today_available is None
+        else later_today_available
+    )
+    if show_later_today:
         rows.append(
             [InlineKeyboardButton(text="Позже сегодня", callback_data=data("rt"))]
         )
@@ -517,33 +533,12 @@ def reschedule_options_keyboard(item: WorkItem, now: datetime) -> InlineKeyboard
     )
     rows.append(
         [
+            InlineKeyboardButton(text="Через неделю", callback_data=data("rn")),
             InlineKeyboardButton(text="Другая дата", callback_data=data("rd")),
-            InlineKeyboardButton(text="Отмена", callback_data=f"wi:b:{item.id}"),
         ]
     )
+    rows.append([InlineKeyboardButton(text="Отмена", callback_data=f"wi:b:{item.id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def next_working_day(
-    now: datetime,
-    item: WorkItem,
-    timezone: ZoneInfo,
-    morning_time: time,
-) -> datetime:
-    target_date = now.astimezone(timezone).date() + timedelta(days=1)
-    while target_date.weekday() >= 5:
-        target_date += timedelta(days=1)
-    current = (
-        item.next_follow_up_at
-        if item.type == WorkItemType.FOLLOW_UP.value
-        else item.due_at
-    )
-    target_time = (
-        current.astimezone(timezone).time().replace(tzinfo=None)
-        if current is not None
-        else morning_time
-    )
-    return resolve_local_datetime(target_date, target_time, timezone).astimezone(UTC)
 
 
 async def start_input_session(
@@ -584,6 +579,7 @@ async def work_item_callback(
     work_item_action_ttl_minutes: int,
     notification_defaults: NotificationDefaults,
     reminder_policy: ReminderPolicy | None = None,
+    rescheduling_service: ReschedulingService | None = None,
 ) -> None:
     callback_acknowledged = False
     parsed = parse_work_item_callback(callback_query.data)
@@ -662,9 +658,28 @@ async def work_item_callback(
         if action == "r":
             if work_item_revision(item.updated_at) != expected_revision:
                 raise StaleWorkItemError("work item card is stale")
+            preferences = await get_effective_notification_preferences(
+                db_session, user.id, notification_defaults
+            )
+            current = datetime.now(UTC)
+            service = rescheduling_service or ReschedulingService(
+                SnoozeParsingService(None, timeout_seconds=1)
+            )
+            try:
+                service.resolve_preset(
+                    item,
+                    ReschedulePreset.LATER_TODAY,
+                    preferences=preferences,
+                    now=current,
+                )
+                later_today_available = True
+            except LaterTodayUnavailableError:
+                later_today_available = False
             await message.edit_reply_markup(
                 reply_markup=reschedule_options_keyboard(
-                    item, datetime.now(app_timezone)
+                    item,
+                    current.astimezone(app_timezone),
+                    later_today_available=later_today_available,
                 )
             )
             await callback_query.answer("Выберите новую дату.")
@@ -724,6 +739,7 @@ async def work_item_callback(
             "rt",
             "rm",
             "rw",
+            "rn",
             "z15",
             "z1",
             "z3",
@@ -796,33 +812,28 @@ async def work_item_callback(
             )
             result = None
             response = "Follow-up создан." if created else "Follow-up уже создан."
-        elif action in {"rt", "rm", "rw"}:
-            if action == "rt":
-                new_date = now.astimezone(preferences.zoneinfo) + timedelta(hours=3)
-                if new_date.date() != now.astimezone(preferences.zoneinfo).date():
-                    raise ValueError("later today is no longer available")
-            elif action == "rm":
-                new_date = tomorrow_at(
-                    now,
-                    timezone=preferences.zoneinfo,
-                    local_time=preferences.morning_digest_time,
-                )
-            else:
-                new_date = next_working_day(
-                    now,
-                    item,
-                    preferences.zoneinfo,
-                    preferences.morning_digest_time,
-                )
-            result = await reschedule_work_item(
+        elif action in {"rt", "rm", "rw", "rn"}:
+            service = rescheduling_service or ReschedulingService(
+                SnoozeParsingService(None, timeout_seconds=1)
+            )
+            preset = {
+                "rt": ReschedulePreset.LATER_TODAY,
+                "rm": ReschedulePreset.TOMORROW_MORNING,
+                "rw": ReschedulePreset.NEXT_WORKING_DAY,
+                "rn": ReschedulePreset.NEXT_WEEK,
+            }[action]
+            result = await service.reschedule_preset(
                 db_session,
                 user.id,
                 item.id,
                 update_id,
-                new_date,
+                preset,
+                preferences=preferences,
                 reminder_policy=reminder_policy,
                 expected_revision=expected_revision,
+                now=now,
             )
+            new_date = effective_schedule(result.work_item)
             response = (
                 f"Перенесено на {format_datetime(new_date, preferences.zoneinfo)}."
             )
@@ -837,7 +848,7 @@ async def work_item_callback(
                 tomorrow_at(
                     now,
                     timezone=preferences.zoneinfo,
-                    local_time=preferences.morning_digest_time,
+                    local_time=preferences.default_reminder_time,
                 )
                 if action == "zt"
                 else None
@@ -913,6 +924,7 @@ async def action_session_message(
     snooze_parsing_service: SnoozeParsingService,
     transcription_service: TranscriptionService | None,
     reminder_policy: ReminderPolicy | None = None,
+    rescheduling_service: ReschedulingService | None = None,
 ) -> None:
     action = WorkItemAction(active_work_item_action.action)
     text = message.text.strip() if message.text else ""
@@ -1017,21 +1029,16 @@ async def action_session_message(
             preferences = await get_effective_notification_preferences(
                 db_session, action_user_id, notification_defaults
             )
-            parsed_date = parse_user_datetime(text, preferences.zoneinfo)
-            if parsed_date is None:
-                parsed_date = await snooze_parsing_service.parse(
-                    text,
-                    timezone=preferences.zoneinfo,
-                    now=datetime.now(preferences.zoneinfo),
-                    default_time=preferences.default_reminder_time,
-                )
-            new_date = parsed_date
-            await reschedule_work_item(
+            service = rescheduling_service or ReschedulingService(
+                snooze_parsing_service
+            )
+            result = await service.reschedule_text(
                 db_session,
                 action_user_id,
                 item_id,
                 event_update.update_id,
-                new_date,
+                text,
+                preferences=preferences,
                 reminder_policy=reminder_policy,
                 expected_revision=(
                     int(active_work_item_action.context["work_item_revision"])
@@ -1039,9 +1046,12 @@ async def action_session_message(
                     else None
                 ),
             )
+            rescheduled_at = effective_schedule(result.work_item)
+            if rescheduled_at is None:
+                raise RuntimeError("rescheduled work item has no effective date")
             response = (
                 f"Запись перенесена на "
-                f"{format_datetime(new_date, preferences.zoneinfo)}."
+                f"{format_datetime(rescheduled_at, preferences.zoneinfo)}."
             )
         elif action is WorkItemAction.ADD_NOTE:
             await add_work_item_note(
