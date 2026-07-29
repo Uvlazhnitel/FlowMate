@@ -1031,64 +1031,99 @@ h2 {
   background: var(--paper-strong);
   color: var(--ink);
 }
-.summary-grid {
+.today-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
-.summary-card {
-  min-height: 138px;
-  padding: 20px;
+.today-summary-card {
+  min-width: 0;
+  min-height: 116px;
+  padding: 18px;
   display: grid;
   grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 6px;
   border: 1px solid var(--line);
   border-radius: 19px;
   background: rgba(255, 250, 240, 0.78);
+  color: var(--ink);
   text-decoration: none;
   transition:
     transform 0.16s,
-    box-shadow 0.16s;
+    box-shadow 0.16s,
+    border-color 0.16s;
 }
-.summary-card:hover {
+.today-summary-card:hover {
   transform: translateY(-3px);
   box-shadow: var(--shadow);
 }
-.summary-card > span {
-  grid-column: 1 / -1;
+.today-summary-card > span {
+  grid-column: 1;
   color: var(--muted);
   font-size: 12px;
   font-weight: 750;
 }
-.summary-card strong {
-  align-self: end;
+.today-summary-card strong {
+  grid-column: 1;
   font:
-    600 44px/1 "Fraunces Variable",
+    600 38px/1 "Fraunces Variable",
     serif;
 }
-.summary-card svg {
-  align-self: end;
+.today-summary-card svg {
+  grid-column: 2;
+  grid-row: 1 / 3;
   color: var(--forest-light);
 }
-.summary-card--urgent {
+.today-summary-card--urgent {
   background: #f6dfd5;
   border-color: rgba(180, 70, 39, 0.22);
 }
-.dashboard-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.7fr);
-  gap: 30px;
-  margin-top: 48px;
+.today-summary-card--active {
+  border-color: var(--forest-light);
+  box-shadow: inset 0 -3px var(--forest-light);
 }
-.dashboard-rail {
-  display: grid;
-  align-content: start;
-  gap: 18px;
+.today-summary-card:focus-visible,
+.today-attention-links a:focus-visible,
+.today-more-link:focus-visible {
+  outline: 3px solid var(--coral);
+  outline-offset: 3px;
 }
-.rail-panel {
-  padding: 22px;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  background: rgba(255, 250, 240, 0.68);
+.today-attention-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 14px;
+}
+.today-attention-links a {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(23, 63, 58, 0.08);
+  color: var(--forest);
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: none;
+}
+.today-attention-links a[aria-current="page"] {
+  background: var(--forest);
+  color: white;
+}
+.today-overview {
+  display: grid;
+  gap: 8px;
+}
+.today-overview--empty {
+  margin-top: 40px;
+}
+.today-more-link {
+  display: inline-flex;
+  margin-top: 18px;
+  color: var(--forest);
+  font-size: 13px;
+  font-weight: 750;
+}
+.today-selected-section {
+  margin-top: 40px;
 }
 .section-heading {
   min-height: 38px;
@@ -1112,30 +1147,6 @@ h2 {
   color: var(--forest);
   font-size: 11px;
   font-weight: 800;
-}
-.compact-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-  padding: 13px 0;
-  border-top: 1px solid var(--line);
-}
-.compact-row svg {
-  color: var(--coral);
-  flex: 0 0 auto;
-}
-.compact-row strong,
-.compact-row span {
-  display: block;
-}
-.compact-row strong {
-  font-size: 13px;
-  line-height: 1.35;
-}
-.compact-row span {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 11px;
 }
 .muted-copy {
   color: var(--muted);
@@ -1491,17 +1502,6 @@ h2 {
   display: none;
 }
 
-@media (max-width: 1100px) {
-  .summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .dashboard-layout {
-    grid-template-columns: 1fr;
-  }
-  .dashboard-rail {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
 @media (max-width: 900px) {
   .operational-page {
     padding-top: 34px;
@@ -1558,13 +1558,28 @@ h2 {
   }
 }
 @media (max-width: 640px) {
-  .summary-grid,
-  .directory-grid,
-  .dashboard-rail {
+  .directory-grid {
     grid-template-columns: 1fr;
   }
-  .summary-card {
-    min-height: 108px;
+  .today-summary {
+    gap: 6px;
+  }
+  .today-summary-card {
+    min-height: 86px;
+    padding: 10px;
+    border-radius: 14px;
+  }
+  .today-summary-card strong {
+    font-size: 29px;
+  }
+  .today-summary-card > span {
+    overflow: hidden;
+    font-size: 9px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .today-summary-card svg {
+    width: 13px;
   }
   .work-card {
     padding: 17px;

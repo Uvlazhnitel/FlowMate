@@ -6,7 +6,6 @@ import {
   CircleHelp,
   Clock3,
   Inbox,
-  LayoutDashboard,
   ListChecks,
   MoreHorizontal,
   Settings,
@@ -28,7 +27,6 @@ interface NavigationItem {
 const navigationItems: NavigationItem[] = [
   { to: "/today", label: "Сегодня", icon: CalendarDays },
   { to: "/inbox", label: "Входящие", icon: Inbox },
-  { to: "/dashboard", label: "Панель", icon: LayoutDashboard },
   { to: "/agenda", label: "Повестка", icon: CircleHelp },
   { to: "/timeline", label: "Лента", icon: Clock3 },
   { to: "/topics", label: "Темы", icon: Tags },
@@ -37,13 +35,7 @@ const navigationItems: NavigationItem[] = [
   { to: "/settings", label: "Настройки", icon: Settings },
 ];
 
-const primaryMobilePaths = new Set([
-  "/today",
-  "/inbox",
-  "/dashboard",
-  "/agenda",
-  "/people",
-]);
+const primaryMobilePaths = new Set(["/today", "/inbox", "/agenda", "/people"]);
 
 function Navigation({ mobile = false }: { mobile?: boolean }) {
   const visible = mobile

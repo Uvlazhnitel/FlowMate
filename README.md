@@ -139,57 +139,34 @@ and each user's default reminder time.
 
 The PWA lives in `apps/web` and uses React, TypeScript, Vite, TanStack Query,
 React Router, Radix primitives, and a generated service worker. It provides the
-responsive application shell and protected routes for Dashboard, Today,
-Topics, People, Agenda, Inbox, Planner Queue, Timeline, Settings, and Meetings.
-Dashboard, Today, Topics, People, and Agenda provide ownership-safe operational
-views and reuse Task Engine services for work-item actions. Inbox supports
-explicit review and atomic conversion of uncertain drafts, Planner Queue tracks
-manual transfer state without Microsoft integration, Timeline combines
-redacted WorkItem and Meeting history, and Settings manages notification preferences, active topics,
-people, aliases, and provider readiness booleans without returning secrets.
-Meetings provides an active Meeting Mode card, manual start/end/cancel actions,
-participant and topic selection, paginated recent meetings, and chronological
-fast captures. Text and voice captures are acknowledged immediately and kept as
-editable drafts; unresolved AI fields do not interrupt an active meeting. After
-`/meeting_end`, structured review proposes decisions and next actions without
-writing final records. The user can clarify, exclude, send incomplete items to
-Inbox, opt individual actions into the manual Planner Queue, and confirm ready
-items through the existing Task Engine and reminder services.
-Text or voice clarification answers update only the referenced structured
-capture item and its review projection. Failed parsing leaves that item pending;
-successful confirmation remains atomic and idempotent.
+responsive application shell and protected routes for Today, Inbox, Agenda,
+Timeline, Topics, People, Planner Queue, and Settings. Today is the start screen
+and combines the daily summary, recommended focus, later tasks, and paginated
+priority sections. The legacy `/dashboard` route redirects to `/today` for
+compatibility and is not a separate screen. Operational views reuse ownership-safe
+Task Engine services for work-item actions. Inbox supports explicit review and
+atomic conversion of uncertain drafts, Planner Queue tracks manual transfer
+state without Microsoft integration, Timeline shows WorkItem history, and
+Settings manages notification preferences, active topics, people, aliases, and
+provider readiness booleans without returning secrets.
 
 ### Work and Personal
 
 FlowMate has two database-backed spaces: `Личное` (`personal`) and `Работа`
 (`work`). Select the current space in the PWA shell or with Telegram command
-`/workspace`. Dashboard, Today, Topics, Agenda, Inbox, Planner Queue, Timeline,
-Meetings, notes, search, and new captures use only that space. People and
+`/workspace`. Today, Topics, Agenda, Inbox, Planner Queue, Timeline, notes,
+search, and new captures use only that space. People and
 notification preferences are shared, while each person's operational counts
 and history are calculated for the current space.
 
-Draft conversion keeps the draft's space, and meeting results keep the
-meeting's space. Reminders retain their record's space and continue to fire
-after switching; daily digests are generated separately and include the space
-name. Switching is rejected while a meeting, draft, clarification, setup, or
-free-form action is active so a reply cannot cross contexts. Existing final
-records cannot yet be moved between spaces. `APP_ACTIVE_WORKSPACE` accepts only
-`personal` or `work` and is used as the default for a newly created user; the
-database value becomes authoritative afterwards.
-
-Typical Telegram flow:
-
-```text
-/meeting
-<send text or voice captures>
-/meeting_notes
-/meeting_end
-/meeting_review
-```
-
-The PWA meeting detail at `/meetings/{id}` shows metadata, chronological
-captures, summary, agenda outcomes, decisions, resulting records, unresolved
-items, next actions, and safe meeting history.
+Draft conversion keeps the draft's space. Reminders retain their record's space
+and continue to fire after switching; daily digests are generated separately
+and include the space name. Switching is rejected while a draft,
+clarification, setup, or free-form action is active so a reply cannot cross
+contexts. Existing final records cannot yet be moved between spaces.
+`APP_ACTIVE_WORKSPACE` accepts only `personal` or `work` and is used as the
+default for a newly created user; the database value becomes authoritative
+afterwards.
 
 Configure the single PWA owner with a Telegram user ID that is also present in
 `TELEGRAM_ALLOWED_USER_IDS`:

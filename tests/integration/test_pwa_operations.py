@@ -24,6 +24,7 @@ from flowmate.task_engine.operational import (
     TodaySection,
     dashboard_snapshot,
     list_today_section,
+    today_overview_snapshot,
 )
 from flowmate.task_engine.service import (
     create_person,
@@ -122,6 +123,10 @@ async def test_pwa_workspace_switch_changes_operational_scope(
             assert [item["title"] for item in personal.json()["items"]] == [
                 "Personal only"
             ]
+            personal_overview = await client.get("/api/v1/today/overview")
+            assert [item["title"] for item in personal_overview.json()["focus"]] == [
+                "Personal only"
+            ]
 
             switched = await client.put(
                 "/api/v1/workspace",
@@ -135,6 +140,10 @@ async def test_pwa_workspace_switch_changes_operational_scope(
             ] == "work"
             work = await client.get("/api/v1/today?section=due_today")
             assert [item["title"] for item in work.json()["items"]] == ["Work only"]
+            work_overview = await client.get("/api/v1/today/overview")
+            assert [item["title"] for item in work_overview.json()["focus"]] == [
+                "Work only"
+            ]
 
 
 @pytest.mark.integration
@@ -152,6 +161,7 @@ async def test_operational_views_actions_and_user_isolation(
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             assert (await client.get("/api/v1/dashboard")).status_code == 401
+            assert (await client.get("/api/v1/today/overview")).status_code == 401
             csrf = await authenticated_client(client, sender)
 
             async with AsyncSession(database_engine) as session:
@@ -225,6 +235,17 @@ async def test_operational_views_actions_and_user_isolation(
             }
             assert dashboard.json()["recommended"][0]["title"] == "Prepare launch"
             assert len(dashboard.json()["activity"]) == 3
+            overview = await client.get("/api/v1/today/overview")
+            assert overview.status_code == 200
+            assert overview.json()["timezone"] == "UTC"
+            assert overview.json()["summary"] == dashboard.json()["summary"]
+            assert overview.json()["focus"][0]["title"] == "Prepare launch"
+            assert all(
+                item["id"] != str(foreign_id) for item in overview.json()["focus"]
+            )
+            assert (
+                app.openapi()["paths"]["/api/v1/dashboard"]["get"]["deprecated"] is True
+            )
 
             today = await client.get("/api/v1/today?section=overdue")
             assert [item["id"] for item in today.json()["items"]] == [str(overdue_id)]
@@ -699,3 +720,234 @@ async def test_today_grouping_respects_local_day_and_semantic_types(
     summary = cast(dict[str, int], dashboard["summary"])
     assert summary["overdue"] == 2
     assert summary["due_today"] == 1
+    overview = await today_overview_snapshot(
+        database_session,
+        user.id,
+        now=now,
+        preferences=preferences,
+    )
+    overview_summary = cast(dict[str, int], overview["summary"])
+    assert overview_summary["overdue"] == 2
+    assert overview_summary["due_today"] == 1
+
+
+@pytest.mark.integration
+async def test_today_overview_focus_preserves_category_and_priority_order(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, TELEGRAM_USER_ID + 124)
+    now = datetime(2026, 7, 22, 12, tzinfo=UTC)
+    preferences = effective_preferences(
+        None,
+        NotificationDefaults(
+            timezone="UTC",
+            morning_digest_time=time(8),
+            evening_digest_time=time(18),
+            quiet_hours_start=time(22),
+            quiet_hours_end=time(7),
+            snooze_minutes=60,
+        ),
+    )
+    urgent = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Urgent overdue",
+        status="active",
+        priority="urgent",
+        due_at=now - timedelta(hours=1),
+    )
+    high = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="High overdue",
+        status="active",
+        priority="high",
+        due_at=now - timedelta(hours=2),
+    )
+    follow_up = await create_work_item(
+        database_session,
+        user.id,
+        item_type="follow_up",
+        title="Due follow-up",
+        status="active",
+        next_follow_up_at=now,
+    )
+    waiting = await create_work_item(
+        database_session,
+        user.id,
+        item_type="waiting",
+        title="Overdue waiting",
+        status="waiting",
+        due_at=now - timedelta(minutes=30),
+    )
+    due_today = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Due today",
+        status="active",
+        due_at=now + timedelta(hours=1),
+    )
+    question = await create_work_item(
+        database_session,
+        user.id,
+        item_type="question",
+        title="Question",
+        status="active",
+        due_at=now - timedelta(days=2),
+    )
+
+    overview = await today_overview_snapshot(
+        database_session,
+        user.id,
+        now=now,
+        preferences=preferences,
+    )
+    focus = cast(list[Any], overview["focus"])
+    assert [item.id for item in focus] == [
+        urgent.id,
+        high.id,
+        follow_up.id,
+        waiting.id,
+        due_today.id,
+    ]
+    assert cast(dict[str, int], overview["summary"])["overdue"] == 2
+
+    high.status = "done"
+    await database_session.flush()
+    refreshed = await today_overview_snapshot(
+        database_session,
+        user.id,
+        now=now,
+        preferences=preferences,
+    )
+    refreshed_focus = cast(list[Any], refreshed["focus"])
+    assert [item.id for item in refreshed_focus] == [
+        urgent.id,
+        follow_up.id,
+        waiting.id,
+        due_today.id,
+        question.id,
+    ]
+
+
+@pytest.mark.integration
+async def test_today_overview_later_today_is_bounded_sorted_and_disjoint(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, TELEGRAM_USER_ID + 125)
+    now = datetime(2026, 7, 22, 12, tzinfo=UTC)
+    preferences = effective_preferences(
+        None,
+        NotificationDefaults(
+            timezone="UTC",
+            morning_digest_time=time(8),
+            evening_digest_time=time(18),
+            quiet_hours_start=time(22),
+            quiet_hours_end=time(7),
+            snooze_minutes=60,
+        ),
+    )
+    for index in range(3):
+        await create_work_item(
+            database_session,
+            user.id,
+            item_type="task",
+            title=f"Overdue {index}",
+            status="active",
+            due_at=now - timedelta(hours=index + 1),
+        )
+    await create_work_item(
+        database_session,
+        user.id,
+        item_type="follow_up",
+        title="Focus follow-up",
+        status="active",
+        next_follow_up_at=now,
+    )
+    await create_work_item(
+        database_session,
+        user.id,
+        item_type="waiting",
+        title="Focus waiting",
+        status="waiting",
+        due_at=now - timedelta(minutes=10),
+    )
+    later_items: list[WorkItem] = []
+    shared_due_at = now + timedelta(hours=1)
+    later_items.append(
+        await create_work_item(
+            database_session,
+            user.id,
+            item_type="task",
+            title="Later low",
+            status="active",
+            priority="low",
+            due_at=shared_due_at,
+        )
+    )
+    later_items.append(
+        await create_work_item(
+            database_session,
+            user.id,
+            item_type="task",
+            title="Later urgent",
+            status="active",
+            priority="urgent",
+            due_at=shared_due_at,
+        )
+    )
+    for index in range(10):
+        later_items.append(
+            await create_work_item(
+                database_session,
+                user.id,
+                item_type="task",
+                title=f"Later {index}",
+                status="active",
+                due_at=now + timedelta(hours=2, minutes=index),
+            )
+        )
+    await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Tomorrow",
+        status="active",
+        due_at=now + timedelta(days=1),
+    )
+    for item_type in ("follow_up", "waiting", "question"):
+        await create_work_item(
+            database_session,
+            user.id,
+            item_type=item_type,
+            title=f"Semantic {item_type}",
+            status="waiting" if item_type == "waiting" else "active",
+            due_at=now + timedelta(hours=3),
+            next_follow_up_at=(
+                now + timedelta(hours=3) if item_type == "follow_up" else None
+            ),
+        )
+
+    overview = await today_overview_snapshot(
+        database_session,
+        user.id,
+        now=now,
+        preferences=preferences,
+    )
+    focus_ids = {item.id for item in cast(list[Any], overview["focus"])}
+    later = cast(dict[str, object], overview["later_today"])
+    later_cards = cast(list[Any], later["items"])
+    later_ids = [item.id for item in later_cards]
+
+    assert len(later_ids) == 10
+    assert later["has_more"] is True
+    assert focus_ids.isdisjoint(later_ids)
+    assert [item.title for item in later_cards[:2]] == [
+        "Later urgent",
+        "Later low",
+    ]
+    assert all(item.id in {value.id for value in later_items} for item in later_cards)
+    assert cast(dict[str, int], overview["summary"])["due_today"] == 12

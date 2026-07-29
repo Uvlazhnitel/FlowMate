@@ -44,6 +44,7 @@ from flowmate.task_engine.operational import (
     list_people_summary,
     list_today_section,
     list_topics_summary,
+    today_overview_snapshot,
 )
 from flowmate.task_engine.queries import PersonScope
 
@@ -149,7 +150,7 @@ def _page_payload(page: object, *, timezone: str | None = None) -> dict[str, obj
     return payload
 
 
-@router.get("/dashboard")
+@router.get("/dashboard", deprecated=True)
 async def dashboard(
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_pwa_session)],
@@ -157,6 +158,19 @@ async def dashboard(
 ) -> dict[str, object]:
     preferences = await _preferences(session, identity, settings)
     payload = await dashboard_snapshot(
+        session, identity.user.id, now=_clock(), preferences=preferences
+    )
+    return {"timezone": preferences.timezone, **payload}
+
+
+@router.get("/today/overview")
+async def today_overview(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    identity: Annotated[PwaIdentity, Depends(require_pwa_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, object]:
+    preferences = await _preferences(session, identity, settings)
+    payload = await today_overview_snapshot(
         session, identity.user.id, now=_clock(), preferences=preferences
     )
     return {"timezone": preferences.timezone, **payload}

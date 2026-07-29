@@ -8,7 +8,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   operationsKeys,
@@ -27,6 +27,8 @@ const typeLabels: Record<string, string> = {
   decision: "Решение",
   agenda_item: "Повестка",
 };
+
+const UNDO_WINDOW_MS = 8_000;
 
 type DialogMode = "note" | "result" | "decision" | "date" | null;
 
@@ -57,6 +59,14 @@ export function WorkItemCard({
   const [hidden, setHidden] = useState(false);
   const [undoItem, setUndoItem] = useState<WorkItemCardData | null>(null);
   const [undoError, setUndoError] = useState(false);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (undoTimer.current !== null) clearTimeout(undoTimer.current);
+    },
+    [],
+  );
 
   const mutation = useMutation({
     mutationFn: (payload: Omit<ActionPayload, "client_action_id">) =>
@@ -71,8 +81,14 @@ export function WorkItemCard({
         ) &&
         response.work_item
       ) {
+        if (undoTimer.current !== null) clearTimeout(undoTimer.current);
         setHidden(true);
         setUndoItem(response.work_item);
+        undoTimer.current = setTimeout(() => {
+          undoTimer.current = null;
+          setUndoItem(null);
+          void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
+        }, UNDO_WINDOW_MS);
       } else {
         void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
       }
@@ -91,6 +107,10 @@ export function WorkItemCard({
 
   async function undo() {
     if (!undoItem) return;
+    if (undoTimer.current !== null) {
+      clearTimeout(undoTimer.current);
+      undoTimer.current = null;
+    }
     setUndoError(false);
     try {
       await runWorkItemAction(item.id, {
@@ -107,6 +127,7 @@ export function WorkItemCard({
   }
 
   if (hidden) {
+    if (!undoItem) return null;
     return (
       <div className="undo-card" role="status">
         <span>Запись завершена</span>

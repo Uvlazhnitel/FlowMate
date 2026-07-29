@@ -12,7 +12,6 @@ import { PlaceholderPage, pageDefinitions } from "./pages/PlaceholderPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AgendaPage } from "./pages/AgendaPage";
 import { ContextDetailPage } from "./pages/ContextDetailPage";
-import { DashboardPage } from "./pages/DashboardPage";
 import { PeoplePage } from "./pages/PeoplePage";
 import { TodayPage } from "./pages/TodayPage";
 import { TimelinePage } from "./pages/TimelinePage";
@@ -23,7 +22,6 @@ function UserRoute({
   page,
 }: {
   page:
-    | "dashboard"
     | "today"
     | "topics"
     | "people"
@@ -40,8 +38,6 @@ function UserRoute({
     dateDisplayFormat: user.date_display_format,
     timeDisplayFormat: user.time_display_format,
   };
-  if (page === "dashboard")
-    return <DashboardPage dateTimePreferences={dateTimePreferences} />;
   if (page === "today")
     return (
       <TodayPage
@@ -71,6 +67,20 @@ function UserRoute({
   );
 }
 
+function DashboardRedirect() {
+  const location = useLocation();
+  return (
+    <Navigate
+      to={{
+        pathname: "/today",
+        search: location.search,
+        hash: location.hash,
+      }}
+      replace
+    />
+  );
+}
+
 function ProtectedApplication() {
   const location = useLocation();
   const session = useQuery({
@@ -82,7 +92,13 @@ function ProtectedApplication() {
     return <LoadingState label="Проверяем сессию" fullPage />;
   }
   if (session.error instanceof ApiError && session.error.status === 401) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{ from: `${location.pathname}${location.search}${location.hash}` }}
+      />
+    );
   }
   if (session.isError) {
     return (
@@ -102,8 +118,8 @@ export function AppRoutes() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route element={<ProtectedApplication />}>
-        <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<UserRoute page="dashboard" />} />
+        <Route index element={<Navigate to="/today" replace />} />
+        <Route path="dashboard" element={<DashboardRedirect />} />
         <Route path="today" element={<UserRoute page="today" />} />
         <Route path="topics" element={<UserRoute page="topics" />} />
         <Route path="topics/:id" element={<UserRoute page="topic" />} />
@@ -117,7 +133,6 @@ export function AppRoutes() {
           .filter(
             (page) =>
               ![
-                "/dashboard",
                 "/today",
                 "/topics",
                 "/people",
@@ -136,7 +151,7 @@ export function AppRoutes() {
           ))}
         <Route path="settings" element={<SettingsPage />} />
       </Route>
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<Navigate to="/today" replace />} />
     </Routes>
   );
 }

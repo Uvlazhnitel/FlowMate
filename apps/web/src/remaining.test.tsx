@@ -350,7 +350,7 @@ describe("remaining operational screens", () => {
     );
 
     await user.type(screen.getByLabelText("Название темы Migration"), " updated");
-    await user.click(screen.getAllByRole("link", { name: "Панель" })[0]!);
+    await user.click(screen.getAllByRole("link", { name: "Сегодня" })[0]!);
     expect(confirm).toHaveBeenCalledWith(
       "Есть несохранённые изменения. Покинуть страницу?",
     );

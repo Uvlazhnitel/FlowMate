@@ -13,15 +13,6 @@ export interface PageDefinition {
 // eslint-disable-next-line react-refresh/only-export-components
 export const pageDefinitions: PageDefinition[] = [
   {
-    path: "/dashboard",
-    eyebrow: "Командный центр",
-    title: "Обзор",
-    description: "Спокойная точка входа в рабочий день.",
-    emptyTitle: "Обзор готов к данным",
-    emptyDescription:
-      "В следующем этапе здесь появятся актуальные задачи, ожидания и follow-up.",
-  },
-  {
     path: "/today",
     eyebrow: "Фокус",
     title: "Сегодня",

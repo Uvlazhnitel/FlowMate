@@ -10,7 +10,7 @@ function requestPath(input: RequestInfo | URL): string {
 }
 
 function emptyOperationalResponse(path: string): Response {
-  if (path.includes("/dashboard")) {
+  if (path.includes("/today/overview")) {
     return jsonResponse({
       timezone: "Europe/Riga",
       summary: {
@@ -22,9 +22,8 @@ function emptyOperationalResponse(path: string): Response {
         inbox: 0,
         planner_queue: 0,
       },
-      recommended: [],
-      activity: [],
-      deadlines: [],
+      focus: [],
+      later_today: { items: [], has_more: false },
     });
   }
   if (path.includes("/settings/topics") || path.includes("/settings/people")) {
@@ -94,8 +93,8 @@ describe("protected application", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    renderApplication("/dashboard");
-    await screen.findByRole("heading", { name: "Панель" });
+    renderApplication("/today");
+    await screen.findByRole("heading", { name: "Сегодня" });
     const switchers = screen.getAllByLabelText("Рабочее пространство");
     expect(switchers).toHaveLength(2);
     for (const switcher of switchers) {
@@ -124,7 +123,7 @@ describe("protected application", () => {
   it("shows a loading state while the session is being checked", async () => {
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => undefined)));
 
-    renderApplication("/dashboard");
+    renderApplication("/today");
 
     expect(await screen.findByRole("status")).toHaveTextContent("Проверяем сессию");
   });
@@ -148,7 +147,6 @@ describe("protected application", () => {
   });
 
   it.each([
-    ["/dashboard", "Панель"],
     ["/today", "Сегодня"],
     ["/topics", "Темы"],
     ["/people", "Люди"],
@@ -166,14 +164,52 @@ describe("protected application", () => {
     expect(screen.getAllByText("FlowMate")).toHaveLength(2);
   });
 
+  it.each(["/", "/dashboard", "/missing"])(
+    "uses Today as the canonical start screen for %s",
+    async (path) => {
+      stubEmptyApplication();
+
+      renderApplication(path);
+
+      expect(
+        await screen.findByRole("heading", { name: "Сегодня", level: 1 }),
+      ).toBeVisible();
+      expect(screen.queryByRole("link", { name: "Панель" })).not.toBeInTheDocument();
+    },
+  );
+
+  it("preserves the Dashboard query string when redirecting", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = requestPath(input);
+      return Promise.resolve(
+        path.includes("/api/v1/auth/me")
+          ? jsonResponse(authenticatedUser)
+          : emptyOperationalResponse(path),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApplication("/dashboard?section=waiting#follow-up");
+
+    expect(await screen.findByRole("combobox", { name: "Раздел Сегодня" })).toHaveValue(
+      "waiting",
+    );
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("section=waiting"),
+        expect.anything(),
+      ),
+    );
+  });
+
   it("uses an honest empty state on foundation pages", async () => {
     stubEmptyApplication();
 
-    renderApplication("/dashboard");
+    renderApplication("/today");
 
     expect(
       await screen.findByRole("heading", {
-        name: "Главное на сегодня разобрано",
+        name: "На сегодня всё разобрано",
         level: 2,
       }),
     ).toBeVisible();
@@ -182,7 +218,7 @@ describe("protected application", () => {
   it("shows a retry state for an API outage", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
 
-    renderApplication("/dashboard");
+    renderApplication("/today");
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Не удалось открыть FlowMate",
@@ -211,7 +247,7 @@ describe("login and logout", () => {
     await user.type(input, "123456");
     await user.click(screen.getByRole("button", { name: "Продолжить" }));
 
-    expect(await screen.findByRole("heading", { name: "Панель", level: 1 })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Сегодня", level: 1 })).toBeVisible();
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/api/v1/auth/session",

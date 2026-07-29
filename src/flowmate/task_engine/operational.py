@@ -33,6 +33,11 @@ TopicSection = Literal["active", "people", "notes", "decisions", "history"]
 PersonSection = Literal[
     "follow_ups", "waiting", "questions", "topics", "notes", "history"
 ]
+SEMANTIC_TYPES = (
+    WorkItemType.FOLLOW_UP.value,
+    WorkItemType.WAITING.value,
+    WorkItemType.QUESTION.value,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,11 +252,6 @@ async def list_today_section(
     statement = select(WorkItem).where(
         WorkItem.user_id == user_id, WorkItem.status.in_(OPEN_STATUSES)
     )
-    semantic_types = (
-        WorkItemType.FOLLOW_UP.value,
-        WorkItemType.WAITING.value,
-        WorkItemType.QUESTION.value,
-    )
     if section == "follow_ups":
         statement = statement.where(
             WorkItem.type == WorkItemType.FOLLOW_UP.value,
@@ -267,11 +267,11 @@ async def list_today_section(
         ).order_by(WorkItem.due_at.asc().nulls_last(), WorkItem.created_at, WorkItem.id)
     elif section == "overdue":
         statement = statement.where(
-            WorkItem.type.not_in(semantic_types), WorkItem.due_at < now
+            WorkItem.type.not_in(SEMANTIC_TYPES), WorkItem.due_at < now
         ).order_by(WorkItem.due_at, WorkItem.id)
     else:
         statement = statement.where(
-            WorkItem.type.not_in(semantic_types),
+            WorkItem.type.not_in(SEMANTIC_TYPES),
             WorkItem.due_at >= now,
             WorkItem.due_at < end,
         ).order_by(WorkItem.due_at, WorkItem.id)
@@ -284,20 +284,14 @@ async def list_today_section(
     )
 
 
-async def dashboard_snapshot(
+async def _today_summary(
     session: AsyncSession,
     user_id: UUID,
     *,
     now: datetime,
-    preferences: EffectiveNotificationPreferences,
-) -> dict[str, object]:
-    _, end = local_day_bounds(now, preferences)
+    end: datetime,
+) -> dict[str, int]:
     owned_open = (WorkItem.user_id == user_id, WorkItem.status.in_(OPEN_STATUSES))
-    semantic_types = (
-        WorkItemType.FOLLOW_UP.value,
-        WorkItemType.WAITING.value,
-        WorkItemType.QUESTION.value,
-    )
 
     async def count(*conditions: Any) -> int:
         return int(
@@ -305,13 +299,13 @@ async def dashboard_snapshot(
             or 0
         )
 
-    summary = {
+    return {
         "overdue": await count(
-            *owned_open, WorkItem.type.not_in(semantic_types), WorkItem.due_at < now
+            *owned_open, WorkItem.type.not_in(SEMANTIC_TYPES), WorkItem.due_at < now
         ),
         "due_today": await count(
             *owned_open,
-            WorkItem.type.not_in(semantic_types),
+            WorkItem.type.not_in(SEMANTIC_TYPES),
             WorkItem.due_at >= now,
             WorkItem.due_at < end,
         ),
@@ -332,69 +326,154 @@ async def dashboard_snapshot(
             WorkItem.user_id == user_id,
             WorkItem.status == WorkItemStatus.INBOX.value,
         ),
-        "planner_queue": int(
-            (
-                await session.scalar(
-                    select(func.count(WorkItem.id)).where(
-                        WorkItem.user_id == user_id,
-                        WorkItem.planner_status.in_(
-                            ("needs_transfer", "update_required")
-                        ),
-                    )
-                )
-            )
-            or 0
+        "planner_queue": await count(
+            WorkItem.user_id == user_id,
+            WorkItem.planner_status.in_(("needs_transfer", "update_required")),
         ),
     }
-    candidates = list(
+
+
+def _priority_rank_sql() -> Any:
+    return case(
+        (WorkItem.priority == WorkItemPriority.URGENT.value, 0),
+        (WorkItem.priority == WorkItemPriority.HIGH.value, 1),
+        (WorkItem.priority == WorkItemPriority.NORMAL.value, 2),
+        (WorkItem.priority == WorkItemPriority.LOW.value, 3),
+        else_=2,
+    )
+
+
+def _focus_category_sql(now: datetime, end: datetime) -> Any:
+    effective = effective_date_sql()
+    ordinary = WorkItem.type.not_in(SEMANTIC_TYPES)
+    return case(
+        (ordinary & (WorkItem.due_at < now), 0),
+        (
+            (WorkItem.type == WorkItemType.FOLLOW_UP.value) & (effective < end),
+            1,
+        ),
+        (
+            (WorkItem.type == WorkItemType.WAITING.value) & (WorkItem.due_at < now),
+            2,
+        ),
+        (
+            ordinary & (WorkItem.due_at >= now) & (WorkItem.due_at < end),
+            3,
+        ),
+        (WorkItem.type == WorkItemType.QUESTION.value, 4),
+        else_=5,
+    )
+
+
+async def _select_focus_items(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    now: datetime,
+    end: datetime,
+) -> list[WorkItem]:
+    category = _focus_category_sql(now, end)
+    effective = effective_date_sql()
+    return list(
         await session.scalars(
             select(WorkItem)
-            .where(*owned_open)
-            .order_by(WorkItem.updated_at.desc(), WorkItem.id)
-            .limit(100)
+            .where(
+                WorkItem.user_id == user_id,
+                WorkItem.status.in_(OPEN_STATUSES),
+                category < 5,
+            )
+            .order_by(
+                category,
+                _priority_rank_sql(),
+                effective.asc().nulls_last(),
+                WorkItem.id,
+            )
+            .limit(5)
         )
     )
-    priority_rank = {
-        WorkItemPriority.URGENT.value: 0,
-        WorkItemPriority.HIGH.value: 1,
-        WorkItemPriority.NORMAL.value: 2,
-        WorkItemPriority.LOW.value: 3,
+
+
+async def _select_later_today(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    now: datetime,
+    end: datetime,
+    focus_ids: set[UUID],
+) -> tuple[list[WorkItem], bool]:
+    statement = select(WorkItem).where(
+        WorkItem.user_id == user_id,
+        WorkItem.status.in_(OPEN_STATUSES),
+        WorkItem.type.not_in(SEMANTIC_TYPES),
+        WorkItem.due_at >= now,
+        WorkItem.due_at < end,
+    )
+    if focus_ids:
+        statement = statement.where(WorkItem.id.not_in(focus_ids))
+    items = list(
+        await session.scalars(
+            statement.order_by(
+                WorkItem.due_at,
+                _priority_rank_sql(),
+                WorkItem.id,
+            ).limit(11)
+        )
+    )
+    return items[:10], len(items) > 10
+
+
+async def today_overview_snapshot(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    now: datetime,
+    preferences: EffectiveNotificationPreferences,
+) -> dict[str, object]:
+    _, end = local_day_bounds(now, preferences)
+    summary = await _today_summary(session, user_id, now=now, end=end)
+    focus_items = await _select_focus_items(session, user_id, now=now, end=end)
+    later_items, later_has_more = await _select_later_today(
+        session,
+        user_id,
+        now=now,
+        end=end,
+        focus_ids={item.id for item in focus_items},
+    )
+    return {
+        "summary": summary,
+        "focus": await build_work_item_cards(session, user_id, focus_items, now=now),
+        "later_today": {
+            "items": await build_work_item_cards(
+                session, user_id, later_items, now=now
+            ),
+            "has_more": later_has_more,
+        },
     }
 
-    def recommendation_key(item: WorkItem) -> tuple[int, int, datetime, UUID]:
-        date = effective_date(item)
-        if item.type == WorkItemType.FOLLOW_UP.value and date and date < end:
-            category = 1
-        elif item.type == WorkItemType.WAITING.value and date and date < now:
-            category = 2
-        elif date and date < now:
-            category = 0
-        elif date and date < end:
-            category = 3
-        elif item.type == WorkItemType.QUESTION.value:
-            category = 4
-        else:
-            category = 5
-        return (
-            category,
-            priority_rank.get(item.priority, 2),
-            date or datetime.max.replace(tzinfo=UTC),
-            item.id,
-        )
 
-    recommended_items = [
-        item
-        for item in sorted(candidates, key=recommendation_key)
-        if recommendation_key(item)[0] < 5
-    ][:5]
-    upcoming_items = sorted(
-        [
-            item
-            for item in candidates
-            if (item_date := effective_date(item)) is not None and item_date >= now
-        ],
-        key=lambda item: (effective_date(item), item.id),
-    )[:10]
+async def dashboard_snapshot(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    now: datetime,
+    preferences: EffectiveNotificationPreferences,
+) -> dict[str, object]:
+    _, end = local_day_bounds(now, preferences)
+    summary = await _today_summary(session, user_id, now=now, end=end)
+    recommended_items = await _select_focus_items(session, user_id, now=now, end=end)
+    effective = effective_date_sql()
+    upcoming_items = list(
+        await session.scalars(
+            select(WorkItem)
+            .where(
+                WorkItem.user_id == user_id,
+                WorkItem.status.in_(OPEN_STATUSES),
+                effective >= now,
+            )
+            .order_by(effective, WorkItem.id)
+            .limit(10)
+        )
+    )
     activity_rows = await session.execute(
         select(WorkItemEvent, WorkItem.title)
         .join(WorkItem, WorkItem.id == WorkItemEvent.work_item_id)

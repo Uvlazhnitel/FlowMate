@@ -1,4 +1,4 @@
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -45,10 +45,28 @@ function page(items: object[], hasMore = false, offset = 0) {
   });
 }
 
+function overview(focus: object[] = [], later: object[] = []) {
+  return jsonResponse({
+    timezone: "Europe/Riga",
+    summary: {
+      overdue: focus.length,
+      due_today: later.length,
+      follow_ups: 0,
+      waiting_overdue: 0,
+      questions: 0,
+      inbox: 0,
+      planner_queue: 0,
+    },
+    focus,
+    later_today: { items: later, has_more: false },
+  });
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("operational screens", () => {
@@ -70,6 +88,7 @@ describe("operational screens", () => {
           }),
         );
       }
+      if (path.includes("/today/overview")) return Promise.resolve(overview());
       if (path.includes("section=overdue")) return Promise.resolve(page([workItem]));
       return Promise.resolve(page([]));
     });
@@ -103,6 +122,7 @@ describe("operational screens", () => {
       const path = requestPath(input);
       if (path.includes("/auth/me"))
         return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/today/overview")) return Promise.resolve(overview());
       if (path.includes("section=overdue")) return Promise.resolve(page([workItem]));
       return Promise.resolve(page([]));
     });
@@ -116,6 +136,54 @@ describe("operational screens", () => {
     expect(
       fetchMock.mock.calls.some(([input]) => requestPath(input).includes("/actions")),
     ).toBe(false);
+  });
+
+  it("refreshes operational data after the Undo window expires", async () => {
+    let resolveAction: (response: Response) => void = () => undefined;
+    const actionResponse = new Promise<Response>((resolve) => {
+      resolveAction = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/actions")) return actionResponse;
+      if (path.includes("/today/overview")) return Promise.resolve(overview());
+      if (path.includes("section=overdue")) return Promise.resolve(page([workItem]));
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApplication("/today?section=overdue");
+    const completeButton = await screen.findByRole("button", { name: "Готово" });
+    const user = userEvent.setup();
+    await user.click(completeButton);
+    vi.useFakeTimers();
+    await act(async () => {
+      resolveAction(
+        jsonResponse({
+          changed: true,
+          work_item: {
+            ...workItem,
+            status: "done",
+            revision: 2,
+          },
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Запись завершена");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        requestPath(input).includes("/today/overview"),
+      ),
+    ).toHaveLength(2);
   });
 
   it("loads additional detail records and exposes mobile navigation", async () => {
@@ -156,9 +224,10 @@ describe("operational screens", () => {
       .find((navigation) => navigation.classList.contains("mobile-nav"));
     expect(mobileNavigation).toBeDefined();
     const mobile = within(mobileNavigation!);
-    for (const label of ["Сегодня", "Входящие", "Панель", "Повестка", "Люди"]) {
+    for (const label of ["Сегодня", "Входящие", "Повестка", "Люди"]) {
       expect(mobile.getByRole("link", { name: label })).toBeVisible();
     }
+    expect(mobile.queryByRole("link", { name: "Панель" })).not.toBeInTheDocument();
     expect(mobile.getByText("Ещё")).toBeVisible();
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(

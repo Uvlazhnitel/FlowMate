@@ -48,7 +48,7 @@ export interface ActivityEntry {
   created_at: string;
 }
 
-export interface DashboardResponse {
+export interface TodayOverviewResponse {
   timezone: string;
   summary: {
     overdue: number;
@@ -59,9 +59,11 @@ export interface DashboardResponse {
     inbox: number;
     planner_queue: number;
   };
-  recommended: WorkItemCardData[];
-  activity: ActivityEntry[];
-  deadlines: WorkItemCardData[];
+  focus: WorkItemCardData[];
+  later_today: {
+    items: WorkItemCardData[];
+    has_more: boolean;
+  };
 }
 
 export interface TopicSummary {
@@ -156,7 +158,7 @@ export interface ActionResponse {
 
 export const operationsKeys = {
   all: ["operations"] as const,
-  dashboard: ["operations", "dashboard"] as const,
+  todayOverview: ["operations", "today", "overview"] as const,
 };
 
 function query(path: string, values: Record<string, string | number | undefined>) {
@@ -167,7 +169,8 @@ function query(path: string, values: Record<string, string | number | undefined>
   return `${path}?${params.toString()}`;
 }
 
-export const getDashboard = () => apiRequest<DashboardResponse>("/api/v1/dashboard");
+export const getTodayOverview = () =>
+  apiRequest<TodayOverviewResponse>("/api/v1/today/overview");
 
 export const getToday = (section: string, offset = 0) =>
   apiRequest<PageResponse<WorkItemCardData>>(

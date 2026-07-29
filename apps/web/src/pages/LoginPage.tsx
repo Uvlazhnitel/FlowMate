@@ -17,7 +17,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const cachedUser = queryClient.getQueryData(sessionQueryKey);
-  const destination = (location.state as LocationState | null)?.from ?? "/dashboard";
+  const destination = (location.state as LocationState | null)?.from ?? "/today";
 
   const requestCode = useMutation({
     mutationFn: requestLoginCode,
@@ -32,7 +32,7 @@ export function LoginPage() {
   });
 
   if (cachedUser) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/today" replace />;
   }
 
   const error = requestCode.error ?? verifyCode.error;

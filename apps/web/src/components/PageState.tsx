@@ -1,8 +1,9 @@
 import { AlertTriangle, Inbox, LoaderCircle, RotateCcw } from "lucide-react";
+import type { ReactNode } from "react";
 
 interface StateProps {
   title?: string;
-  description?: string;
+  description?: ReactNode;
   fullPage?: boolean;
 }
 
