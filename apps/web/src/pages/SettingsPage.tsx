@@ -295,6 +295,10 @@ function SettingsContent({
           <h2>Время и уведомления</h2>
           {dirty && <span className="unsaved-badge">Не сохранено</span>}
         </div>
+        <p className="muted">
+          Утренний и вечерний дайджесты объединяют личные и рабочие записи в одном
+          сообщении.
+        </p>
         <div className="settings-fields">
           <label>
             Часовой пояс
@@ -360,10 +364,10 @@ function SettingsContent({
               checked={preferences.morning_digest_enabled}
               onChange={(event) => update("morning_digest_enabled", event.target.checked)}
             />{" "}
-            Утренний digest
+            Утренний дайджест
           </label>
           <label>
-            Время утреннего digest
+            Время утреннего дайджеста
             <input
               type="time"
               value={preferences.morning_digest_time.slice(0, 5)}
@@ -376,10 +380,10 @@ function SettingsContent({
               checked={preferences.evening_digest_enabled}
               onChange={(event) => update("evening_digest_enabled", event.target.checked)}
             />{" "}
-            Вечерний digest
+            Вечерний дайджест
           </label>
           <label>
-            Время вечернего digest
+            Время вечернего дайджеста
             <input
               type="time"
               value={preferences.evening_digest_time.slice(0, 5)}
@@ -416,7 +420,7 @@ function SettingsContent({
               checked={preferences.send_empty_digests}
               onChange={(event) => update("send_empty_digests", event.target.checked)}
             />{" "}
-            Отправлять пустые digest
+            Отправлять пустые дайджесты
           </label>
         </div>
         {saveMutation.isError && (

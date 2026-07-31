@@ -20,9 +20,13 @@ async def get_active_action_session(
     for_update: bool = False,
     now: datetime | None = None,
 ) -> WorkItemActionSession | None:
-    statement = select(WorkItemActionSession).where(
-        WorkItemActionSession.user_id == user_id,
-        WorkItemActionSession.status == "open",
+    statement = (
+        select(WorkItemActionSession)
+        .where(
+            WorkItemActionSession.user_id == user_id,
+            WorkItemActionSession.status == "open",
+        )
+        .execution_options(include_all_workspaces=True)
     )
     if for_update:
         statement = statement.with_for_update()
@@ -41,10 +45,14 @@ async def get_action_session_for_user(
     *,
     for_update: bool = False,
 ) -> WorkItemActionSession | None:
-    statement = select(WorkItemActionSession).where(
-        WorkItemActionSession.id == action_session_id,
-        WorkItemActionSession.user_id == user_id,
-        WorkItemActionSession.status == "open",
+    statement = (
+        select(WorkItemActionSession)
+        .where(
+            WorkItemActionSession.id == action_session_id,
+            WorkItemActionSession.user_id == user_id,
+            WorkItemActionSession.status == "open",
+        )
+        .execution_options(include_all_workspaces=True)
     )
     if for_update:
         statement = statement.with_for_update()
@@ -64,12 +72,14 @@ async def get_search_session_for_user(
     now: datetime | None = None,
 ) -> WorkItemActionSession | None:
     value = await session.scalar(
-        select(WorkItemActionSession).where(
+        select(WorkItemActionSession)
+        .where(
             WorkItemActionSession.id == action_session_id,
             WorkItemActionSession.user_id == user_id,
             WorkItemActionSession.action == WorkItemAction.SEARCH.value,
             WorkItemActionSession.status == "completed",
         )
+        .execution_options(include_all_workspaces=True)
     )
     if value is None or value.expires_at <= (now or action_now()):
         return None
@@ -85,7 +95,8 @@ async def get_action_session_by_telegram_update(
         raise ValueError("telegram_update_id must be positive")
     return (
         await session.scalars(
-            select(WorkItemActionSession).where(
+            select(WorkItemActionSession)
+            .where(
                 WorkItemActionSession.user_id == user_id,
                 or_(
                     WorkItemActionSession.telegram_update_id == telegram_update_id,
@@ -94,6 +105,7 @@ async def get_action_session_by_telegram_update(
                     ),
                 ),
             )
+            .execution_options(include_all_workspaces=True)
         )
     ).one_or_none()
 

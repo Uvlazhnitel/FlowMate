@@ -6,6 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.db.models import Topic, WorkItem
 from flowmate.db.users import create_telegram_user
+from flowmate.task_engine.action_sessions import (
+    create_action_session,
+    get_active_action_session,
+)
+from flowmate.task_engine.enums import WorkItemAction
 from flowmate.task_engine.service import create_topic, create_work_item, list_work_items
 from flowmate.workspace_service import (
     WorkspaceSwitchBlockedError,
@@ -96,3 +101,23 @@ async def test_workspace_switch_is_blocked_by_open_draft(
         await switch_workspace(database_session, user.id, "work")
     assert error.value.blocker.code == "active_draft"
     assert user.active_workspace == "personal"
+
+
+@pytest.mark.integration
+async def test_active_action_session_is_visible_across_workspace_contexts(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, 880_003)
+    activate_workspace(database_session, user_id=user.id, workspace="work")
+    created = await create_action_session(
+        database_session,
+        user.id,
+        action=WorkItemAction.ADD_NOTE,
+        ttl_minutes=30,
+    )
+
+    activate_workspace(database_session, user_id=user.id, workspace="personal")
+    active = await get_active_action_session(database_session, user.id)
+
+    assert active is not None and active.id == created.id
+    assert active.workspace == "work"

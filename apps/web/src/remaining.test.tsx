@@ -341,6 +341,12 @@ describe("remaining operational screens", () => {
     renderApplication("/settings");
 
     expect(await screen.findByDisplayValue("Migration")).toBeVisible();
+    expect(
+      screen.getByText(
+        "Утренний и вечерний дайджесты объединяют личные и рабочие записи в одном сообщении.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByText("Утренний дайджест")).toBeVisible();
     expect(screen.getByText("Людей пока нет")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Показать ещё" }));
     expect(await screen.findByDisplayValue("Operations")).toBeVisible();

@@ -96,6 +96,7 @@ from flowmate.task_engine.service import (
     get_work_item,
     list_work_item_events,
 )
+from flowmate.workspaces import Workspace, activate_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -198,13 +199,41 @@ def format_work_item_details(details: WorkItemDetails, timezone: ZoneInfo) -> st
     return "\n".join(lines)
 
 
+WORKSPACE_CALLBACK_CODES = {
+    Workspace.PERSONAL.value: "p",
+    Workspace.WORK.value: "w",
+}
+CALLBACK_CODE_WORKSPACES = {
+    code: workspace for workspace, code in WORKSPACE_CALLBACK_CODES.items()
+}
+
+
+def work_item_callback_data(
+    action: str,
+    target_id: UUID,
+    *,
+    argument: str | None = None,
+    workspace: str | None = None,
+) -> str:
+    parts = ["wi", action, str(target_id)]
+    if argument is not None:
+        parts.append(argument)
+    if workspace is not None:
+        parts.append(WORKSPACE_CALLBACK_CODES[workspace])
+    return ":".join(parts)
+
+
 def item_keyboard(item: WorkItem) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="Подробнее",
-                    callback_data=f"wi:details:{item.id}",
+                    callback_data=work_item_callback_data(
+                        "details",
+                        item.id,
+                        workspace=item.workspace,
+                    ),
                 )
             ]
         ]
@@ -257,7 +286,12 @@ def selection_keyboard(
 
 def item_action_data(action: str, item: WorkItem) -> str:
     revision = encode_revision(work_item_revision(item.updated_at))
-    return f"wi:{action}:{item.id}:{revision}"
+    return work_item_callback_data(
+        action,
+        item.id,
+        argument=revision,
+        workspace=item.workspace,
+    )
 
 
 def details_keyboard(details: WorkItemDetails) -> InlineKeyboardMarkup:
@@ -270,7 +304,10 @@ def details_keyboard(details: WorkItemDetails) -> InlineKeyboardMarkup:
                     text="↩️ Вернуть", callback_data=item_action_data("o", item)
                 ),
                 InlineKeyboardButton(
-                    text="📖 История", callback_data=f"wi:h:{item.id}"
+                    text="📖 История",
+                    callback_data=work_item_callback_data(
+                        "h", item.id, workspace=item.workspace
+                    ),
                 ),
             ]
         )
@@ -350,11 +387,25 @@ def details_keyboard(details: WorkItemDetails) -> InlineKeyboardMarkup:
                 ]
             )
         rows.append(
-            [InlineKeyboardButton(text="📖 История", callback_data=f"wi:h:{item.id}")]
+            [
+                InlineKeyboardButton(
+                    text="📖 История",
+                    callback_data=work_item_callback_data(
+                        "h", item.id, workspace=item.workspace
+                    ),
+                )
+            ]
         )
     else:
         rows.append(
-            [InlineKeyboardButton(text="📖 История", callback_data=f"wi:h:{item.id}")]
+            [
+                InlineKeyboardButton(
+                    text="📖 История",
+                    callback_data=work_item_callback_data(
+                        "h", item.id, workspace=item.workspace
+                    ),
+                )
+            ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -445,17 +496,25 @@ async def refresh_work_item_card(
         )
 
 
-def parse_work_item_callback(data: str | None) -> tuple[str, UUID, str | None] | None:
+def parse_work_item_callback(
+    data: str | None,
+) -> tuple[str, UUID, str | None, str | None] | None:
     if data is None:
         return None
     parts = data.split(":")
-    if len(parts) not in {3, 4} or parts[0] != "wi":
+    if len(parts) not in {3, 4, 5} or parts[0] != "wi":
         return None
     try:
         item_id = UUID(parts[2])
     except ValueError:
         return None
-    return parts[1], item_id, parts[3] if len(parts) == 4 else None
+    tail = parts[3:]
+    workspace = None
+    if tail and tail[-1] in CALLBACK_CODE_WORKSPACES:
+        workspace = CALLBACK_CODE_WORKSPACES[tail.pop()]
+    if len(tail) > 1:
+        return None
+    return parts[1], item_id, tail[0] if tail else None, workspace
 
 
 def parse_user_datetime(value: str, timezone: ZoneInfo) -> datetime | None:
@@ -478,7 +537,12 @@ def snooze_options_keyboard(details: WorkItemDetails) -> InlineKeyboardMarkup | 
     revision = encode_revision(reminder_revision(reminder))
 
     def data(action: str) -> str:
-        return f"wi:{action}:{reminder.id}:{revision}"
+        return work_item_callback_data(
+            action,
+            reminder.id,
+            argument=revision,
+            workspace=details.item.workspace,
+        )
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -494,7 +558,12 @@ def snooze_options_keyboard(details: WorkItemDetails) -> InlineKeyboardMarkup | 
             [
                 InlineKeyboardButton(text="Другая дата", callback_data=data("zi")),
                 InlineKeyboardButton(
-                    text="Отмена", callback_data=f"wi:b:{details.item.id}"
+                    text="Отмена",
+                    callback_data=work_item_callback_data(
+                        "b",
+                        details.item.id,
+                        workspace=details.item.workspace,
+                    ),
                 ),
             ],
         ]
@@ -510,7 +579,12 @@ def reschedule_options_keyboard(
     revision = encode_revision(work_item_revision(item.updated_at))
 
     def data(action: str) -> str:
-        return f"wi:{action}:{item.id}:{revision}"
+        return work_item_callback_data(
+            action,
+            item.id,
+            argument=revision,
+            workspace=item.workspace,
+        )
 
     rows: list[list[InlineKeyboardButton]] = []
     local_now = now.astimezone(now.tzinfo)
@@ -537,7 +611,16 @@ def reschedule_options_keyboard(
             InlineKeyboardButton(text="Другая дата", callback_data=data("rd")),
         ]
     )
-    rows.append([InlineKeyboardButton(text="Отмена", callback_data=f"wi:b:{item.id}")])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Отмена",
+                callback_data=work_item_callback_data(
+                    "b", item.id, workspace=item.workspace
+                ),
+            )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -588,12 +671,18 @@ async def work_item_callback(
     if parsed is None or not isinstance(message, Message):
         await callback_query.answer("Действие недоступно.")
         return
-    action, target_id, argument = parsed
+    action, target_id, argument, callback_workspace = parsed
     action = {"details": "d", "history": "h"}.get(action, action)
     user = await get_user_by_telegram_id(db_session, telegram_user.id)
     if user is None:
         await callback_query.answer("Запись не найдена.")
         return
+    if callback_workspace is not None:
+        activate_workspace(
+            db_session,
+            user_id=user.id,
+            workspace=callback_workspace,
+        )
     item = await get_work_item(db_session, user.id, target_id)
     if action.startswith("z"):
         reminder_target = await get_reminder_action_target(

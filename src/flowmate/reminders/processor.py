@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from flowmate.db.session import session_scope
 from flowmate.reminders.digests import (
+    CANONICAL_DIGEST_WORKSPACE,
     ensure_daily_digest_reminders,
     prepare_digest_message,
 )
@@ -109,6 +110,15 @@ class ReminderProcessor:
         }:
             if delivery.user_id is None:
                 return
+            if delivery.workspace != CANONICAL_DIGEST_WORKSPACE:
+                async with session_scope(self._session_factory) as session:
+                    await cancel_claimed_reminder(
+                        session,
+                        claim,
+                        now=self._clock(),
+                        reason="legacy_workspace_digest",
+                    )
+                return
             async with session_scope(self._session_factory) as session:
                 message = await prepare_digest_message(
                     session,
@@ -116,7 +126,6 @@ class ReminderProcessor:
                     delivery.reminder_type,
                     now=self._clock(),
                     defaults=self._notification_defaults,
-                    workspace=delivery.workspace,
                 )
                 if message is None:
                     await cancel_claimed_reminder(

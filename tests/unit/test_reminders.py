@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from aiogram import Bot
@@ -18,6 +19,12 @@ from flowmate.bot.handlers.reminders import (
     snooze_keyboard,
 )
 from flowmate.core.config import Settings
+from flowmate.reminders.digests import (
+    DigestItem,
+    DigestSnapshot,
+    WorkspaceDigestSnapshot,
+    format_digest_message,
+)
 from flowmate.reminders.enums import ReminderScheduleKind, ReminderType
 from flowmate.reminders.notifications import (
     PermanentNotificationError,
@@ -64,6 +71,61 @@ def test_notification_formatting_is_plain_and_bounded() -> None:
     assert custom.text == "Custom text"
     assert digest.text == "Custom text"
     assert digest.reply_markup is not None
+    morning_labels = {
+        button.text for row in digest.reply_markup.inline_keyboard for button in row
+    }
+    assert "Перенести незавершённое на завтра" not in morning_labels
+    evening = build_reminder_notification(make_delivery(ReminderType.EVENING_DIGEST))
+    assert evening.reply_markup is not None
+    assert "Перенести незавершённое на завтра" in {
+        button.text for row in evening.reply_markup.inline_keyboard for button in row
+    }
+
+
+def test_combined_digest_formats_task_titles_sections_and_remainder() -> None:
+    snapshot = DigestSnapshot(
+        workspaces=(
+            WorkspaceDigestSnapshot(
+                workspace="personal",
+                items=(
+                    DigestItem(
+                        id=uuid4(),
+                        title="Позвонить врачу",
+                        item_type="task",
+                        status="planned",
+                        effective_at=NOW - timedelta(days=1),
+                        category=0,
+                    ),
+                ),
+                total=3,
+            ),
+            WorkspaceDigestSnapshot(
+                workspace="work",
+                items=(
+                    DigestItem(
+                        id=uuid4(),
+                        title="Отправить отчёт",
+                        item_type="task",
+                        status="planned",
+                        effective_at=NOW + timedelta(hours=2),
+                        category=3,
+                    ),
+                ),
+                total=1,
+            ),
+        )
+    )
+
+    message = format_digest_message(
+        ReminderType.MORNING_DIGEST,
+        snapshot,
+        timezone=ZoneInfo("UTC"),
+        now=NOW,
+    )
+
+    assert "🏠 Личное\n🔴 Позвонить врачу · 22.07, 10:00\n+ ещё 2" in message
+    assert "💼 Работа\n🟠 Отправить отчёт · 12:00" in message
+    assert "Просрочено:" not in message
 
 
 def test_reminder_callback_data_and_snooze_options() -> None:
@@ -202,6 +264,60 @@ async def test_processor_claims_sends_and_marks_with_mocked_clock() -> None:
     claim_due.assert_awaited_once()
     notifier.send.assert_awaited_once()
     mark_sent.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_processor_cancels_legacy_workspace_digest_without_delivery() -> None:
+    claim = ClaimedReminder(uuid4(), uuid4())
+    delivery = replace(
+        make_delivery(ReminderType.MORNING_DIGEST),
+        reminder_id=claim.id,
+        processing_token=claim.processing_token,
+        workspace="work",
+        user_id=uuid4(),
+    )
+    notifier = MagicMock()
+    notifier.send = AsyncMock()
+    processor = ReminderProcessor(
+        fake_session_factory(),
+        notifier,
+        batch_size=10,
+        max_attempts=3,
+        retry_delay=timedelta(minutes=1),
+        processing_timeout=timedelta(minutes=5),
+        delivery_timeout_seconds=10,
+        clock=lambda: NOW,
+    )
+    with (
+        patch("flowmate.reminders.processor.session_scope", new=fake_session_scope),
+        patch(
+            "flowmate.reminders.processor.claim_due_reminders",
+            new=AsyncMock(return_value=[claim]),
+        ),
+        patch(
+            "flowmate.reminders.processor.ensure_daily_digest_reminders",
+            new=AsyncMock(return_value=0),
+        ),
+        patch(
+            "flowmate.reminders.processor.defer_due_reminders_for_quiet_hours",
+            new=AsyncMock(return_value=0),
+        ),
+        patch(
+            "flowmate.reminders.processor.get_claimed_reminder_delivery",
+            new=AsyncMock(return_value=delivery),
+        ),
+        patch(
+            "flowmate.reminders.processor.cancel_claimed_reminder",
+            new=AsyncMock(return_value=True),
+        ) as cancel,
+    ):
+        await processor.process_due_reminders()
+
+    cancel.assert_awaited_once()
+    cancel_call = cancel.await_args
+    assert cancel_call is not None
+    assert cancel_call.kwargs["reason"] == "legacy_workspace_digest"
+    notifier.send.assert_not_awaited()
 
 
 @pytest.mark.asyncio

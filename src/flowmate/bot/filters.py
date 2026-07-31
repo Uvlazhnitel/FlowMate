@@ -13,6 +13,7 @@ from flowmate.db.drafts import (
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.task_engine.action_sessions import get_active_action_session
 from flowmate.task_engine.enums import WorkItemAction
+from flowmate.workspaces import activate_workspace
 
 
 class CaptureNewFilter(Filter):
@@ -34,6 +35,11 @@ class CaptureNewFilter(Filter):
             return False
         if action is None or action.action != WorkItemAction.CAPTURE_NEW.value:
             return False
+        activate_workspace(
+            db_session,
+            user_id=user.id,
+            workspace=action.workspace,
+        )
         return {"active_capture": action}
 
 
@@ -58,6 +64,11 @@ class ActiveWorkItemActionFilter(Filter):
             return False
         if action.action == WorkItemAction.CAPTURE_NEW.value:
             return False
+        activate_workspace(
+            db_session,
+            user_id=user.id,
+            workspace=action.workspace,
+        )
         return {
             "active_work_item_action": action,
             "action_user_id": user.id,

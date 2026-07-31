@@ -158,28 +158,32 @@ def build_reminder_notification(
         ReminderType.EVENING_DIGEST: delivery.message or "Вечерний обзор.",
         ReminderType.CUSTOM: delivery.message or f"Напоминание: {title}",
     }
-    digest_keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Открыть сегодня",
-                    callback_data=f"dig:today:{reminder_id}",
-                )
-            ],
+    digest_rows = [
+        [
+            InlineKeyboardButton(
+                text="Открыть сегодня",
+                callback_data=f"dig:today:{reminder_id}",
+            )
+        ],
+    ]
+    if delivery.reminder_type is ReminderType.EVENING_DIGEST:
+        digest_rows.append(
             [
                 InlineKeyboardButton(
                     text="Перенести незавершённое на завтра",
                     callback_data=f"dig:tomorrow:{reminder_id}",
                 )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="Разобрать по одному",
-                    callback_data=f"dig:review:{reminder_id}",
-                )
-            ],
+            ]
+        )
+    digest_rows.append(
+        [
+            InlineKeyboardButton(
+                text="Разобрать по одному",
+                callback_data=f"dig:review:{reminder_id}",
+            )
         ]
     )
+    digest_keyboard = InlineKeyboardMarkup(inline_keyboard=digest_rows)
     reply_markup = keyboards.get(delivery.reminder_type)
     if delivery.reminder_type in {
         ReminderType.MORNING_DIGEST,

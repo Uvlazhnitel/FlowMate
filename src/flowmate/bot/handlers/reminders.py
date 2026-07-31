@@ -53,6 +53,11 @@ from flowmate.task_engine.management import (
 )
 from flowmate.task_engine.queries import list_today_items
 from flowmate.task_engine.service import get_work_item
+from flowmate.workspaces import (
+    WORKSPACE_LABELS,
+    Workspace,
+    activate_workspace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -285,16 +290,61 @@ async def reminder_callback(
         await callback_query.answer("Не удалось выполнить действие.", show_alert=True)
 
 
-def parse_digest_callback(data: str | None) -> tuple[str, UUID] | None:
+WORKSPACE_CALLBACK_CODES = {
+    Workspace.PERSONAL.value: "p",
+    Workspace.WORK.value: "w",
+}
+CALLBACK_CODE_WORKSPACES = {
+    code: workspace for workspace, code in WORKSPACE_CALLBACK_CODES.items()
+}
+
+
+def parse_digest_callback(
+    data: str | None,
+) -> tuple[str, UUID, str | None] | None:
     if data is None:
         return None
     parts = data.split(":")
-    if len(parts) != 3 or parts[0] != "dig":
+    if len(parts) not in {3, 4} or parts[0] != "dig":
         return None
     try:
-        return parts[1], UUID(parts[2])
+        if len(parts) == 3:
+            return parts[1], UUID(parts[2]), None
+        workspace = CALLBACK_CODE_WORKSPACES.get(parts[2])
+        if workspace is None:
+            return None
+        return parts[1], UUID(parts[3]), workspace
     except ValueError:
         return None
+
+
+def digest_workspace_keyboard(action: str, reminder_id: UUID) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Личное",
+                    callback_data=(
+                        f"dig:{action}:{WORKSPACE_CALLBACK_CODES[Workspace.PERSONAL.value]}:"
+                        f"{reminder_id}"
+                    ),
+                ),
+                InlineKeyboardButton(
+                    text="Работа",
+                    callback_data=(
+                        f"dig:{action}:{WORKSPACE_CALLBACK_CODES[Workspace.WORK.value]}:"
+                        f"{reminder_id}"
+                    ),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Отмена",
+                    callback_data=f"dig:cancel:{reminder_id}",
+                )
+            ],
+        ]
+    )
 
 
 def digest_review_keyboard(session_id: UUID) -> InlineKeyboardMarkup:
@@ -346,7 +396,7 @@ async def digest_callback(
     if parsed is None or not isinstance(message, Message):
         await callback_query.answer("Действие недоступно.")
         return
-    action, object_id = parsed
+    action, object_id, workspace = parsed
     telegram_user = callback_query.from_user
     user = await get_user_by_telegram_id(db_session, telegram_user.id)
     if user is None:
@@ -363,6 +413,15 @@ async def digest_callback(
             ):
                 await callback_query.answer("Обзор уже завершён.")
                 return
+            session_workspace = action_session.context.get("workspace")
+            if session_workspace not in WORKSPACE_CALLBACK_CODES:
+                await callback_query.answer("Обзор уже завершён.")
+                return
+            activate_workspace(
+                db_session,
+                user_id=user.id,
+                workspace=session_workspace,
+            )
             processed_update_ids = [
                 value
                 for value in action_session.context.get("processed_update_ids", [])
@@ -408,8 +467,14 @@ async def digest_callback(
             await callback_query.answer()
             return
 
+        if action == "cancel":
+            await message.edit_text("Действие отменено.", parse_mode=None)
+            await callback_query.answer("Отменено.")
+            return
+
         reminder = await db_session.scalar(
-            select(Reminder).where(
+            select(Reminder)
+            .where(
                 Reminder.id == object_id,
                 Reminder.user_id == user.id,
                 Reminder.type.in_(
@@ -419,10 +484,32 @@ async def digest_callback(
                     ]
                 ),
             )
+            .execution_options(include_all_workspaces=True)
         )
         if reminder is None:
             await callback_query.answer("Обзор недоступен.")
             return
+        if action == "tomorrow" and reminder.type != ReminderType.EVENING_DIGEST.value:
+            await callback_query.answer(
+                "Массовый перенос доступен в вечернем обзоре.",
+                show_alert=True,
+            )
+            return
+        if workspace is None and action in {"today", "tomorrow", "review"}:
+            await message.answer(
+                "Выберите раздел:",
+                reply_markup=digest_workspace_keyboard(action, reminder.id),
+            )
+            await callback_query.answer()
+            return
+        if workspace is None:
+            await callback_query.answer("Действие недоступно.")
+            return
+        activate_workspace(
+            db_session,
+            user_id=user.id,
+            workspace=workspace,
+        )
         if await get_active_draft_for_user(db_session, user.id) is not None:
             await callback_query.answer(
                 "Сначала завершите или отмените активный черновик.",
@@ -449,10 +536,11 @@ async def digest_callback(
                 user.id,
                 start=local_start,
                 end=local_end,
+                workspace=workspace,
             )
             await send_item_list(
                 message,
-                heading="Просрочено и на сегодня",
+                heading=f"Просрочено и на сегодня · {WORKSPACE_LABELS[workspace]}",
                 items=items,
                 timezone=preferences.zoneinfo,
             )
@@ -463,6 +551,7 @@ async def digest_callback(
                 local_date=local_date,
                 telegram_update_id=event_update.update_id,
                 preferences=preferences,
+                workspace=workspace,
                 reminder_policy=reminder_policy,
             )
             await db_session.commit()
@@ -478,6 +567,7 @@ async def digest_callback(
                 user.id,
                 local_date=local_date,
                 preferences=preferences,
+                workspace=workspace,
             )
             if not items:
                 await message.answer("Для разбора записей нет.")
@@ -491,6 +581,7 @@ async def digest_callback(
                     context={
                         "item_ids": [str(item.id) for item in items[:10]],
                         "index": 0,
+                        "workspace": workspace,
                     },
                     telegram_update_id=event_update.update_id,
                 )

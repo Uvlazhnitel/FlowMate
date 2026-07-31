@@ -2,8 +2,9 @@
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -23,39 +24,191 @@ from flowmate.reminders.preferences import (
 )
 from flowmate.reminders.sync import ReminderPolicy, sync_work_item_reminders
 from flowmate.reminders.timezone import resolve_local_datetime
-from flowmate.task_engine.enums import WorkItemStatus, WorkItemType
+from flowmate.task_engine.enums import WorkItemPriority, WorkItemStatus, WorkItemType
 from flowmate.task_engine.queries import OPEN_STATUSES
 from flowmate.workspaces import WORKSPACE_LABELS, WORKSPACE_VALUES, Workspace
+
+CANONICAL_DIGEST_WORKSPACE = Workspace.PERSONAL.value
+DIGEST_ITEM_LIMIT = 5
+DIGEST_TITLE_LIMIT = 96
+
+
+@dataclass(frozen=True, slots=True)
+class DigestItem:
+    id: UUID
+    title: str
+    item_type: str
+    status: str
+    effective_at: datetime | None
+    category: int
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceDigestSnapshot:
+    workspace: str
+    items: tuple[DigestItem, ...] = ()
+    total: int = 0
+
+    @property
+    def empty(self) -> bool:
+        return self.total == 0
 
 
 @dataclass(frozen=True, slots=True)
 class DigestSnapshot:
-    overdue: int = 0
-    due_today: int = 0
-    follow_ups: int = 0
-    waiting: int = 0
-    questions: int = 0
-    inbox: int = 0
-    reschedule: int = 0
+    workspaces: tuple[WorkspaceDigestSnapshot, ...]
 
     @property
     def empty(self) -> bool:
-        return not any(
+        return all(snapshot.empty for snapshot in self.workspaces)
+
+
+def _priority_rank_sql() -> ColumnElement[int]:
+    return case(
+        (WorkItem.priority == WorkItemPriority.URGENT.value, 0),
+        (WorkItem.priority == WorkItemPriority.HIGH.value, 1),
+        (WorkItem.priority == WorkItemPriority.NORMAL.value, 2),
+        (WorkItem.priority == WorkItemPriority.LOW.value, 3),
+        else_=2,
+    )
+
+
+def _effective_at_sql() -> ColumnElement[datetime]:
+    return case(
+        (
+            WorkItem.type == WorkItemType.FOLLOW_UP.value,
+            WorkItem.next_follow_up_at,
+        ),
+        else_=WorkItem.due_at,
+    )
+
+
+def _digest_category_sql(
+    reminder_type: ReminderType,
+    *,
+    now: datetime,
+    start: datetime,
+    end: datetime,
+) -> ColumnElement[int]:
+    ordinary = WorkItem.type.not_in(
+        [
+            WorkItemType.FOLLOW_UP.value,
+            WorkItemType.WAITING.value,
+            WorkItemType.QUESTION.value,
+        ]
+    )
+    if reminder_type is ReminderType.MORNING_DIGEST:
+        return case(
+            (ordinary & (WorkItem.due_at < now), 0),
             (
-                self.overdue,
-                self.due_today,
-                self.follow_ups,
-                self.waiting,
-                self.questions,
-                self.inbox,
-                self.reschedule,
+                (WorkItem.type == WorkItemType.FOLLOW_UP.value)
+                & (WorkItem.next_follow_up_at < end),
+                1,
+            ),
+            (
+                (WorkItem.type == WorkItemType.WAITING.value) & (WorkItem.due_at < now),
+                2,
+            ),
+            (
+                ordinary & (WorkItem.due_at >= now) & (WorkItem.due_at < end),
+                3,
+            ),
+            (WorkItem.type == WorkItemType.QUESTION.value, 4),
+            (WorkItem.status == WorkItemStatus.INBOX.value, 5),
+            else_=6,
+        )
+    return case(
+        (
+            WorkItem.type.not_in(
+                [WorkItemType.FOLLOW_UP.value, WorkItemType.WAITING.value]
+            )
+            & (WorkItem.due_at >= start)
+            & (WorkItem.due_at < end),
+            0,
+        ),
+        (
+            (WorkItem.type == WorkItemType.FOLLOW_UP.value)
+            & (WorkItem.next_follow_up_at < end),
+            1,
+        ),
+        (
+            (WorkItem.type == WorkItemType.WAITING.value) & (WorkItem.due_at < end),
+            2,
+        ),
+        else_=3,
+    )
+
+
+async def _build_workspace_digest_snapshot(
+    session: AsyncSession,
+    user_id: UUID,
+    reminder_type: ReminderType,
+    *,
+    workspace: str,
+    now: datetime,
+    start: datetime,
+    end: datetime,
+) -> WorkspaceDigestSnapshot:
+    category = _digest_category_sql(
+        reminder_type,
+        now=now,
+        start=start,
+        end=end,
+    )
+    max_category = 6 if reminder_type is ReminderType.MORNING_DIGEST else 3
+    conditions = (
+        WorkItem.user_id == user_id,
+        WorkItem.workspace == workspace,
+        WorkItem.status.in_(OPEN_STATUSES),
+        category < max_category,
+    )
+    total = int(
+        (
+            await session.scalar(
+                select(func.count(WorkItem.id))
+                .where(*conditions)
+                .execution_options(include_all_workspaces=True)
             )
         )
-
-
-async def _count(session: AsyncSession, *conditions: ColumnElement[bool]) -> int:
-    statement = select(func.count(WorkItem.id)).where(*conditions)
-    return int((await session.scalar(statement)) or 0)
+        or 0
+    )
+    if total == 0:
+        return WorkspaceDigestSnapshot(workspace=workspace)
+    inbox_recency = case(
+        (category == 5, WorkItem.created_at),
+        else_=None,
+    )
+    rows = list(
+        await session.execute(
+            select(WorkItem, category.label("digest_category"))
+            .where(*conditions)
+            .order_by(
+                category,
+                _priority_rank_sql(),
+                inbox_recency.desc().nulls_last(),
+                _effective_at_sql().asc().nulls_last(),
+                WorkItem.id,
+            )
+            .limit(DIGEST_ITEM_LIMIT)
+            .execution_options(include_all_workspaces=True)
+        )
+    )
+    items = tuple(
+        DigestItem(
+            id=item.id,
+            title=item.title,
+            item_type=item.type,
+            status=item.status,
+            effective_at=(
+                item.next_follow_up_at
+                if item.type == WorkItemType.FOLLOW_UP.value
+                else item.due_at
+            ),
+            category=int(index),
+        )
+        for item, index in rows
+    )
+    return WorkspaceDigestSnapshot(workspace=workspace, items=items, total=total)
 
 
 async def build_digest_snapshot(
@@ -65,7 +218,6 @@ async def build_digest_snapshot(
     *,
     now: datetime,
     preferences: EffectiveNotificationPreferences,
-    workspace: str = Workspace.PERSONAL.value,
 ) -> DigestSnapshot:
     timezone = preferences.zoneinfo
     local_now = now.astimezone(timezone)
@@ -79,75 +231,21 @@ async def build_digest_snapshot(
         local_now.replace(hour=0, minute=0, second=0, microsecond=0).time(),
         timezone,
     ).astimezone(UTC)
-    owned_open = (
-        WorkItem.user_id == user_id,
-        WorkItem.workspace == workspace,
-        WorkItem.status.in_(OPEN_STATUSES),
-    )
-    ordinary = WorkItem.type.not_in(
-        [WorkItemType.FOLLOW_UP.value, WorkItemType.WAITING.value]
-    )
-    if reminder_type is ReminderType.MORNING_DIGEST:
-        return DigestSnapshot(
-            overdue=await _count(
-                session, *owned_open, ordinary, WorkItem.due_at < start
-            ),
-            due_today=await _count(
-                session,
-                *owned_open,
-                WorkItem.type == WorkItemType.TASK.value,
-                WorkItem.due_at >= start,
-                WorkItem.due_at < end,
-            ),
-            follow_ups=await _count(
-                session,
-                *owned_open,
-                WorkItem.type == WorkItemType.FOLLOW_UP.value,
-                WorkItem.next_follow_up_at >= start,
-                WorkItem.next_follow_up_at < end,
-            ),
-            waiting=await _count(
-                session,
-                *owned_open,
-                WorkItem.type == WorkItemType.WAITING.value,
-                WorkItem.due_at < start,
-            ),
-            questions=await _count(
-                session,
-                *owned_open,
-                WorkItem.type == WorkItemType.QUESTION.value,
-            ),
-            inbox=await _count(
-                session,
-                WorkItem.user_id == user_id,
-                WorkItem.workspace == workspace,
-                WorkItem.status == WorkItemStatus.INBOX.value,
-            ),
-        )
-    due_today = await _count(
-        session,
-        *owned_open,
-        ordinary,
-        WorkItem.due_at >= start,
-        WorkItem.due_at < end,
-    )
-    overdue_followups = await _count(
-        session,
-        *owned_open,
-        WorkItem.type == WorkItemType.FOLLOW_UP.value,
-        WorkItem.next_follow_up_at < now,
-    )
-    waiting = await _count(
-        session,
-        *owned_open,
-        WorkItem.type == WorkItemType.WAITING.value,
-        WorkItem.due_at < end,
-    )
     return DigestSnapshot(
-        due_today=due_today,
-        follow_ups=overdue_followups,
-        waiting=waiting,
-        reschedule=due_today + overdue_followups,
+        workspaces=tuple(
+            [
+                await _build_workspace_digest_snapshot(
+                    session,
+                    user_id,
+                    reminder_type,
+                    workspace=workspace,
+                    now=now,
+                    start=start,
+                    end=end,
+                )
+                for workspace in WORKSPACE_VALUES
+            ]
+        )
     )
 
 
@@ -155,29 +253,61 @@ def format_digest_message(
     reminder_type: ReminderType,
     snapshot: DigestSnapshot,
     *,
-    workspace: str = Workspace.PERSONAL.value,
+    timezone: ZoneInfo,
+    now: datetime,
 ) -> str:
-    workspace_label = WORKSPACE_LABELS[workspace]
-    if reminder_type is ReminderType.MORNING_DIGEST:
-        values = [
-            ("🔴", "Просрочено", snapshot.overdue),
-            ("🟠", "На сегодня", snapshot.due_today),
-            ("🔁", "Follow-up", snapshot.follow_ups),
-            ("⏳", "Ждём ответа", snapshot.waiting),
-            ("❓", "Открытые вопросы", snapshot.questions),
-            ("📥", "Входящие", snapshot.inbox),
+    local_now = now.astimezone(timezone)
+    title = (
+        "☀️ Доброе утро"
+        if reminder_type is ReminderType.MORNING_DIGEST
+        else "🌙 Вечерний обзор"
+    )
+    sections: list[str] = []
+    workspace_icons = {
+        Workspace.PERSONAL.value: "🏠",
+        Workspace.WORK.value: "💼",
+    }
+    for workspace_snapshot in snapshot.workspaces:
+        if workspace_snapshot.empty:
+            continue
+        lines = [
+            f"{workspace_icons[workspace_snapshot.workspace]} "
+            f"{WORKSPACE_LABELS[workspace_snapshot.workspace]}"
         ]
-        title = f"☀️ Доброе утро · {workspace_label}"
-    else:
-        values = [
-            ("🟠", "Не завершено сегодня", snapshot.due_today),
-            ("🔁", "Просроченные follow-up", snapshot.follow_ups),
-            ("⏳", "Требуют внимания", snapshot.waiting),
-            ("📅", "Можно перенести", snapshot.reschedule),
-        ]
-        title = f"🌙 Вечерний обзор · {workspace_label}"
-    rows = [f"{icon} {label}: {value}" for icon, label, value in values if value]
-    return "\n\n".join((title, "\n".join(rows or ["На сегодня всё спокойно."])))
+        for item in workspace_snapshot.items:
+            normalized = " ".join(item.title.split())
+            display_title = (
+                normalized
+                if len(normalized) <= DIGEST_TITLE_LIMIT
+                else f"{normalized[: DIGEST_TITLE_LIMIT - 1].rstrip()}…"
+            )
+            if item.item_type == WorkItemType.FOLLOW_UP.value:
+                icon = "🔁"
+            elif item.item_type == WorkItemType.WAITING.value:
+                icon = "⏳"
+            elif item.item_type == WorkItemType.QUESTION.value:
+                icon = "❓"
+            elif item.category == 5:
+                icon = "📥"
+            elif item.effective_at is not None and item.effective_at < now:
+                icon = "🔴"
+            else:
+                icon = "🟠"
+            suffix = ""
+            if item.effective_at is not None:
+                local_effective = item.effective_at.astimezone(timezone)
+                formatted = (
+                    f"{local_effective:%H:%M}"
+                    if local_effective.date() == local_now.date()
+                    else f"{local_effective:%d.%m, %H:%M}"
+                )
+                suffix = f" · {formatted}"
+            lines.append(f"{icon} {display_title}{suffix}")
+        remaining = workspace_snapshot.total - len(workspace_snapshot.items)
+        if remaining > 0:
+            lines.append(f"+ ещё {remaining}")
+        sections.append("\n".join(lines))
+    return "\n\n".join([title, *(sections or ["На сегодня всё спокойно."])])
 
 
 async def ensure_daily_digest_reminders(
@@ -223,48 +353,73 @@ async def ensure_daily_digest_reminders(
                 preferences.evening_digest_time,
             ),
         )
-        for workspace in WORKSPACE_VALUES:
-            for reminder_type, enabled, digest_time in definitions:
-                if not enabled:
-                    continue
-                scheduled_at = resolve_local_datetime(
-                    local_date, digest_time, preferences_zone.zoneinfo
-                ).astimezone(UTC)
-                statement = (
-                    insert(Reminder)
-                    .values(
-                        id=uuid4(),
-                        user_id=preferences.user_id,
-                        workspace=workspace,
-                        type=reminder_type.value,
-                        scheduled_at=scheduled_at,
-                        schedule_kind="manual",
-                        status=ReminderStatus.PENDING.value,
-                        deduplication_key=(
-                            f"digest:{workspace}:{reminder_type.value}:{local_date}"
-                        ),
-                        digest_local_date=local_date,
-                        schedule_timezone=timezone,
-                    )
-                    .on_conflict_do_update(
-                        constraint=("uq_reminders_user_workspace_digest_local_date"),
-                        set_={
-                            "scheduled_at": scheduled_at,
-                            "schedule_timezone": timezone,
-                            "status": case(
-                                (Reminder.sent_at.is_not(None), Reminder.status),
-                                else_=ReminderStatus.PENDING.value,
-                            ),
-                            "cancelled_at": case(
-                                (Reminder.sent_at.is_not(None), Reminder.cancelled_at),
-                                else_=None,
-                            ),
-                        },
-                    )
-                    .returning(Reminder.id)
+        for reminder_type, enabled, digest_time in definitions:
+            if not enabled:
+                continue
+            scheduled_at = resolve_local_datetime(
+                local_date, digest_time, preferences_zone.zoneinfo
+            ).astimezone(UTC)
+            statement = (
+                insert(Reminder)
+                .values(
+                    id=uuid4(),
+                    user_id=preferences.user_id,
+                    workspace=CANONICAL_DIGEST_WORKSPACE,
+                    type=reminder_type.value,
+                    scheduled_at=scheduled_at,
+                    schedule_kind="manual",
+                    status=ReminderStatus.PENDING.value,
+                    deduplication_key=f"digest:{reminder_type.value}:{local_date}",
+                    digest_local_date=local_date,
+                    schedule_timezone=timezone,
                 )
-                if (await session.scalar(statement)) is not None:
-                    created += 1
+                .on_conflict_do_update(
+                    constraint=("uq_reminders_user_workspace_digest_local_date"),
+                    set_={
+                        "scheduled_at": scheduled_at,
+                        "schedule_timezone": timezone,
+                        "deduplication_key": (
+                            f"digest:{reminder_type.value}:{local_date}"
+                        ),
+                        "status": case(
+                            (Reminder.sent_at.is_not(None), Reminder.status),
+                            else_=ReminderStatus.PENDING.value,
+                        ),
+                        "cancelled_at": case(
+                            (Reminder.sent_at.is_not(None), Reminder.cancelled_at),
+                            else_=None,
+                        ),
+                    },
+                )
+                .returning(Reminder.id)
+            )
+            if (await session.scalar(statement)) is not None:
+                created += 1
+            await session.execute(
+                update(Reminder)
+                .where(
+                    Reminder.user_id == preferences.user_id,
+                    Reminder.workspace == Workspace.WORK.value,
+                    Reminder.type == reminder_type.value,
+                    Reminder.digest_local_date == local_date,
+                    Reminder.sent_at.is_(None),
+                    Reminder.status.in_(
+                        [
+                            ReminderStatus.PENDING.value,
+                            ReminderStatus.SNOOZED.value,
+                            ReminderStatus.FAILED.value,
+                        ]
+                    ),
+                )
+                .values(
+                    status=ReminderStatus.CANCELLED.value,
+                    cancelled_at=now,
+                    snoozed_until=None,
+                    next_attempt_at=None,
+                    processing_started_at=None,
+                    processing_token=None,
+                )
+            )
     await session.flush()
     return created
 
@@ -276,7 +431,6 @@ async def prepare_digest_message(
     *,
     now: datetime,
     defaults: NotificationDefaults,
-    workspace: str = Workspace.PERSONAL.value,
 ) -> str | None:
     from flowmate.reminders.preferences import (
         get_effective_notification_preferences,
@@ -298,11 +452,15 @@ async def prepare_digest_message(
         reminder_type,
         now=now,
         preferences=preferences,
-        workspace=workspace,
     )
     if snapshot.empty and not preferences.send_empty_digests:
         return None
-    return format_digest_message(reminder_type, snapshot, workspace=workspace)
+    return format_digest_message(
+        reminder_type,
+        snapshot,
+        timezone=preferences.zoneinfo,
+        now=now,
+    )
 
 
 async def cancel_future_digests(
@@ -339,6 +497,7 @@ async def list_digest_reschedule_items(
     *,
     local_date: date,
     preferences: EffectiveNotificationPreferences,
+    workspace: str,
 ) -> list[WorkItem]:
     timezone = preferences.zoneinfo
     midnight = resolve_local_datetime(local_date, datetime.min.time(), timezone)
@@ -350,6 +509,7 @@ async def list_digest_reschedule_items(
             select(WorkItem)
             .where(
                 WorkItem.user_id == user_id,
+                WorkItem.workspace == workspace,
                 WorkItem.status.in_(OPEN_STATUSES),
                 or_(
                     and_(
@@ -372,6 +532,7 @@ async def list_digest_reschedule_items(
             )
             .order_by(WorkItem.created_at)
             .with_for_update()
+            .execution_options(include_all_workspaces=True)
         )
     )
 
@@ -383,6 +544,7 @@ async def move_digest_items_to_tomorrow(
     local_date: date,
     telegram_update_id: int,
     preferences: EffectiveNotificationPreferences,
+    workspace: str,
     reminder_policy: ReminderPolicy | None = None,
 ) -> int:
     from flowmate.task_engine.management import event_for_update
@@ -394,6 +556,7 @@ async def move_digest_items_to_tomorrow(
         user_id,
         local_date=local_date,
         preferences=preferences,
+        workspace=workspace,
     )
     timezone = preferences.zoneinfo
     for index, item in enumerate(items):

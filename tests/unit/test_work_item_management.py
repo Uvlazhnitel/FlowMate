@@ -77,11 +77,19 @@ def test_work_item_callback_parser_is_strict() -> None:
         "postpone",
         item_id,
         "3",
+        None,
     )
     assert parse_work_item_callback(f"wi:details:{item_id}") == (
         "details",
         item_id,
         None,
+        None,
+    )
+    assert parse_work_item_callback(f"wi:details:{item_id}:w") == (
+        "details",
+        item_id,
+        None,
+        "work",
     )
     assert parse_work_item_callback("wi:details:not-a-uuid") is None
     assert parse_work_item_callback("draft:details:value") is None
@@ -203,12 +211,14 @@ def test_reschedule_keyboard_contains_all_presets() -> None:
         "Отмена",
     } == labels
     revision = encode_revision(int(details.item.updated_at.timestamp() * 1_000_000))
-    assert any(
-        (button.callback_data or "").endswith(revision)
+    parsed_callbacks = [
+        parsed
         for row in keyboard.inline_keyboard
         for button in row
         if button.text != "Отмена"
-    )
+        and (parsed := parse_work_item_callback(button.callback_data)) is not None
+    ]
+    assert any(parsed[2] == revision for parsed in parsed_callbacks)
 
 
 def notification_defaults() -> NotificationDefaults:

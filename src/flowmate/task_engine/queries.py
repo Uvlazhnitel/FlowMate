@@ -71,6 +71,7 @@ async def list_today_items(
     *,
     start: datetime,
     end: datetime,
+    workspace: str | None = None,
     limit: int = 10,
     offset: int = 0,
 ) -> list[WorkItem]:
@@ -88,6 +89,10 @@ async def list_today_items(
         .offset(offset)
         .limit(limit)
     )
+    if workspace is not None:
+        statement = statement.where(WorkItem.workspace == workspace).execution_options(
+            include_all_workspaces=True
+        )
     return list(await session.scalars(statement))
 
 

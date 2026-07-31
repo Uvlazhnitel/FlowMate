@@ -160,8 +160,8 @@ notification preferences are shared, while each person's operational counts
 and history are calculated for the current space.
 
 Draft conversion keeps the draft's space. Reminders retain their record's space
-and continue to fire after switching; daily digests are generated separately
-and include the space name. Switching is rejected while a draft,
+and continue to fire after switching; each daily digest combines compact task
+lists for both spaces in one message. Switching is rejected while a draft,
 clarification, setup, or free-form action is active so a reply cannot cross
 contexts. Existing final records cannot yet be moved between spaces.
 `APP_ACTIVE_WORKSPACE` accepts only `personal` or `work` and is used as the
@@ -518,9 +518,10 @@ reminders. An operator can deliberately retry with
 `REMINDER_DELIVERY_TIMEOUT_SECONDS`, preventing an active delivery from losing
 its processing lease.
 Enabled morning and evening digests are created at most once per user and local
-day. They summarize current WorkItems immediately before delivery, remain
-idempotent across worker restarts, and handle local daylight-saving changes.
-Empty digests are suppressed unless the user explicitly enables them.
+day. They list up to five current WorkItems for each space immediately before
+delivery, remain idempotent across worker restarts, and handle local
+daylight-saving changes. Empty digests are suppressed unless the user explicitly
+enables them.
 
 An open follow-up uses `next_follow_up_at`, a waiting record uses `due_at`, and
 other dated records use `due_at` for an exact reminder. Set

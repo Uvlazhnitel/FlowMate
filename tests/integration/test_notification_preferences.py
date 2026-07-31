@@ -32,6 +32,7 @@ from flowmate.reminders.service import (
 from flowmate.task_engine.action_sessions import create_action_session
 from flowmate.task_engine.enums import WorkItemAction
 from flowmate.task_engine.service import create_work_item
+from flowmate.workspaces import activate_workspace
 
 DEFAULTS = NotificationDefaults(
     timezone="UTC",
@@ -116,8 +117,8 @@ async def test_daily_digest_is_unique_and_uses_current_work_items(
         defaults=DEFAULTS,
     )
 
-    assert len(values) == 2
-    assert {value.workspace for value in values} == {"personal", "work"}
+    assert len(values) == 1
+    assert values[0].workspace == "personal"
     assert all(value.digest_local_date is not None for value in values)
     assert all(
         value.digest_local_date is not None
@@ -125,9 +126,17 @@ async def test_daily_digest_is_unique_and_uses_current_work_items(
         for value in values
     )
     assert all(value.schedule_timezone == "UTC" for value in values)
-    assert snapshot.due_today == 1
-    assert snapshot.questions == 1
-    assert message is not None and "На сегодня: 1" in message
+    personal = next(
+        value for value in snapshot.workspaces if value.workspace == "personal"
+    )
+    work = next(value for value in snapshot.workspaces if value.workspace == "work")
+    assert [item.title for item in personal.items] == ["Due today", "Open question"]
+    assert personal.total == 2
+    assert work.empty
+    assert message is not None
+    assert "🏠 Личное" in message
+    assert "🟠 Due today · 12:00" in message
+    assert "❓ Open question" in message
 
 
 @pytest.mark.integration
@@ -161,6 +170,130 @@ async def test_empty_digest_is_suppressed_unless_enabled(
     )
     assert message is not None and "На сегодня всё спокойно." in message
     assert ": 0" not in message
+
+
+@pytest.mark.integration
+async def test_digest_limits_each_workspace_and_fills_with_fresh_inbox(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, 660_010)
+    now = datetime(2026, 7, 22, 10, tzinfo=UTC)
+    activate_workspace(database_session, user_id=user.id, workspace="personal")
+    personal_definitions = (
+        ("Overdue urgent", "task", now - timedelta(days=2), "urgent"),
+        ("Overdue normal", "task", now - timedelta(days=1), "normal"),
+        ("Follow up", "follow_up", now - timedelta(hours=1), "normal"),
+        ("Waiting", "waiting", now - timedelta(hours=2), "normal"),
+        ("Due today", "task", now + timedelta(hours=2), "normal"),
+        ("Question", "question", None, "normal"),
+        ("Inbox", "task", None, "normal"),
+    )
+    for title, item_type, effective_at, priority in personal_definitions:
+        await create_work_item(
+            database_session,
+            user.id,
+            item_type=item_type,
+            title=title,
+            status="waiting" if item_type == "waiting" else "inbox",
+            due_at=(
+                effective_at if item_type not in {"follow_up", "question"} else None
+            ),
+            next_follow_up_at=effective_at if item_type == "follow_up" else None,
+            waiting_since=(now - timedelta(days=3) if item_type == "waiting" else None),
+            priority=priority,
+        )
+
+    activate_workspace(database_session, user_id=user.id, workspace="work")
+    await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Work due",
+        due_at=now + timedelta(hours=1),
+    )
+    await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Older work inbox",
+    )
+    await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Newer work inbox",
+    )
+
+    snapshot = await build_digest_snapshot(
+        database_session,
+        user.id,
+        ReminderType.MORNING_DIGEST,
+        now=now,
+        preferences=effective_preferences(None, DEFAULTS),
+    )
+    personal = next(
+        value for value in snapshot.workspaces if value.workspace == "personal"
+    )
+    work = next(value for value in snapshot.workspaces if value.workspace == "work")
+
+    assert [item.title for item in personal.items] == [
+        "Overdue urgent",
+        "Overdue normal",
+        "Follow up",
+        "Waiting",
+        "Due today",
+    ]
+    assert personal.total == 7
+    assert [item.title for item in work.items] == [
+        "Work due",
+        "Newer work inbox",
+        "Older work inbox",
+    ]
+
+
+@pytest.mark.integration
+async def test_digest_scheduler_cancels_legacy_workspace_duplicate(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, 660_011)
+    preferences = await get_or_create_notification_preferences(
+        database_session, user.id, DEFAULTS
+    )
+    preferences.morning_digest_enabled = True
+    now = datetime(2026, 7, 22, 8, tzinfo=UTC)
+    legacy = Reminder(
+        user_id=user.id,
+        workspace="work",
+        type=ReminderType.MORNING_DIGEST.value,
+        scheduled_at=datetime(2026, 7, 22, 9, tzinfo=UTC),
+        schedule_kind="manual",
+        status=ReminderStatus.PENDING.value,
+        deduplication_key="digest:work:morning_digest:2026-07-22",
+        digest_local_date=now.date(),
+        schedule_timezone="UTC",
+    )
+    database_session.add(legacy)
+    await database_session.flush()
+
+    await ensure_daily_digest_reminders(database_session, now=now)
+    values = list(
+        await database_session.scalars(
+            select(Reminder)
+            .where(
+                Reminder.user_id == user.id,
+                Reminder.type == ReminderType.MORNING_DIGEST.value,
+            )
+            .execution_options(include_all_workspaces=True)
+        )
+    )
+
+    assert len(values) == 2
+    assert next(value for value in values if value.workspace == "work").status == (
+        ReminderStatus.CANCELLED.value
+    )
+    canonical = next(value for value in values if value.workspace == "personal")
+    assert canonical.status == ReminderStatus.PENDING.value
+    assert canonical.deduplication_key == "digest:morning_digest:2026-07-22"
 
 
 @pytest.mark.integration
@@ -249,6 +382,7 @@ async def test_evening_bulk_move_is_atomic_idempotent_and_excludes_waiting(
         local_date=task_date.date(),
         telegram_update_id=960_001,
         preferences=preferences,
+        workspace="personal",
     )
     duplicate_count = await move_digest_items_to_tomorrow(
         database_session,
@@ -256,6 +390,7 @@ async def test_evening_bulk_move_is_atomic_idempotent_and_excludes_waiting(
         local_date=task_date.date(),
         telegram_update_id=960_001,
         preferences=preferences,
+        workspace="personal",
     )
     events = list(
         await database_session.scalars(
@@ -269,6 +404,108 @@ async def test_evening_bulk_move_is_atomic_idempotent_and_excludes_waiting(
     assert follow_up.next_follow_up_at == follow_up_date + timedelta(days=1)
     assert waiting.due_at == waiting_date
     assert len([event for event in events if event.event_type == "rescheduled"]) == 2
+
+
+@pytest.mark.integration
+async def test_digest_action_chooses_workspace_without_switching_user(
+    database_session: AsyncSession,
+) -> None:
+    telegram_user_id = 660_012
+    user = await create_telegram_user(database_session, telegram_user_id)
+    local_date = datetime(2026, 7, 22, 15, tzinfo=UTC)
+    activate_workspace(database_session, user_id=user.id, workspace="personal")
+    personal_item = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Personal task",
+        due_at=local_date,
+    )
+    activate_workspace(database_session, user_id=user.id, workspace="work")
+    work_item = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Work task",
+        due_at=local_date,
+    )
+    activate_workspace(database_session, user_id=user.id, workspace="personal")
+    reminder = Reminder(
+        user_id=user.id,
+        workspace="personal",
+        type=ReminderType.EVENING_DIGEST.value,
+        scheduled_at=local_date,
+        schedule_kind="manual",
+        status=ReminderStatus.SENT.value,
+        deduplication_key="digest:evening_digest:2026-07-22",
+        digest_local_date=local_date.date(),
+        schedule_timezone="UTC",
+        sent_at=local_date,
+    )
+    database_session.add(reminder)
+    await database_session.flush()
+    telegram_user = User(
+        id=telegram_user_id,
+        is_bot=False,
+        first_name="Test",
+    )
+    message = Message(
+        message_id=30,
+        date=datetime.now(UTC),
+        chat=Chat(id=telegram_user_id, type="private"),
+        from_user=telegram_user,
+        text="Digest",
+    )
+    choose_callback = CallbackQuery(
+        id="digest-choose",
+        from_user=telegram_user,
+        chat_instance="test",
+        message=message,
+        data=f"dig:tomorrow:{reminder.id}",
+    )
+    choose_update = Update(update_id=970_010, callback_query=choose_callback)
+    with (
+        patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+    ):
+        await digest_callback(
+            choose_callback,
+            choose_update,
+            database_session,
+            DEFAULTS,
+            30,
+        )
+    answer_call = answer.await_args
+    assert answer_call is not None
+    chooser = answer_call.kwargs["reply_markup"]
+    assert [button.text for button in chooser.inline_keyboard[0]] == [
+        "Личное",
+        "Работа",
+    ]
+
+    work_callback = CallbackQuery(
+        id="digest-work",
+        from_user=telegram_user,
+        chat_instance="test",
+        message=message,
+        data=f"dig:tomorrow:w:{reminder.id}",
+    )
+    work_update = Update(update_id=970_011, callback_query=work_callback)
+    with (
+        patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
+        patch.object(Message, "answer", new_callable=AsyncMock),
+    ):
+        await digest_callback(
+            work_callback,
+            work_update,
+            database_session,
+            DEFAULTS,
+            30,
+        )
+
+    assert personal_item.due_at == local_date
+    assert work_item.due_at == local_date + timedelta(days=1)
+    assert user.active_workspace == "personal"
 
 
 @pytest.mark.integration
@@ -365,7 +602,11 @@ async def test_digest_review_next_callback_is_idempotent(
         action=WorkItemAction.DIGEST_REVIEW,
         ttl_minutes=30,
         work_item_id=items[0].id,
-        context={"item_ids": [str(item.id) for item in items], "index": 0},
+        context={
+            "item_ids": [str(item.id) for item in items],
+            "index": 0,
+            "workspace": "personal",
+        },
         telegram_update_id=970_001,
     )
     telegram_user = User(
