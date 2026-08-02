@@ -148,6 +148,7 @@ describe("protected application", () => {
 
   it.each([
     ["/today", "Сегодня"],
+    ["/tomorrow", "Завтра"],
     ["/topics", "Темы"],
     ["/people", "Люди"],
     ["/agenda", "Повестка"],
@@ -162,6 +163,22 @@ describe("protected application", () => {
 
     expect(await screen.findByRole("heading", { name: title, level: 1 })).toBeVisible();
     expect(screen.getAllByText("FlowMate")).toHaveLength(2);
+  });
+
+  it("shows Tomorrow immediately after Today in the desktop navigation", async () => {
+    stubEmptyApplication();
+
+    renderApplication("/today");
+
+    await screen.findByRole("heading", { name: "Сегодня", level: 1 });
+    const desktopNavigation = screen
+      .getAllByRole("navigation", { name: "Основная навигация" })
+      .find((navigation) => navigation.classList.contains("sidebar-nav"));
+    expect(desktopNavigation).toBeDefined();
+    const links = within(desktopNavigation!)
+      .getAllByRole("link")
+      .map((link) => link.textContent);
+    expect(links.slice(0, 3)).toEqual(["Сегодня", "Завтра", "Входящие"]);
   });
 
   it.each(["/", "/dashboard", "/missing"])(

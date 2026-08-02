@@ -269,7 +269,7 @@ describe("remaining operational screens", () => {
       .find((navigation) => navigation.classList.contains("mobile-nav"));
     expect(mobileNavigation).toBeDefined();
     await user.click(within(mobileNavigation!).getByText("Ещё"));
-    for (const label of ["Лента", "Темы", "Очередь Planner", "Настройки"]) {
+    for (const label of ["Завтра", "Лента", "Темы", "Очередь Planner", "Настройки"]) {
       expect(within(mobileNavigation!).getByRole("link", { name: label })).toBeVisible();
     }
   });

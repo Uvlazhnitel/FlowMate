@@ -3,6 +3,7 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CalendarDays,
+  CalendarRange,
   CircleHelp,
   Clock3,
   Inbox,
@@ -26,6 +27,7 @@ interface NavigationItem {
 
 const navigationItems: NavigationItem[] = [
   { to: "/today", label: "Сегодня", icon: CalendarDays },
+  { to: "/tomorrow", label: "Завтра", icon: CalendarRange },
   { to: "/inbox", label: "Входящие", icon: Inbox },
   { to: "/agenda", label: "Повестка", icon: CircleHelp },
   { to: "/timeline", label: "Лента", icon: Clock3 },
