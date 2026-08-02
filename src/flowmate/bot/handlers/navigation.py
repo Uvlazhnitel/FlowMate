@@ -17,6 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.schemas import SearchIntent
+from flowmate.bot.callback_feedback import CallbackFeedback
 from flowmate.bot.formatting import split_plain_text
 from flowmate.bot.handlers.work_items import send_details
 from flowmate.bot.menu import main_menu_keyboard, restore_main_menu
@@ -970,14 +971,16 @@ async def list_callback(
     db_session: AsyncSession,
     app_timezone: ZoneInfo,
 ) -> None:
+    feedback = CallbackFeedback(callback_query)
     parsed = parse_list_callback(callback_query.data)
     message = callback_query.message
     if parsed is None or not isinstance(message, Message):
-        await callback_query.answer(EXPIRED_LIST_MESSAGE, show_alert=True)
+        await feedback.error(EXPIRED_LIST_MESSAGE)
         return
+    await feedback.acknowledge("⏳ Открываю…")
     user = await get_user_by_telegram_id(db_session, callback_query.from_user.id)
     if user is None:
-        await callback_query.answer(EXPIRED_LIST_MESSAGE, show_alert=True)
+        await feedback.error(EXPIRED_LIST_MESSAGE)
         return
     view, page, people_scope = parsed
     try:
@@ -990,12 +993,11 @@ async def list_callback(
             people_scope=people_scope or "work",
         )
         await send_navigation_page(message, value, edit=True)
-        await callback_query.answer()
     except ExpiredListError:
-        await callback_query.answer(EXPIRED_LIST_MESSAGE, show_alert=True)
+        await feedback.error(EXPIRED_LIST_MESSAGE)
     except SQLAlchemyError:
         await db_session.rollback()
-        await callback_query.answer(LIST_FAILED_MESSAGE, show_alert=True)
+        await feedback.error(LIST_FAILED_MESSAGE)
 
 
 async def search_callback(
@@ -1003,19 +1005,21 @@ async def search_callback(
     db_session: AsyncSession,
     app_timezone: ZoneInfo,
 ) -> None:
+    feedback = CallbackFeedback(callback_query)
     parsed = parse_search_callback(callback_query.data)
     message = callback_query.message
     if parsed is None or not isinstance(message, Message):
-        await callback_query.answer(EXPIRED_LIST_MESSAGE, show_alert=True)
+        await feedback.error(EXPIRED_LIST_MESSAGE)
         return
+    await feedback.acknowledge("⏳ Открываю…")
     user = await get_user_by_telegram_id(db_session, callback_query.from_user.id)
     if user is None:
-        await callback_query.answer(EXPIRED_LIST_MESSAGE, show_alert=True)
+        await feedback.error(EXPIRED_LIST_MESSAGE)
         return
     session_id, page = parsed
     action_session = await get_search_session_for_user(db_session, user.id, session_id)
     if action_session is None:
-        await callback_query.answer(EXPIRED_LIST_MESSAGE, show_alert=True)
+        await feedback.error(EXPIRED_LIST_MESSAGE)
         return
     try:
         value = await build_search_page(
@@ -1026,24 +1030,25 @@ async def search_callback(
             timezone=app_timezone,
         )
         await send_navigation_page(message, value, edit=True)
-        await callback_query.answer()
     except ExpiredListError:
-        await callback_query.answer(EXPIRED_LIST_MESSAGE, show_alert=True)
+        await feedback.error(EXPIRED_LIST_MESSAGE)
     except SQLAlchemyError:
         await db_session.rollback()
-        await callback_query.answer(LIST_FAILED_MESSAGE, show_alert=True)
+        await feedback.error(LIST_FAILED_MESSAGE)
 
 
 async def menu_callback(
     callback_query: CallbackQuery,
     db_session: AsyncSession,
 ) -> None:
+    feedback = CallbackFeedback(callback_query)
     if callback_query.data != "nav:menu":
-        await callback_query.answer("Действие недоступно.")
+        await feedback.error("Действие недоступно.")
         return
     message = callback_query.message
     if not isinstance(message, Message):
-        await callback_query.answer("Действие недоступно.")
+        await feedback.error("Действие недоступно.")
         return
+    await feedback.acknowledge("⏳ Открываю меню…")
     await menu_command(message, db_session)
-    await callback_query.answer()
+    await feedback.success("Главное меню открыто.", remove_keyboard=True)

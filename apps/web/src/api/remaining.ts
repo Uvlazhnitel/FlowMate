@@ -1,13 +1,8 @@
 import { apiRequest } from "./client";
-import type { PageResponse, WorkItemCardData } from "./operations";
+import type { PageResponse, PlannerStatus, WorkItemCardData } from "./operations";
 
 export type InboxKind = "draft" | "work_item" | "note";
-export type PlannerStatus =
-  | "not_required"
-  | "needs_transfer"
-  | "transferred"
-  | "update_required"
-  | "no_longer_relevant";
+export type { PlannerStatus } from "./operations";
 
 export interface EntityRef {
   id: string;

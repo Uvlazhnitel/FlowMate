@@ -173,9 +173,12 @@ async def sync_planner_status(
     reason: str,
 ) -> bool:
     previous = item.planner_status
-    if item.type not in ELIGIBLE_PLANNER_TYPES:
-        target = PlannerStatus.NOT_REQUIRED.value
-    elif item.status not in OPEN_WORK_ITEM_STATUSES:
+    if previous == PlannerStatus.NOT_REQUIRED.value:
+        return False
+    if (
+        item.type not in ELIGIBLE_PLANNER_TYPES
+        or item.status not in OPEN_WORK_ITEM_STATUSES
+    ):
         target = PlannerStatus.NO_LONGER_RELEVANT.value
     elif reason == "reopened" or previous == PlannerStatus.NO_LONGER_RELEVANT.value:
         target = (
@@ -185,8 +188,6 @@ async def sync_planner_status(
         )
     elif previous == PlannerStatus.TRANSFERRED.value:
         target = PlannerStatus.UPDATE_REQUIRED.value
-    elif reason == "type_changed" and previous == PlannerStatus.NOT_REQUIRED.value:
-        target = PlannerStatus.NEEDS_TRANSFER.value
     else:
         return False
     if target == previous:
@@ -230,6 +231,8 @@ async def change_planner_status(
     item.planner_status = target.value
     if target is PlannerStatus.TRANSFERRED:
         item.planner_transferred_at = now or management_now()
+    elif target is PlannerStatus.NOT_REQUIRED:
+        item.planner_transferred_at = None
     event = await append_management_event(
         session,
         item,

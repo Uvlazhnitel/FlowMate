@@ -756,9 +756,13 @@ async def test_expired_and_foreign_drafts_reject_callbacks() -> None:
             new=AsyncMock(return_value=expired),
         ),
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
+        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
     ):
         await draft_callback(callback, update, session)
-    answer.assert_awaited_once_with(DRAFT_EXPIRED_MESSAGE, show_alert=True)
+    answer.assert_awaited_once_with("⏳ Выполняю…")
+    edit_call = edit.await_args
+    assert edit_call is not None
+    assert edit_call.args[0].endswith(f"⚠️ {DRAFT_EXPIRED_MESSAGE}")
     assert expired.status == "expired"
 
     callback, update = make_callback(expired.id, "confirm")
@@ -772,9 +776,13 @@ async def test_expired_and_foreign_drafts_reject_callbacks() -> None:
             new=AsyncMock(return_value=None),
         ),
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
+        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
     ):
         await draft_callback(callback, update, session)
-    answer.assert_awaited_once_with(DRAFT_NOT_FOUND_MESSAGE, show_alert=True)
+    answer.assert_awaited_once_with("⏳ Выполняю…")
+    edit_call = edit.await_args
+    assert edit_call is not None
+    assert edit_call.args[0].endswith(f"⚠️ {DRAFT_NOT_FOUND_MESSAGE}")
 
 
 @pytest.mark.asyncio
@@ -788,11 +796,12 @@ async def test_callback_database_failure_returns_safe_error() -> None:
             new=AsyncMock(side_effect=SQLAlchemyError("private detail")),
         ),
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
+        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
     ):
         await draft_callback(callback, update, session)
 
     cast(AsyncMock, session.rollback).assert_awaited_once()
-    answer.assert_awaited_once_with(
-        DRAFT_CONVERSION_FAILED_MESSAGE,
-        show_alert=True,
-    )
+    answer.assert_awaited_once_with("⏳ Выполняю…")
+    edit_call = edit.await_args
+    assert edit_call is not None
+    assert edit_call.args[0].endswith(f"⚠️ {DRAFT_CONVERSION_FAILED_MESSAGE}")

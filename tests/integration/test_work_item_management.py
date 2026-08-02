@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 from aiogram.types import Chat, Message, Update, User
@@ -28,7 +29,7 @@ from flowmate.task_engine.action_sessions import (
     get_active_action_session,
 )
 from flowmate.task_engine.details import get_work_item_details
-from flowmate.task_engine.enums import WorkItemAction, WorkItemType
+from flowmate.task_engine.enums import PlannerStatus, WorkItemAction, WorkItemType
 from flowmate.task_engine.intents import (
     AmbiguousManagementCandidateError,
     find_intent_targets,
@@ -41,6 +42,7 @@ from flowmate.task_engine.management import (
     StaleWorkItemError,
     add_work_item_note,
     cancel_work_item,
+    change_planner_status,
     change_work_item_person,
     change_work_item_topic,
     complete_work_item,
@@ -48,6 +50,7 @@ from flowmate.task_engine.management import (
     mark_waiting_received,
     reopen_work_item,
     reschedule_work_item,
+    sync_planner_status,
     work_item_revision,
 )
 from flowmate.task_engine.queries import (
@@ -299,6 +302,78 @@ async def test_state_transitions_reschedule_and_idempotency(
     assert item.status == "cancelled"
     with pytest.raises(InvalidWorkItemTransitionError):
         await reopen_work_item(database_session, user.id, item.id, 830_005)
+
+
+@pytest.mark.integration
+async def test_planner_queue_is_opt_in_and_preserves_manual_state(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, 630_015)
+    now = datetime(2026, 7, 21, 9, tzinfo=UTC)
+    item = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Manual Planner task",
+        due_at=now,
+    )
+    assert item.planner_status == PlannerStatus.NOT_REQUIRED.value
+
+    await complete_work_item(database_session, user.id, item.id, 830_130, now=now)
+    await reopen_work_item(database_session, user.id, item.id, 830_131)
+    assert item.planner_status == PlannerStatus.NOT_REQUIRED.value
+    await database_session.refresh(item)
+
+    database_session.info["client_action_id"] = uuid4()
+    added = await change_planner_status(
+        database_session,
+        user.id,
+        item.id,
+        PlannerStatus.NEEDS_TRANSFER,
+        expected_revision=work_item_revision(item.updated_at),
+    )
+    assert added.changed is True
+    await database_session.refresh(item)
+    database_session.info["client_action_id"] = uuid4()
+    transferred = await change_planner_status(
+        database_session,
+        user.id,
+        item.id,
+        PlannerStatus.TRANSFERRED,
+        expected_revision=work_item_revision(item.updated_at),
+        now=now,
+    )
+    assert transferred.work_item.planner_transferred_at == now
+
+    await reschedule_work_item(
+        database_session,
+        user.id,
+        item.id,
+        830_132,
+        now + timedelta(days=1),
+    )
+    assert item.planner_status == PlannerStatus.UPDATE_REQUIRED.value
+    await complete_work_item(database_session, user.id, item.id, 830_133, now=now)
+    assert item.planner_status == PlannerStatus.NO_LONGER_RELEVANT.value
+    await reopen_work_item(database_session, user.id, item.id, 830_134)
+    assert item.planner_status == PlannerStatus.UPDATE_REQUIRED.value
+    await database_session.refresh(item)
+
+    database_session.info["client_action_id"] = uuid4()
+    await change_planner_status(
+        database_session,
+        user.id,
+        item.id,
+        PlannerStatus.NOT_REQUIRED,
+        expected_revision=work_item_revision(item.updated_at),
+    )
+    assert item.planner_transferred_at is None
+    item.type = WorkItemType.QUESTION.value
+    assert (
+        await sync_planner_status(database_session, item, reason="type_changed")
+        is False
+    )
+    assert item.planner_status == PlannerStatus.NOT_REQUIRED.value
 
 
 @pytest.mark.integration

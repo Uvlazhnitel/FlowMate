@@ -7,7 +7,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
-from aiogram.types import Chat, Message, Update, User
+from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.schemas import SearchIntent, SearchWorkItemType
@@ -15,6 +15,7 @@ from flowmate.bot.handlers.commands import cancel_command
 from flowmate.bot.handlers.navigation import (
     NavigationPage,
     execute_search_intent,
+    list_callback,
     list_keyboard,
     menu_command,
     normalize_display_text,
@@ -74,6 +75,57 @@ async def test_menu_command_shows_main_keyboard() -> None:
     assert call.args == ("Главное меню FlowMate.",)
     assert kwargs["parse_mode"] is None
     assert kwargs["reply_markup"].is_persistent is True
+
+
+@pytest.mark.asyncio
+async def test_list_callback_acknowledges_before_loading_page() -> None:
+    message = make_message()
+    callback = CallbackQuery(
+        id="list-callback",
+        from_user=cast(User, message.from_user),
+        chat_instance="test",
+        message=message,
+        data="ls:t:1",
+    )
+    session = AsyncMock(spec=AsyncSession)
+    user = SimpleNamespace(id=uuid4())
+    page = NavigationPage(
+        text="Page",
+        keyboard=list_keyboard(view="t", page=1, has_next=False, item_ids=[]),
+    )
+    events: list[str] = []
+
+    async def acknowledge(*_: object, **__: object) -> None:
+        events.append("acknowledged")
+
+    async def build(*_: object, **__: object) -> NavigationPage:
+        events.append("loaded")
+        return page
+
+    with (
+        patch(
+            "flowmate.bot.handlers.navigation.get_user_by_telegram_id",
+            new=AsyncMock(return_value=user),
+        ),
+        patch(
+            "flowmate.bot.handlers.navigation.build_navigation_page",
+            new=AsyncMock(side_effect=build),
+        ),
+        patch(
+            "flowmate.bot.handlers.navigation.send_navigation_page",
+            new_callable=AsyncMock,
+        ) as send,
+        patch.object(
+            CallbackQuery,
+            "answer",
+            new=AsyncMock(side_effect=acknowledge),
+        ) as answer,
+    ):
+        await list_callback(callback, cast(AsyncSession, session), ZoneInfo("UTC"))
+
+    answer.assert_awaited_once_with("⏳ Открываю…")
+    assert events == ["acknowledged", "loaded"]
+    send.assert_awaited_once_with(message, page, edit=True)
 
 
 def test_list_callback_parsing_rejects_invalid_pages_and_views() -> None:

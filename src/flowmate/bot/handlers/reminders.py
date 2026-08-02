@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from flowmate.bot.callback_feedback import CallbackFeedback
 from flowmate.bot.handlers.work_items import (
     send_details,
     send_item_list,
@@ -119,16 +120,18 @@ async def reminder_callback(
     work_item_action_ttl_minutes: int,
     notification_defaults: NotificationDefaults | None = None,
 ) -> None:
+    feedback = CallbackFeedback(callback_query)
     parsed = parse_reminder_callback(callback_query.data)
     message = callback_query.message
     if parsed is None or not isinstance(message, Message):
-        await callback_query.answer("Действие недоступно.")
+        await feedback.error("Действие недоступно.")
         return
+    await feedback.acknowledge()
     action, reminder_id = parsed
     telegram_user = callback_query.from_user
     user = await get_user_by_telegram_id(db_session, telegram_user.id)
     if user is None:
-        await callback_query.answer("Напоминание недоступно.")
+        await feedback.error("Напоминание недоступно.")
         return
     defaults = notification_defaults or NotificationDefaults(
         timezone="UTC",
@@ -139,10 +142,7 @@ async def reminder_callback(
         snooze_minutes=60,
     )
     if await get_active_draft_for_user(db_session, user.id) is not None:
-        await callback_query.answer(
-            "Сначала завершите или отмените активный черновик.",
-            show_alert=True,
-        )
+        await feedback.error("Сначала завершите или отмените активный черновик.")
         return
     target = await get_reminder_action_target(
         db_session,
@@ -150,16 +150,12 @@ async def reminder_callback(
         reminder_id,
     )
     if target is None:
-        await callback_query.answer("Напоминание больше не актуально.")
+        await feedback.error("Напоминание больше не актуально.")
         return
     update_id = event_update.update_id
     try:
         if action == "snooze":
-            await message.answer(
-                "На сколько отложить напоминание?",
-                reply_markup=snooze_keyboard(reminder_id),
-            )
-            await callback_query.answer()
+            await message.edit_reply_markup(reply_markup=snooze_keyboard(reminder_id))
             return
         if action == "reschedule":
             await start_input_session(
@@ -173,7 +169,7 @@ async def reminder_callback(
                 telegram_update_id=update_id,
                 context={"reminder_id": str(reminder_id)},
             )
-            await callback_query.answer()
+            await feedback.prompt("Жду новую дату.", remove_keyboard=True)
             return
         if action == "snoozecustom":
             await start_input_session(
@@ -187,7 +183,7 @@ async def reminder_callback(
                 telegram_update_id=update_id,
                 context={"reminder_id": str(reminder_id)},
             )
-            await callback_query.answer()
+            await feedback.prompt("Жду новое время напоминания.", remove_keyboard=True)
             return
         if action in {
             "snooze15m",
@@ -269,17 +265,13 @@ async def reminder_callback(
             )
             response = "Follow-up создан." if created else "Follow-up уже создан."
         else:
-            await callback_query.answer("Действие недоступно.")
+            await feedback.error("Действие недоступно.")
             return
         await db_session.commit()
-        await message.answer(response, parse_mode=None)
-        await callback_query.answer()
+        await feedback.success(response, remove_keyboard=True)
     except (InvalidWorkItemTransitionError, ValueError):
         await db_session.rollback()
-        await callback_query.answer(
-            "Это действие сейчас недоступно.",
-            show_alert=True,
-        )
+        await feedback.error("Это действие сейчас недоступно.")
     except SQLAlchemyError:
         await db_session.rollback()
         logger.error(
@@ -287,7 +279,7 @@ async def reminder_callback(
             telegram_user.id,
             action,
         )
-        await callback_query.answer("Не удалось выполнить действие.", show_alert=True)
+        await feedback.error("Не удалось выполнить действие.")
 
 
 WORKSPACE_CALLBACK_CODES = {
@@ -391,16 +383,18 @@ async def digest_callback(
     work_item_action_ttl_minutes: int,
     reminder_policy: ReminderPolicy | None = None,
 ) -> None:
+    feedback = CallbackFeedback(callback_query)
     parsed = parse_digest_callback(callback_query.data)
     message = callback_query.message
     if parsed is None or not isinstance(message, Message):
-        await callback_query.answer("Действие недоступно.")
+        await feedback.error("Действие недоступно.")
         return
+    await feedback.acknowledge()
     action, object_id, workspace = parsed
     telegram_user = callback_query.from_user
     user = await get_user_by_telegram_id(db_session, telegram_user.id)
     if user is None:
-        await callback_query.answer("Обзор недоступен.")
+        await feedback.error("Обзор недоступен.")
         return
     try:
         if action in {"next", "stop"}:
@@ -411,11 +405,11 @@ async def digest_callback(
                 action_session is None
                 or action_session.action != WorkItemAction.DIGEST_REVIEW.value
             ):
-                await callback_query.answer("Обзор уже завершён.")
+                await feedback.error("Обзор уже завершён.")
                 return
             session_workspace = action_session.context.get("workspace")
             if session_workspace not in WORKSPACE_CALLBACK_CODES:
-                await callback_query.answer("Обзор уже завершён.")
+                await feedback.error("Обзор уже завершён.")
                 return
             activate_workspace(
                 db_session,
@@ -428,21 +422,19 @@ async def digest_callback(
                 if isinstance(value, int)
             ]
             if event_update.update_id in processed_update_ids:
-                await callback_query.answer("Это действие уже выполнено.")
+                await feedback.error("Это действие уже выполнено.")
                 return
             if action == "stop":
                 await finish_action_session(db_session, action_session)
                 await db_session.commit()
-                await message.answer("Обзор завершён.")
-                await callback_query.answer()
+                await feedback.success("Обзор завершён.", remove_keyboard=True)
                 return
             item_ids = [UUID(value) for value in action_session.context["item_ids"]]
             index = int(action_session.context.get("index", 0)) + 1
             if index >= len(item_ids):
                 await finish_action_session(db_session, action_session)
                 await db_session.commit()
-                await message.answer("Все записи просмотрены.")
-                await callback_query.answer()
+                await feedback.success("Все записи просмотрены.", remove_keyboard=True)
                 return
             action_session.context = {
                 **action_session.context,
@@ -464,12 +456,11 @@ async def digest_callback(
                 item_id=item_ids[index],
                 timezone=preferences.zoneinfo,
             )
-            await callback_query.answer()
+            await feedback.success("Следующая запись открыта.", remove_keyboard=True)
             return
 
         if action == "cancel":
-            await message.edit_text("Действие отменено.", parse_mode=None)
-            await callback_query.answer("Отменено.")
+            await message.edit_text("✅ Действие отменено.", parse_mode=None)
             return
 
         reminder = await db_session.scalar(
@@ -487,23 +478,18 @@ async def digest_callback(
             .execution_options(include_all_workspaces=True)
         )
         if reminder is None:
-            await callback_query.answer("Обзор недоступен.")
+            await feedback.error("Обзор недоступен.")
             return
         if action == "tomorrow" and reminder.type != ReminderType.EVENING_DIGEST.value:
-            await callback_query.answer(
-                "Массовый перенос доступен в вечернем обзоре.",
-                show_alert=True,
-            )
+            await feedback.error("Массовый перенос доступен в вечернем обзоре.")
             return
         if workspace is None and action in {"today", "tomorrow", "review"}:
-            await message.answer(
-                "Выберите раздел:",
-                reply_markup=digest_workspace_keyboard(action, reminder.id),
+            await message.edit_reply_markup(
+                reply_markup=digest_workspace_keyboard(action, reminder.id)
             )
-            await callback_query.answer()
             return
         if workspace is None:
-            await callback_query.answer("Действие недоступно.")
+            await feedback.error("Действие недоступно.")
             return
         activate_workspace(
             db_session,
@@ -511,10 +497,7 @@ async def digest_callback(
             workspace=workspace,
         )
         if await get_active_draft_for_user(db_session, user.id) is not None:
-            await callback_query.answer(
-                "Сначала завершите или отмените активный черновик.",
-                show_alert=True,
-            )
+            await feedback.error("Сначала завершите или отмените активный черновик.")
             return
         preferences = await get_effective_notification_preferences(
             db_session, user.id, notification_defaults
@@ -544,6 +527,10 @@ async def digest_callback(
                 items=items,
                 timezone=preferences.zoneinfo,
             )
+            await feedback.success(
+                f"Список открыт: {WORKSPACE_LABELS[workspace]}.",
+                remove_keyboard=True,
+            )
         elif action == "tomorrow":
             count = await move_digest_items_to_tomorrow(
                 db_session,
@@ -560,7 +547,7 @@ async def digest_callback(
                 if count
                 else "Переносить нечего."
             )
-            await message.answer(response)
+            await feedback.success(response, remove_keyboard=True)
         elif action == "review":
             items = await list_digest_reschedule_items(
                 db_session,
@@ -570,7 +557,10 @@ async def digest_callback(
                 workspace=workspace,
             )
             if not items:
-                await message.answer("Для разбора записей нет.")
+                await feedback.success(
+                    "Для разбора записей нет.",
+                    remove_keyboard=True,
+                )
             else:
                 action_session = await create_action_session(
                     db_session,
@@ -594,13 +584,16 @@ async def digest_callback(
                     item_id=items[0].id,
                     timezone=preferences.zoneinfo,
                 )
+                await feedback.success(
+                    f"Обзор начат: {WORKSPACE_LABELS[workspace]}.",
+                    remove_keyboard=True,
+                )
         else:
-            await callback_query.answer("Действие недоступно.")
+            await feedback.error("Действие недоступно.")
             return
-        await callback_query.answer()
     except (ValueError, InvalidWorkItemTransitionError, KeyError):
         await db_session.rollback()
-        await callback_query.answer("Это действие сейчас недоступно.", show_alert=True)
+        await feedback.error("Это действие сейчас недоступно.")
     except SQLAlchemyError:
         await db_session.rollback()
         logger.error(
@@ -608,4 +601,4 @@ async def digest_callback(
             telegram_user.id,
             action,
         )
-        await callback_query.answer("Не удалось выполнить действие.", show_alert=True)
+        await feedback.error("Не удалось выполнить действие.")

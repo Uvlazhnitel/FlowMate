@@ -17,6 +17,7 @@ const focusItem: WorkItemCardData = {
   title: "Главная задача",
   description: null,
   priority: "urgent",
+  planner_status: "not_required",
   topic_id: null,
   topic_name: null,
   people: [],

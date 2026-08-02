@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from flowmate.ai.schemas import DraftItemType, DraftSource
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.app import create_dispatcher, run_bot
+from flowmate.bot.callback_feedback import CallbackFeedback, with_callback_status
 from flowmate.bot.handlers.commands import (
     help_command,
     status_command,
@@ -49,8 +50,16 @@ from flowmate.bot.handlers.voice import (
     split_transcription,
     voice_message,
 )
-from flowmate.bot.handlers.workspaces import workspace_keyboard, workspace_toggle
-from flowmate.bot.middleware import AllowedUserMiddleware, DatabaseSessionMiddleware
+from flowmate.bot.handlers.workspaces import (
+    workspace_callback,
+    workspace_keyboard,
+    workspace_toggle,
+)
+from flowmate.bot.middleware import (
+    AllowedUserMiddleware,
+    DatabaseSessionMiddleware,
+    PersistentUpdateMiddleware,
+)
 from flowmate.core.config import Settings
 from flowmate.db.models import DraftSession
 from flowmate.speech.errors import SpeechProviderError, SpeechTimeoutError
@@ -273,6 +282,89 @@ async def test_callback_allowlist_allows_owner_and_rejects_unknown_user(
     assert "unauthorized_telegram_user user_id=456" in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_callback_feedback_acknowledges_once_and_replaces_status() -> None:
+    message = make_message(123, text="Карточка\n\n⚠️ Старая ошибка")
+    callback = make_callback(123, message)
+    feedback = CallbackFeedback(callback)
+
+    with (
+        patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
+        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
+    ):
+        await feedback.acknowledge()
+        await feedback.acknowledge()
+        await feedback.success("Готово.", remove_keyboard=True)
+
+    answer.assert_awaited_once_with("⏳ Выполняю…")
+    edit.assert_awaited_once()
+    edit_call = edit.await_args
+    assert edit_call is not None
+    assert edit_call.args == ("Карточка\n\n✅ Готово.",)
+    assert edit_call.kwargs["reply_markup"] is None
+
+
+@pytest.mark.asyncio
+async def test_callback_feedback_falls_back_when_message_cannot_be_edited() -> None:
+    message = make_message(123, text="Карточка")
+    callback = make_callback(123, message)
+    feedback = CallbackFeedback(callback, acknowledged=True)
+
+    with (
+        patch.object(
+            Message,
+            "edit_text",
+            new=AsyncMock(side_effect=RuntimeError("message is detached")),
+        ),
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+    ):
+        await feedback.error("Попробуйте ещё раз.")
+
+    answer.assert_awaited_once_with(
+        "⚠️ Попробуйте ещё раз.",
+        parse_mode=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_persistent_update_reports_unexpected_callback_failure() -> None:
+    middleware = PersistentUpdateMiddleware()
+    handler = AsyncMock(side_effect=RuntimeError("private failure"))
+    callback = make_callback(123, make_message(123, text="Карточка"))
+    update = Update(update_id=1234, callback_query=callback)
+    session = make_mock_session()
+
+    with (
+        patch(
+            "flowmate.bot.middleware.claim_telegram_update",
+            new=AsyncMock(return_value=SimpleNamespace(accepted=True)),
+        ),
+        patch(
+            "flowmate.bot.middleware.fail_telegram_update",
+            new_callable=AsyncMock,
+        ) as fail,
+        patch(
+            "flowmate.bot.middleware.show_unexpected_callback_error",
+            new_callable=AsyncMock,
+        ) as show_error,
+        pytest.raises(RuntimeError, match="private failure"),
+    ):
+        await middleware(
+            handler,
+            callback,
+            {"event_update": update, "db_session": session},
+        )
+
+    fail.assert_awaited_once_with(session, 1234, error_code="handler_exception")
+    show_error.assert_awaited_once_with(callback)
+    cast(AsyncMock, session.rollback).assert_awaited_once()
+    assert cast(AsyncMock, session.commit).await_count == 2
+
+
+def test_callback_status_preserves_regular_message_text() -> None:
+    assert with_callback_status("Задача", "✅ Готово.") == ("Задача\n\n✅ Готово.")
+
+
 def test_stale_cancel_callback_is_rejected() -> None:
     assert parse_callback_data("draft:cancel") is None
 
@@ -283,6 +375,42 @@ def test_workspace_keyboard_orders_work_before_personal() -> None:
 
     assert [button.text for button in buttons] == ["Работа", "• Личное"]
     assert [button.callback_data for button in buttons] == ["ws:work", "ws:personal"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_callback_acknowledges_and_updates_source_message() -> None:
+    user = SimpleNamespace(id=uuid4(), active_workspace="personal")
+    message = make_message(123, text="Текущее пространство: Личное.")
+    callback = make_callback(123, message).model_copy(update={"data": "ws:work"})
+    session = make_mock_session()
+
+    async def switch(
+        _: AsyncSession,
+        __: object,
+        target: Workspace,
+    ) -> SimpleNamespace:
+        user.active_workspace = target.value
+        return user
+
+    with (
+        patch(
+            "flowmate.bot.handlers.workspaces.get_user_by_telegram_id",
+            new=AsyncMock(return_value=user),
+        ),
+        patch(
+            "flowmate.bot.handlers.workspaces.switch_workspace",
+            new=AsyncMock(side_effect=switch),
+        ),
+        patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
+        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
+    ):
+        await workspace_callback(callback, session)
+
+    answer.assert_awaited_once_with("⏳ Переключаю…")
+    edit.assert_awaited_once()
+    edit_call = edit.await_args
+    assert edit_call is not None
+    assert edit_call.args == ("✅ Текущее пространство: Работа.",)
 
 
 @pytest.mark.asyncio

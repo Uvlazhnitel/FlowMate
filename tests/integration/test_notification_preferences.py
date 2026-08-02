@@ -211,18 +211,20 @@ async def test_digest_limits_each_workspace_and_fills_with_fresh_inbox(
         title="Work due",
         due_at=now + timedelta(hours=1),
     )
-    await create_work_item(
+    older_work_inbox = await create_work_item(
         database_session,
         user.id,
         item_type="task",
         title="Older work inbox",
     )
-    await create_work_item(
+    newer_work_inbox = await create_work_item(
         database_session,
         user.id,
         item_type="task",
         title="Newer work inbox",
     )
+    older_work_inbox.created_at = now - timedelta(minutes=2)
+    newer_work_inbox.created_at = now - timedelta(minutes=1)
 
     snapshot = await build_digest_snapshot(
         database_session,
@@ -466,7 +468,11 @@ async def test_digest_action_chooses_workspace_without_switching_user(
     choose_update = Update(update_id=970_010, callback_query=choose_callback)
     with (
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
-        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+        patch.object(
+            Message,
+            "edit_reply_markup",
+            new_callable=AsyncMock,
+        ) as edit_markup,
     ):
         await digest_callback(
             choose_callback,
@@ -475,9 +481,9 @@ async def test_digest_action_chooses_workspace_without_switching_user(
             DEFAULTS,
             30,
         )
-    answer_call = answer.await_args
-    assert answer_call is not None
-    chooser = answer_call.kwargs["reply_markup"]
+    edit_call = edit_markup.await_args
+    assert edit_call is not None
+    chooser = edit_call.kwargs["reply_markup"]
     assert [button.text for button in chooser.inline_keyboard[0]] == [
         "Личное",
         "Работа",
@@ -493,7 +499,7 @@ async def test_digest_action_chooses_workspace_without_switching_user(
     work_update = Update(update_id=970_011, callback_query=work_callback)
     with (
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
-        patch.object(Message, "answer", new_callable=AsyncMock),
+        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
     ):
         await digest_callback(
             work_callback,
@@ -503,6 +509,10 @@ async def test_digest_action_chooses_workspace_without_switching_user(
             30,
         )
 
+    edit_call = edit.await_args
+    assert edit_call is not None
+    assert edit_call.args[0].endswith("✅ На завтра перенесено записей: 1.")
+    assert edit_call.kwargs["reply_markup"] is None
     assert personal_item.due_at == local_date
     assert work_item.due_at == local_date + timedelta(days=1)
     assert user.active_workspace == "personal"
@@ -632,6 +642,7 @@ async def test_digest_review_next_callback_is_idempotent(
 
     with (
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
+        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
         patch(
             "flowmate.bot.handlers.reminders._send_review_item",
             new_callable=AsyncMock,
@@ -644,3 +655,5 @@ async def test_digest_review_next_callback_is_idempotent(
     assert action_session.context["index"] == 1
     assert action_session.context["processed_update_ids"] == [update.update_id]
     send_review_item.assert_awaited_once()
+    assert edit.await_args_list[0].args[0].endswith("✅ Следующая запись открыта.")
+    assert edit.await_args_list[1].args[0].endswith("⚠️ Это действие уже выполнено.")

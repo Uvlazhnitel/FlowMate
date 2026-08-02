@@ -323,13 +323,10 @@ async def test_complete_callback_commits_and_refreshes_card() -> None:
     refresh_call = refresh.await_args
     assert refresh_call is not None
     assert refresh_call.kwargs["edit"] is True
-    answer.assert_awaited_once_with("Готово")
+    assert refresh_call.kwargs["notice"] == f"✅ Выполнено: {details.item.title}"
+    answer.assert_awaited_once_with("⏳ Выполняю…")
     assert events == ["acknowledged", "completed"]
-    message_answer.assert_awaited_once()
-    response_call = message_answer.await_args
-    assert response_call is not None
-    assert response_call.args == (f"✅ Выполнено: {details.item.title}",)
-    assert response_call.kwargs["reply_markup"].is_persistent is True
+    message_answer.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -585,12 +582,11 @@ async def test_stale_callback_only_refreshes_current_card() -> None:
     cast(AsyncMock, session.commit).assert_not_awaited()
     cast(AsyncMock, session.rollback).assert_awaited_once()
     refresh.assert_awaited_once()
-    answer.assert_awaited_once_with("Готово")
-    message_answer.assert_awaited_once()
-    response_call = message_answer.await_args
-    assert response_call is not None
-    assert response_call.args == ("Карточка обновлена.",)
-    assert response_call.kwargs["reply_markup"].is_persistent is True
+    refresh_call = refresh.await_args
+    assert refresh_call is not None
+    assert refresh_call.kwargs["notice"].startswith("⚠️ Карточка обновлена.")
+    answer.assert_awaited_once_with("⏳ Выполняю…")
+    message_answer.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -642,6 +638,7 @@ async def test_active_draft_blocks_inline_mutation() -> None:
             new=AsyncMock(),
         ) as complete,
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
+        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
     ):
         await work_item_callback(
             callback,
@@ -653,8 +650,11 @@ async def test_active_draft_blocks_inline_mutation() -> None:
         )
 
     complete.assert_not_awaited()
-    answer.assert_awaited_once_with(
-        "Сначала завершите или отмените активный черновик.", show_alert=True
+    answer.assert_awaited_once_with("⏳ Выполняю…")
+    edit_call = edit.await_args
+    assert edit_call is not None
+    assert edit_call.args[0].endswith(
+        "⚠️ Сначала завершите или отмените активный черновик."
     )
 
 
@@ -859,10 +859,13 @@ async def test_selection_can_be_cancelled_and_repeated_callback_expires() -> Non
         )
 
     finish.assert_awaited_once_with(session, action_session, status="cancelled")
-    edit.assert_awaited_once_with("Выбор отменён.", parse_mode=None)
-    assert answer.await_args_list[0].args == ("Выбор отменён.",)
-    assert answer.await_args_list[1].args == ("Срок выбора истёк.",)
-    assert answer.await_args_list[1].kwargs == {"show_alert": True}
+    assert edit.await_args_list[0].args == ("✅ Выбор отменён.",)
+    assert edit.await_args_list[0].kwargs == {"parse_mode": None}
+    assert edit.await_args_list[1].args[0].endswith("⚠️ Срок выбора истёк.")
+    assert [call.args for call in answer.await_args_list] == [
+        ("⏳ Выполняю…",),
+        ("⏳ Выполняю…",),
+    ]
 
 
 @pytest.mark.asyncio
@@ -913,6 +916,7 @@ async def test_selection_preserves_and_applies_intended_action() -> None:
             new=AsyncMock(),
         ) as apply_intent,
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
+        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
     ):
         await work_item_selection_callback(
             callback,
@@ -928,7 +932,11 @@ async def test_selection_preserves_and_applies_intended_action() -> None:
     assert apply_call is not None
     assert apply_call.kwargs["item"] == item
     assert apply_call.kwargs["intent"] == intent
-    answer.assert_awaited_once_with()
+    answer.assert_awaited_once_with("⏳ Выполняю…")
+    edit_call = edit.await_args
+    assert edit_call is not None
+    assert edit_call.args[0].endswith("✅ Запись выбрана.")
+    assert edit_call.kwargs["reply_markup"] is None
 
 
 @pytest.mark.asyncio

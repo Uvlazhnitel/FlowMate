@@ -21,6 +21,7 @@ const workItem: WorkItemCardData = {
   title: "Подготовить запуск",
   description: "Проверить финальный список",
   priority: "high",
+  planner_status: "not_required",
   topic_id: "c46a29ef-bfed-440c-b289-5a17d7808a78",
   topic_name: "Launch",
   people: [],
@@ -136,6 +137,55 @@ describe("operational screens", () => {
     expect(
       fetchMock.mock.calls.some(([input]) => requestPath(input).includes("/actions")),
     ).toBe(false);
+  });
+
+  it("adds an eligible work item to Planner explicitly", async () => {
+    let plannerStatus: WorkItemCardData["planner_status"] = workItem.planner_status;
+    let actionPayload: Record<string, unknown> = {};
+    let resolveAction: (response: Response) => void = () => undefined;
+    const actionResponse = new Promise<Response>((resolve) => {
+      resolveAction = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/actions")) {
+        actionPayload = JSON.parse(requestBody(init)) as Record<string, unknown>;
+        return actionResponse;
+      }
+      if (path.includes("/today/overview")) return Promise.resolve(overview());
+      if (path.includes("section=overdue")) {
+        return Promise.resolve(page([{ ...workItem, planner_status: plannerStatus }]));
+      }
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApplication("/today?section=overdue");
+
+    const addButton = await screen.findByRole("button", {
+      name: "Добавить в Planner",
+    });
+    await user.click(addButton);
+    expect(addButton).toBeDisabled();
+    expect(actionPayload).toMatchObject({
+      action: "planner_needs_transfer",
+      expected_revision: 1,
+    });
+
+    plannerStatus = "needs_transfer";
+    resolveAction(
+      jsonResponse({
+        changed: true,
+        work_item: { ...workItem, planner_status: plannerStatus, revision: 2 },
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Добавить в Planner" }),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   it("refreshes operational data after the Undo window expires", async () => {

@@ -493,6 +493,7 @@ async def test_reminder_done_callback_is_idempotent_and_owned(
 
     with (
         patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
+        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
         patch.object(Message, "answer", new_callable=AsyncMock) as answer,
     ):
         await reminder_callback(
@@ -510,7 +511,11 @@ async def test_reminder_done_callback_is_idempotent_and_owned(
 
     assert item.status == "done"
     assert item.completed_at is not None
-    assert answer.await_count == 2
+    assert edit.await_count == 2
+    assert edit.await_args_list[0].args[0].endswith("✅ Запись завершена.")
+    assert edit.await_args_list[1].args[0].endswith("✅ Это действие уже выполнено.")
+    assert all(call.kwargs["reply_markup"] is None for call in edit.await_args_list)
+    answer.assert_not_awaited()
     assert (
         len(
             list(

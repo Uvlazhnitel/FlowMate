@@ -4,6 +4,7 @@ import {
   Check,
   Clock3,
   FilePlus2,
+  ListPlus,
   RotateCcw,
   Trash2,
   X,
@@ -19,6 +20,7 @@ import {
   type WorkItemCardData,
 } from "../api/operations";
 import { ApiError } from "../api/client";
+import { remainingKeys } from "../api/remaining";
 import {
   formatDateTime,
   formatRescheduledDateTime,
@@ -36,6 +38,7 @@ const typeLabels: Record<string, string> = {
 };
 
 const UNDO_WINDOW_MS = 8_000;
+const PLANNER_TYPES = new Set(["task", "follow_up", "waiting"]);
 
 type DialogMode = "note" | "result" | "decision" | null;
 
@@ -86,6 +89,9 @@ export function WorkItemCard({
         client_action_id: crypto.randomUUID(),
       }),
     onSuccess: (response, variables) => {
+      if (variables.action.startsWith("planner_")) {
+        void queryClient.invalidateQueries({ queryKey: remainingKeys.all });
+      }
       if (isRescheduleAction(variables.action) && response.work_item?.effective_at) {
         setRescheduleStatus(
           `✓ Перенесено на ${formatRescheduledDateTime(
@@ -241,6 +247,16 @@ export function WorkItemCard({
         >
           <FilePlus2 size={15} aria-hidden /> {agenda ? "Результат" : "Заметка"}
         </button>
+        {PLANNER_TYPES.has(item.type) && item.planner_status === "not_required" && (
+          <button
+            className="card-action"
+            type="button"
+            disabled={mutation.isPending}
+            onClick={() => act("planner_needs_transfer")}
+          >
+            <ListPlus size={15} aria-hidden /> Добавить в Planner
+          </button>
+        )}
         {item.reminder && (
           <button
             className="card-action"

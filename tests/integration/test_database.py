@@ -144,6 +144,103 @@ async def delete_planner_event_user(database_url: str) -> None:
         await engine.dispose()
 
 
+async def seed_manual_planner_queue(database_url: str) -> dict[str, UUID]:
+    engine = create_engine(database_url)
+    user_id = uuid4()
+    item_ids = {name: uuid4() for name in ("automatic", "manual", "system", "sent")}
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO users (id, telegram_user_id, is_active) "
+                    "VALUES (:id, :telegram_user_id, true)"
+                ),
+                {"id": user_id, "telegram_user_id": 699_003},
+            )
+            for name, item_id in item_ids.items():
+                await connection.execute(
+                    text(
+                        "INSERT INTO work_items "
+                        "(id, user_id, type, title, status, priority, planner_status, "
+                        "planner_transferred_at) VALUES (:id, :user_id, 'task', "
+                        ":title, 'active', 'normal', :planner_status, "
+                        ":planner_transferred_at)"
+                    ),
+                    {
+                        "id": item_id,
+                        "user_id": user_id,
+                        "title": f"Planner {name}",
+                        "planner_status": (
+                            "transferred" if name == "sent" else "needs_transfer"
+                        ),
+                        "planner_transferred_at": (
+                            datetime(2026, 7, 1, tzinfo=UTC) if name == "sent" else None
+                        ),
+                    },
+                )
+            for name, payload in (
+                (
+                    "manual",
+                    '{"previous":"not_required","new":"needs_transfer"}',
+                ),
+                (
+                    "system",
+                    '{"previous":"not_required","new":"needs_transfer",'
+                    '"reason":"type_changed"}',
+                ),
+            ):
+                await connection.execute(
+                    text(
+                        "INSERT INTO work_item_events "
+                        "(id, user_id, work_item_id, event_type, payload) "
+                        "VALUES (:id, :user_id, :work_item_id, "
+                        "'planner_status_changed', CAST(:payload AS jsonb))"
+                    ),
+                    {
+                        "id": uuid4(),
+                        "user_id": user_id,
+                        "work_item_id": item_ids[name],
+                        "payload": payload,
+                    },
+                )
+    finally:
+        await engine.dispose()
+    return item_ids
+
+
+async def read_planner_statuses(
+    database_url: str, item_ids: dict[str, UUID]
+) -> dict[str, str]:
+    engine = create_engine(database_url)
+    try:
+        async with engine.connect() as connection:
+            return {
+                name: cast(
+                    str,
+                    await connection.scalar(
+                        text(
+                            "SELECT planner_status FROM work_items WHERE id = :item_id"
+                        ),
+                        {"item_id": item_id},
+                    ),
+                )
+                for name, item_id in item_ids.items()
+            }
+    finally:
+        await engine.dispose()
+
+
+async def delete_manual_planner_user(database_url: str) -> None:
+    engine = create_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM users WHERE telegram_user_id = 699003")
+            )
+    finally:
+        await engine.dispose()
+
+
 def test_migrations_upgrade_from_previous_stage_revision(
     migrated_database: None,
 ) -> None:
@@ -195,6 +292,27 @@ def test_planner_event_survives_downgrade_to_0014(migrated_database: None) -> No
         asyncio.run(delete_planner_event_user(TEST_DATABASE_URL))
     finally:
         command.upgrade(alembic_config, "head")
+
+
+def test_manual_planner_queue_migration_clears_only_automatic_entries(
+    migrated_database: None,
+) -> None:
+    alembic_config = Config("alembic.ini")
+    item_ids: dict[str, UUID] = {}
+    try:
+        command.downgrade(alembic_config, "0022_fast_capture_defaults")
+        item_ids = asyncio.run(seed_manual_planner_queue(TEST_DATABASE_URL))
+        command.upgrade(alembic_config, "head")
+        assert asyncio.run(read_planner_statuses(TEST_DATABASE_URL, item_ids)) == {
+            "automatic": "not_required",
+            "manual": "needs_transfer",
+            "system": "not_required",
+            "sent": "transferred",
+        }
+    finally:
+        command.upgrade(alembic_config, "head")
+        if item_ids:
+            asyncio.run(delete_manual_planner_user(TEST_DATABASE_URL))
 
 
 @pytest.mark.integration
@@ -251,7 +369,7 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
         "ck_users_telegram_user_id_positive"
     }
     assert columns["active_workspace"]["nullable"] is False
-    assert revision == "0022_fast_capture_defaults"
+    assert revision == "0023_planner_manual_queue"
 
 
 def test_pwa_auth_migration_from_0012(migrated_database: None) -> None:

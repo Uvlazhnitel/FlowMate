@@ -6,6 +6,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject, Update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from flowmate.bot.callback_feedback import show_unexpected_callback_error
 from flowmate.db.session import session_scope
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.stabilization.idempotency import (
@@ -133,6 +134,8 @@ class PersistentUpdateMiddleware(BaseMiddleware):
                 session, update.update_id, error_code="handler_exception"
             )
             await session.commit()
+            if isinstance(event, CallbackQuery):
+                await show_unexpected_callback_error(event)
             raise
         await complete_telegram_update(session, update.update_id)
         await session.commit()

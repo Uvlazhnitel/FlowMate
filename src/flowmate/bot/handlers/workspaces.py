@@ -6,6 +6,7 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from flowmate.bot.callback_feedback import CallbackFeedback
 from flowmate.bot.menu import answer_with_main_menu
 from flowmate.db.users import get_user_by_telegram_id
 from flowmate.workspace_service import (
@@ -86,24 +87,25 @@ async def workspace_callback(
     data = callback_query.data or ""
     if not data.startswith("ws:"):
         return
+    feedback = CallbackFeedback(callback_query)
+    await feedback.acknowledge("⏳ Переключаю…")
     telegram_user = callback_query.from_user
     user = await get_user_by_telegram_id(db_session, telegram_user.id)
     if user is None:
-        await callback_query.answer("Сначала используйте /start.", show_alert=True)
+        await feedback.error("Сначала используйте /start.")
         return
     try:
         workspace = Workspace(data.removeprefix("ws:"))
         user = await switch_workspace(db_session, user.id, workspace)
     except WorkspaceSwitchBlockedError as error:
-        await callback_query.answer(error.blocker.message, show_alert=True)
+        await feedback.error(error.blocker.message)
         return
     except ValueError:
-        await callback_query.answer("Пространство недоступно.", show_alert=True)
+        await feedback.error("Пространство недоступно.")
         return
     await db_session.commit()
     if isinstance(callback_query.message, Message):
         await callback_query.message.edit_text(
-            f"Текущее пространство: {WORKSPACE_LABELS[user.active_workspace]}.",
+            f"✅ Текущее пространство: {WORKSPACE_LABELS[user.active_workspace]}.",
             reply_markup=workspace_keyboard(user.active_workspace),
         )
-    await callback_query.answer("Пространство переключено.")

@@ -28,6 +28,7 @@ const item: WorkItemCardData = {
   title: "Подготовить миграцию",
   description: "Перенести карточку вручную",
   priority: "high",
+  planner_status: "not_required",
   topic_id: "c46a29ef-bfed-440c-b289-5a17d7808a78",
   topic_name: "Migration",
   people: [],
@@ -194,6 +195,11 @@ describe("remaining operational screens", () => {
     renderApplication("/planner-queue?status=needs_transfer&q=миграция");
 
     expect(await screen.findByText("Подготовить миграцию")).toBeVisible();
+    const plannerCard = screen
+      .getByRole("heading", { name: "Подготовить миграцию" })
+      .closest("article");
+    expect(plannerCard).not.toBeNull();
+    expect(within(plannerCard!).queryByText("Нужно перенести")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining(
         "status=needs_transfer&q=%D0%BC%D0%B8%D0%B3%D1%80%D0%B0%D1%86%D0%B8%D1%8F",

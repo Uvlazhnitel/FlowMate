@@ -274,6 +274,36 @@ async def test_planner_timeline_and_settings_workflow(
 
             queue = await client.get("/api/v1/planner-queue")
             assert queue.status_code == 200
+            assert queue.json()["items"] == []
+            inbox = await client.get("/api/v1/inbox?kind=work_item")
+            inbox_item = next(
+                entry["item"]
+                for entry in inbox.json()["items"]
+                if entry["item"]["id"] == str(task_id)
+            )
+            stale = await client.post(
+                f"/api/v1/work-items/{task_id}/actions",
+                headers=write_headers(csrf),
+                json={
+                    "action": "planner_needs_transfer",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": inbox_item["revision"] - 1,
+                },
+            )
+            assert stale.status_code == 409
+            assert (await client.get("/api/v1/planner-queue")).json()["items"] == []
+            added = await client.post(
+                f"/api/v1/work-items/{task_id}/actions",
+                headers=write_headers(csrf),
+                json={
+                    "action": "planner_needs_transfer",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": inbox_item["revision"],
+                },
+            )
+            assert added.status_code == 200, added.text
+            assert added.json()["work_item"]["planner_status"] == "needs_transfer"
+            queue = await client.get("/api/v1/planner-queue")
             queued = queue.json()["items"][0]
             assert queued["planner_status"] == "needs_transfer"
             transferred = await client.post(

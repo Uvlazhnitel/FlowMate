@@ -28,6 +28,7 @@ from flowmate.bot.callback_data import (
 from flowmate.bot.callback_data import (
     encode_revision as encode_revision,
 )
+from flowmate.bot.callback_feedback import CallbackFeedback, with_callback_status
 from flowmate.bot.menu import answer_with_main_menu
 from flowmate.bot.presentation import (
     TelegramDisplayContext,
@@ -448,6 +449,7 @@ async def send_details(
     timezone: ZoneInfo,
     *,
     edit: bool = False,
+    notice: str | None = None,
 ) -> bool:
     details = await get_work_item_details(session, user_id, item.id)
     if details is None:
@@ -457,6 +459,8 @@ async def send_details(
             await message.answer("Запись больше недоступна.", parse_mode=None)
         return False
     text = format_work_item_details(details, timezone)
+    if notice is not None:
+        text = with_callback_status(text, notice)
     if edit:
         await message.edit_text(
             text,
@@ -478,9 +482,19 @@ async def refresh_work_item_card(
     user_id: UUID,
     item: WorkItem,
     timezone: ZoneInfo,
+    *,
+    notice: str | None = None,
 ) -> None:
     try:
-        await send_details(message, session, user_id, item, timezone, edit=True)
+        await send_details(
+            message,
+            session,
+            user_id,
+            item,
+            timezone,
+            edit=True,
+            notice=notice,
+        )
         return
     except TelegramAPIError:
         logger.warning(
@@ -488,7 +502,14 @@ async def refresh_work_item_card(
             item.id,
         )
     try:
-        await send_details(message, session, user_id, item, timezone)
+        await send_details(
+            message,
+            session,
+            user_id,
+            item,
+            timezone,
+            notice=notice,
+        )
     except TelegramAPIError:
         logger.error(
             "telegram_work_item_card_send_failed item_id=%s category=telegram",
@@ -664,18 +685,19 @@ async def work_item_callback(
     reminder_policy: ReminderPolicy | None = None,
     rescheduling_service: ReschedulingService | None = None,
 ) -> None:
-    callback_acknowledged = False
+    feedback = CallbackFeedback(callback_query)
     parsed = parse_work_item_callback(callback_query.data)
     message = callback_query.message
     telegram_user = callback_query.from_user
     if parsed is None or not isinstance(message, Message):
-        await callback_query.answer("Действие недоступно.")
+        await feedback.error("Действие недоступно.")
         return
+    await feedback.acknowledge()
     action, target_id, argument, callback_workspace = parsed
     action = {"details": "d", "history": "h"}.get(action, action)
     user = await get_user_by_telegram_id(db_session, telegram_user.id)
     if user is None:
-        await callback_query.answer("Запись не найдена.")
+        await feedback.error("Запись не найдена.")
         return
     if callback_workspace is not None:
         activate_workspace(
@@ -690,8 +712,11 @@ async def work_item_callback(
         )
         item = reminder_target.work_item if reminder_target is not None else None
     if item is None:
-        await message.edit_text("Запись больше недоступна.", parse_mode=None)
-        await callback_query.answer("Запись больше недоступна.", show_alert=True)
+        await message.edit_text(
+            "⚠️ Запись больше недоступна.",
+            parse_mode=None,
+            reply_markup=None,
+        )
         return
     try:
         if action in {"d", "b"}:
@@ -703,7 +728,6 @@ async def work_item_callback(
                 app_timezone,
                 edit=action == "b",
             )
-            await callback_query.answer()
             return
         if action == "h":
             events = await list_work_item_events(db_session, user.id, item.id)
@@ -713,36 +737,27 @@ async def work_item_callback(
                 for event in events
             ]
             await message.answer("\n".join(lines), parse_mode=None)
-            await callback_query.answer()
+            await feedback.success("История открыта.")
             return
         if await get_active_draft_for_user(db_session, user.id) is not None:
-            await callback_query.answer(
-                "Сначала завершите или отмените активный черновик.", show_alert=True
-            )
+            await feedback.error("Сначала завершите или отмените активный черновик.")
             return
         if await get_active_action_session(db_session, user.id) is not None:
-            await callback_query.answer(
-                "Сначала завершите или отмените текущее действие.", show_alert=True
-            )
+            await feedback.error("Сначала завершите или отмените текущее действие.")
             return
         expected_revision = decode_revision(argument) if argument is not None else None
         if expected_revision is None:
-            await callback_query.answer(
-                "Карточка устарела. Откройте запись заново.", show_alert=True
-            )
+            await feedback.error("Карточка устарела. Откройте запись заново.")
             return
         if action == "s":
             details = await get_work_item_details(db_session, user.id, item.id)
             keyboard = snooze_options_keyboard(details) if details is not None else None
             if keyboard is None:
-                await callback_query.answer(
-                    "Для записи нет активного напоминания.", show_alert=True
-                )
+                await feedback.error("Для записи нет активного напоминания.")
                 return
             if work_item_revision(item.updated_at) != expected_revision:
                 raise StaleWorkItemError("work item card is stale")
             await message.edit_reply_markup(reply_markup=keyboard)
-            await callback_query.answer("Выберите время.")
             return
         if action == "r":
             if work_item_revision(item.updated_at) != expected_revision:
@@ -771,7 +786,6 @@ async def work_item_callback(
                     later_today_available=later_today_available,
                 )
             )
-            await callback_query.answer("Выберите новую дату.")
             return
         if action in {"n", "rd", "zi"}:
             if action == "zi":
@@ -816,7 +830,7 @@ async def work_item_callback(
                 telegram_update_id=event_update.update_id,
                 context=context,
             )
-            await callback_query.answer("Жду ответ.")
+            await feedback.prompt("Жду ответ.", remove_keyboard=True)
             return
         mutating_actions = {
             "c",
@@ -836,10 +850,8 @@ async def work_item_callback(
             "zd",
         }
         if action not in mutating_actions:
-            await callback_query.answer("Действие недоступно.")
+            await feedback.error("Действие недоступно.")
             return
-        await callback_query.answer("Готово" if action == "c" else "Обрабатываю…")
-        callback_acknowledged = True
         update_id = event_update.update_id
         preferences = await get_effective_notification_preferences(
             db_session, user.id, notification_defaults
@@ -853,7 +865,7 @@ async def work_item_callback(
                 update_id,
                 expected_revision=expected_revision,
             )
-            response = f"✅ Выполнено: {item.title}"
+            response = f"Выполнено: {item.title}"
         elif action == "x":
             result = await cancel_work_item(
                 db_session,
@@ -960,10 +972,11 @@ async def work_item_callback(
             user.id,
             item,
             app_timezone,
-        )
-        await answer_with_main_menu(
-            message,
-            response if result is None or result.changed else "Действие уже выполнено.",
+            notice=(
+                f"✅ {response}"
+                if result is None or result.changed
+                else "✅ Действие уже выполнено."
+            ),
         )
     except (StaleWorkItemError, StaleReminderError):
         await db_session.rollback()
@@ -973,19 +986,11 @@ async def work_item_callback(
             user.id,
             item,
             app_timezone,
+            notice="⚠️ Карточка обновлена. Выберите действие ещё раз.",
         )
-        if callback_acknowledged:
-            await answer_with_main_menu(message, "Карточка обновлена.")
-        else:
-            await callback_query.answer("Карточка обновлена.", show_alert=True)
     except (InvalidWorkItemTransitionError, ValueError):
         await db_session.rollback()
-        if callback_acknowledged:
-            await answer_with_main_menu(message, "Это действие сейчас недоступно.")
-        else:
-            await callback_query.answer(
-                "Это действие сейчас недоступно.", show_alert=True
-            )
+        await feedback.error("Это действие сейчас недоступно.")
     except SQLAlchemyError:
         await db_session.rollback()
         logger.error(
@@ -993,12 +998,7 @@ async def work_item_callback(
             telegram_user.id,
             action,
         )
-        if callback_acknowledged:
-            await answer_with_main_menu(message, "Не удалось выполнить действие.")
-        else:
-            await callback_query.answer(
-                "Не удалось выполнить действие.", show_alert=True
-            )
+        await feedback.error("Не удалось выполнить действие.")
 
 
 async def action_session_message(
@@ -1506,19 +1506,21 @@ async def work_item_selection_callback(
     work_item_action_ttl_minutes: int,
     reminder_policy: ReminderPolicy | None = None,
 ) -> None:
+    feedback = CallbackFeedback(callback_query)
     message = callback_query.message
     parts = callback_query.data.split(":") if callback_query.data else []
     if len(parts) != 3 or parts[0] != "wis" or not isinstance(message, Message):
-        await callback_query.answer("Выбор недоступен.")
+        await feedback.error("Выбор недоступен.")
         return
+    await feedback.acknowledge()
     try:
         action_session_id = UUID(parts[1])
     except ValueError:
-        await callback_query.answer("Выбор недоступен.")
+        await feedback.error("Выбор недоступен.")
         return
     user = await get_user_by_telegram_id(db_session, callback_query.from_user.id)
     if user is None:
-        await callback_query.answer("Выбор недоступен.")
+        await feedback.error("Выбор недоступен.")
         return
     action_session = await get_action_session_for_user(
         db_session,
@@ -1528,37 +1530,36 @@ async def work_item_selection_callback(
     )
     if action_session is None or action_session.action != WorkItemAction.SELECT_RECORD:
         await db_session.rollback()
-        await callback_query.answer("Срок выбора истёк.", show_alert=True)
+        await feedback.error("Срок выбора истёк.")
         return
     if parts[2] == "x":
         await finish_action_session(db_session, action_session, status="cancelled")
         await db_session.commit()
-        await message.edit_text("Выбор отменён.", parse_mode=None)
-        await callback_query.answer("Выбор отменён.")
+        await message.edit_text("✅ Выбор отменён.", parse_mode=None)
         return
     try:
         index = int(parts[2])
     except ValueError:
         await db_session.rollback()
-        await callback_query.answer("Выбор недоступен.")
+        await feedback.error("Выбор недоступен.")
         return
     candidate_ids = action_session.context.get("candidate_ids")
     intent_payload = action_session.context.get("intent")
     if not isinstance(candidate_ids, list) or not isinstance(intent_payload, dict):
         await db_session.rollback()
-        await callback_query.answer("Выбор недоступен.")
+        await feedback.error("Выбор недоступен.")
         return
     try:
         item_id = UUID(str(candidate_ids[index]))
         intent = ManagementIntent.model_validate_json(json.dumps(intent_payload))
     except (IndexError, ValueError):
         await db_session.rollback()
-        await callback_query.answer("Выбор недоступен.")
+        await feedback.error("Выбор недоступен.")
         return
     item = await get_work_item(db_session, user.id, item_id)
     if item is None:
         await db_session.rollback()
-        await callback_query.answer("Запись не найдена.")
+        await feedback.error("Запись не найдена.")
         return
     await finish_action_session(db_session, action_session)
     await db_session.flush()
@@ -1574,4 +1575,4 @@ async def work_item_selection_callback(
         app_timezone=app_timezone,
         reminder_policy=reminder_policy,
     )
-    await callback_query.answer()
+    await feedback.success("Запись выбрана.", remove_keyboard=True)

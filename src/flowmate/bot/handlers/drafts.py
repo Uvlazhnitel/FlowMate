@@ -27,6 +27,7 @@ from flowmate.ai.schemas import (
 )
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.callback_data import encode_revision
+from flowmate.bot.callback_feedback import CallbackFeedback
 from flowmate.bot.menu import answer_with_main_menu, restore_main_menu
 from flowmate.bot.presentation import (
     TelegramDisplayContext,
@@ -681,6 +682,7 @@ def parse_callback_data(data: str | None) -> tuple[str, UUID, int | None] | None
 
 async def _draft_callback(
     callback_query: CallbackQuery,
+    feedback: CallbackFeedback,
     event_update: Update,
     db_session: AsyncSession,
     draft_parsing_service: DraftParsingService | None = None,
@@ -692,13 +694,14 @@ async def _draft_callback(
     parsed = parse_callback_data(callback_query.data)
     telegram_user = callback_query.from_user
     if parsed is None or telegram_user is None:
-        await callback_query.answer("Кнопка устарела.", show_alert=True)
+        await feedback.error("Кнопка устарела.")
         return
+    await feedback.acknowledge()
     action, draft_id, option_index = parsed
     user = await get_user_by_telegram_id(db_session, telegram_user.id)
     if user is None:
         await db_session.rollback()
-        await callback_query.answer(DRAFT_NOT_FOUND_MESSAGE, show_alert=True)
+        await feedback.error(DRAFT_NOT_FOUND_MESSAGE)
         return
     draft = await get_draft_for_user(
         db_session,
@@ -708,7 +711,7 @@ async def _draft_callback(
     )
     if draft is None:
         await db_session.rollback()
-        await callback_query.answer(DRAFT_NOT_FOUND_MESSAGE, show_alert=True)
+        await feedback.error(DRAFT_NOT_FOUND_MESSAGE)
         return
     if draft.expires_at <= utc_now() and draft.status in {
         "parsing",
@@ -717,11 +720,11 @@ async def _draft_callback(
     }:
         await transition_draft(db_session, draft, "expired")
         await db_session.commit()
-        await callback_query.answer(DRAFT_EXPIRED_MESSAGE, show_alert=True)
+        await feedback.error(DRAFT_EXPIRED_MESSAGE)
         return
     if not isinstance(callback_query.message, Message):
         await db_session.rollback()
-        await callback_query.answer("Сообщение недоступно.", show_alert=True)
+        await feedback.error("Сообщение недоступно.")
         return
 
     if action == "cancel" and draft.status in {
@@ -731,7 +734,6 @@ async def _draft_callback(
     }:
         await transition_draft(db_session, draft, "cancelled")
         await db_session.commit()
-        await callback_query.answer()
         await callback_query.message.edit_text(f"🚫 {DRAFT_CANCELLED_MESSAGE}")
         return
     if action == "confirm" and draft.status in {
@@ -747,7 +749,6 @@ async def _draft_callback(
             allow_incomplete=draft.status == "needs_clarification",
         )
         await db_session.commit()
-        await callback_query.answer()
         display = TelegramDisplayContext(timezone=app_timezone or ZoneInfo("UTC"))
         if notification_defaults is not None:
             preferences = await get_effective_notification_preferences(
@@ -769,30 +770,29 @@ async def _draft_callback(
         draft.current_question = DRAFT_CHANGE_QUESTION
         draft.current_question_options = []
         draft.current_question_context = {"field": "freeform_change"}
-        await callback_query.answer()
         sent = await callback_query.message.answer(
             DRAFT_CHANGE_QUESTION,
             reply_markup=ForceReply(selective=True),
         )
         await set_question_message_id(db_session, draft, sent.message_id)
         await db_session.commit()
+        await feedback.prompt("Жду ваши изменения.", remove_keyboard=True)
         return
     if action == "answer" and option_index is not None:
         if option_index < 0:
             await db_session.rollback()
-            await callback_query.answer("Кнопка устарела.", show_alert=True)
+            await feedback.error("Кнопка устарела.")
             return
         if draft_parsing_service is None or draft.status != "needs_clarification":
             await db_session.rollback()
-            await callback_query.answer(DRAFT_NOT_FOUND_MESSAGE, show_alert=True)
+            await feedback.error(DRAFT_NOT_FOUND_MESSAGE)
             return
         try:
             option = draft.current_question_options[option_index]
         except IndexError:
             await db_session.rollback()
-            await callback_query.answer("Кнопка устарела.", show_alert=True)
+            await feedback.error("Кнопка устарела.")
             return
-        await callback_query.answer()
         if option.get("action") == "confirm":
             converter = draft_conversion_service or DraftConversionService()
             result = await converter.convert(
@@ -827,6 +827,7 @@ async def _draft_callback(
             )
             await set_question_message_id(db_session, draft, sent.message_id)
             await db_session.commit()
+            await feedback.prompt("Жду ваши изменения.", remove_keyboard=True)
             return
         await refine_draft(
             callback_query.message,
@@ -840,10 +841,11 @@ async def _draft_callback(
             db_session=db_session,
             draft_ttl_hours=draft_ttl_hours,
         )
+        await feedback.success("Ответ учтён.", remove_keyboard=True)
         return
 
     await db_session.rollback()
-    await callback_query.answer("Действие недоступно.", show_alert=True)
+    await feedback.error("Действие недоступно.")
 
 
 async def draft_callback(
@@ -856,9 +858,11 @@ async def draft_callback(
     notification_defaults: NotificationDefaults | None = None,
     app_timezone: ZoneInfo | None = None,
 ) -> None:
+    feedback = CallbackFeedback(callback_query)
     try:
         await _draft_callback(
             callback_query,
+            feedback,
             event_update,
             db_session,
             draft_parsing_service,
@@ -876,7 +880,4 @@ async def draft_callback(
             parsed[1] if parsed is not None else "unknown",
             type(error).__name__,
         )
-        await callback_query.answer(
-            DRAFT_CONVERSION_FAILED_MESSAGE,
-            show_alert=True,
-        )
+        await feedback.error(DRAFT_CONVERSION_FAILED_MESSAGE)

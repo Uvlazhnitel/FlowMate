@@ -11,6 +11,13 @@ export interface ReminderCard {
   revision: number;
 }
 
+export type PlannerStatus =
+  | "not_required"
+  | "needs_transfer"
+  | "transferred"
+  | "update_required"
+  | "no_longer_relevant";
+
 export interface WorkItemCardData {
   id: string;
   type: string;
@@ -18,6 +25,7 @@ export interface WorkItemCardData {
   title: string;
   description: string | null;
   priority: string;
+  planner_status: PlannerStatus;
   topic_id: string | null;
   topic_name: string | null;
   people: PersonRef[];

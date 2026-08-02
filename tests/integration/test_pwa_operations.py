@@ -232,7 +232,7 @@ async def test_operational_views_actions_and_user_isolation(
                 "waiting_overdue": 0,
                 "questions": 0,
                 "inbox": 3,
-                "planner_queue": 2,
+                "planner_queue": 0,
             }
             assert dashboard.json()["recommended"][0]["title"] == "Prepare launch"
             assert len(dashboard.json()["activity"]) == 3

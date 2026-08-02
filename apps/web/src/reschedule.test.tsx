@@ -14,6 +14,7 @@ const item: WorkItemCardData = {
   title: "Подготовить запуск",
   description: null,
   priority: "high",
+  planner_status: "not_required",
   topic_id: null,
   topic_name: null,
   people: [],
@@ -41,7 +42,7 @@ function requestBody(init?: RequestInit): Record<string, unknown> {
   >;
 }
 
-function renderCard(agenda = false) {
+function renderCard(agenda = false, cardItem: WorkItemCardData = item) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -49,7 +50,7 @@ function renderCard(agenda = false) {
     queryClient,
     ...render(
       <QueryClientProvider client={queryClient}>
-        <WorkItemCard item={item} dateTimePreferences={preferences} agenda={agenda} />
+        <WorkItemCard item={cardItem} dateTimePreferences={preferences} agenda={agenda} />
       </QueryClientProvider>,
     ),
   };
@@ -267,5 +268,23 @@ describe("reschedule dialog", () => {
         preset: "next_working_day",
       }),
     );
+  });
+});
+
+describe("Planner card action", () => {
+  it("hides manual Planner action for unsupported item types", () => {
+    renderCard(false, { ...item, type: "question" });
+
+    expect(
+      screen.queryByRole("button", { name: "Добавить в Planner" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides manual Planner action for an item already in the queue", () => {
+    renderCard(false, { ...item, planner_status: "needs_transfer" });
+
+    expect(
+      screen.queryByRole("button", { name: "Добавить в Planner" }),
+    ).not.toBeInTheDocument();
   });
 });

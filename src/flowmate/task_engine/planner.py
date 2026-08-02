@@ -18,9 +18,5 @@ OPEN_WORK_ITEM_STATUSES = frozenset(
 )
 
 
-def initial_planner_status(item_type: str, status: str) -> PlannerStatus:
-    if item_type not in ELIGIBLE_PLANNER_TYPES:
-        return PlannerStatus.NOT_REQUIRED
-    if status in OPEN_WORK_ITEM_STATUSES:
-        return PlannerStatus.NEEDS_TRANSFER
-    return PlannerStatus.NO_LONGER_RELEVANT
+def initial_planner_status() -> PlannerStatus:
+    return PlannerStatus.NOT_REQUIRED

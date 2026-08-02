@@ -50,9 +50,11 @@ function PlannerCard({
     <article className="planner-card">
       <div className="work-card__topline">
         <StatusBadge item={entry.item} />
-        <span className={`planner-status planner-status--${entry.planner_status}`}>
-          {statusLabels[entry.planner_status]}
-        </span>
+        {entry.planner_status !== "needs_transfer" && (
+          <span className={`planner-status planner-status--${entry.planner_status}`}>
+            {statusLabels[entry.planner_status]}
+          </span>
+        )}
       </div>
       <h2>{entry.item.title}</h2>
       {entry.item.description && <p>{entry.item.description}</p>}
