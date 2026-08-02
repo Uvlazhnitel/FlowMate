@@ -24,6 +24,7 @@ from flowmate.task_engine.operational import (
     TodaySection,
     dashboard_snapshot,
     list_today_section,
+    list_tomorrow_items,
     today_overview_snapshot,
 )
 from flowmate.task_engine.rescheduling import UNKNOWN_PHRASE_MESSAGE
@@ -83,6 +84,9 @@ async def test_pwa_workspace_switch_changes_operational_scope(
         login_code_sender=sender,
     )
     due_at = datetime.now(UTC) + timedelta(hours=1)
+    tomorrow_at = (datetime.now(UTC) + timedelta(days=1)).replace(
+        hour=12, minute=0, second=0, microsecond=0
+    )
     async with started_app(app):
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -108,6 +112,27 @@ async def test_pwa_workspace_switch_changes_operational_scope(
                         ),
                         WorkItem(
                             user_id=user.id,
+                            workspace="personal",
+                            type="follow_up",
+                            title="Personal tomorrow",
+                            status="active",
+                            priority="normal",
+                            planner_status="not_required",
+                            next_follow_up_at=tomorrow_at,
+                        ),
+                        WorkItem(
+                            user_id=user.id,
+                            workspace="work",
+                            type="waiting",
+                            title="Work tomorrow",
+                            status="waiting",
+                            priority="normal",
+                            planner_status="not_required",
+                            due_at=tomorrow_at,
+                            waiting_since=due_at,
+                        ),
+                        WorkItem(
+                            user_id=user.id,
                             workspace="work",
                             type="task",
                             title="Work only",
@@ -128,6 +153,10 @@ async def test_pwa_workspace_switch_changes_operational_scope(
             assert [item["title"] for item in personal_overview.json()["focus"]] == [
                 "Personal only"
             ]
+            personal_tomorrow = await client.get("/api/v1/tomorrow")
+            assert [item["title"] for item in personal_tomorrow.json()["items"]] == [
+                "Personal tomorrow"
+            ]
 
             switched = await client.put(
                 "/api/v1/workspace",
@@ -144,6 +173,10 @@ async def test_pwa_workspace_switch_changes_operational_scope(
             work_overview = await client.get("/api/v1/today/overview")
             assert [item["title"] for item in work_overview.json()["focus"]] == [
                 "Work only"
+            ]
+            work_tomorrow = await client.get("/api/v1/tomorrow")
+            assert [item["title"] for item in work_tomorrow.json()["items"]] == [
+                "Work tomorrow"
             ]
 
 
@@ -163,6 +196,7 @@ async def test_operational_views_actions_and_user_isolation(
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             assert (await client.get("/api/v1/dashboard")).status_code == 401
             assert (await client.get("/api/v1/today/overview")).status_code == 401
+            assert (await client.get("/api/v1/tomorrow")).status_code == 401
             csrf = await authenticated_client(client, sender)
 
             async with AsyncSession(database_engine) as session:
@@ -796,6 +830,114 @@ async def test_today_grouping_respects_local_day_and_semantic_types(
     overview_summary = cast(dict[str, int], overview["summary"])
     assert overview_summary["overdue"] == 2
     assert overview_summary["due_today"] == 1
+
+
+@pytest.mark.integration
+async def test_tomorrow_list_uses_local_dst_bounds_and_effective_dates(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, TELEGRAM_USER_ID + 125)
+    now = datetime(2026, 3, 7, 17, tzinfo=UTC)
+    preferences = effective_preferences(
+        None,
+        NotificationDefaults(
+            timezone="America/New_York",
+            morning_digest_time=time(8),
+            evening_digest_time=time(18),
+            quiet_hours_start=time(22),
+            quiet_hours_end=time(7),
+            snooze_minutes=60,
+        ),
+    )
+    task = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Early task",
+        status="active",
+        due_at=datetime(2026, 3, 8, 6, tzinfo=UTC),
+    )
+    follow_up = await create_work_item(
+        database_session,
+        user.id,
+        item_type="follow_up",
+        title="Follow up",
+        status="active",
+        next_follow_up_at=datetime(2026, 3, 8, 12, tzinfo=UTC),
+    )
+    urgent_task = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Urgent at the same time",
+        status="active",
+        priority="urgent",
+        due_at=datetime(2026, 3, 8, 12, tzinfo=UTC),
+    )
+    waiting = await create_work_item(
+        database_session,
+        user.id,
+        item_type="waiting",
+        title="Waiting",
+        status="waiting",
+        due_at=datetime(2026, 3, 8, 18, tzinfo=UTC),
+        waiting_since=datetime(2026, 3, 7, 18, tzinfo=UTC),
+    )
+    question = await create_work_item(
+        database_session,
+        user.id,
+        item_type="question",
+        title="Question",
+        status="active",
+        due_at=datetime(2026, 3, 9, 3, 59, tzinfo=UTC),
+    )
+    for title, due_at, status in (
+        ("Before tomorrow", datetime(2026, 3, 8, 4, 59, tzinfo=UTC), "active"),
+        ("After tomorrow", datetime(2026, 3, 9, 4, tzinfo=UTC), "active"),
+        ("Completed tomorrow", datetime(2026, 3, 8, 10, tzinfo=UTC), "done"),
+    ):
+        await create_work_item(
+            database_session,
+            user.id,
+            item_type="task",
+            title=title,
+            status=status,
+            due_at=due_at,
+            completed_at=due_at if status == "done" else None,
+        )
+    await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="No date",
+        status="active",
+    )
+    await create_work_item(
+        database_session,
+        user.id,
+        item_type="agenda_item",
+        title="Dated agenda item",
+        status="active",
+        due_at=datetime(2026, 3, 8, 14, tzinfo=UTC),
+    )
+
+    page = await list_tomorrow_items(
+        database_session,
+        user.id,
+        now=now,
+        preferences=preferences,
+        limit=20,
+        offset=0,
+    )
+
+    assert [card.id for card in page.items] == [
+        task.id,
+        urgent_task.id,
+        follow_up.id,
+        waiting.id,
+        question.id,
+    ]
+    assert page.has_more is False
 
 
 @pytest.mark.integration

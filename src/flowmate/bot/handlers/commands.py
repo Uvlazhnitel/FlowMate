@@ -27,6 +27,7 @@ from flowmate.bot.handlers.navigation import (
     search_command,
     tasks_command,
     today_command,
+    tomorrow_command,
     topics_command,
     waiting_command,
 )
@@ -57,6 +58,7 @@ from flowmate.bot.menu import (
     SETTINGS_BUTTON,
     TASKS_BUTTON,
     TODAY_BUTTON,
+    TOMORROW_BUTTON,
     WAITING_BUTTON,
     WORKSPACE_BUTTON,
     answer_with_main_menu,
@@ -107,6 +109,7 @@ async def help_command(message: Message) -> None:
         "Нажмите «Записать» и отправьте текст или голосовое сообщение.\n\n"
         "📋 <b>Работа</b>\n"
         "/today — дела на сегодня\n"
+        "/tomorrow — дела на завтра\n"
         "/tasks — задачи\n"
         "/followups — follow-up\n"
         "/waiting — ожидания\n"
@@ -197,6 +200,7 @@ def create_router(
     router.message.register(cancel_command, Command("cancel"))
     router.message.register(cancel_command, F.text == CANCEL_BUTTON)
     router.message.register(today_command, Command("today"))
+    router.message.register(tomorrow_command, Command("tomorrow"))
     router.message.register(tasks_command, Command("tasks"))
     router.message.register(followups_command, Command("followups"))
     router.message.register(waiting_command, Command("waiting"))
@@ -209,6 +213,7 @@ def create_router(
     router.message.register(search_command, Command("search"))
     router.message.register(record_prompt, F.text == RECORD_BUTTON)
     router.message.register(today_command, F.text == TODAY_BUTTON)
+    router.message.register(tomorrow_command, F.text == TOMORROW_BUTTON)
     router.message.register(tasks_command, F.text == TASKS_BUTTON)
     router.message.register(followups_command, F.text == FOLLOW_UPS_BUTTON)
     router.message.register(waiting_command, F.text == WAITING_BUTTON)

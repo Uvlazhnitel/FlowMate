@@ -25,6 +25,7 @@ from flowmate.task_engine.queries import (
     OPEN_STATUSES,
     PersonScope,
     list_person_counts,
+    list_scheduled_items,
     validate_pagination,
 )
 
@@ -108,15 +109,19 @@ def effective_date(item: WorkItem) -> datetime | None:
 
 
 def local_day_bounds(
-    now: datetime, preferences: EffectiveNotificationPreferences
+    now: datetime,
+    preferences: EffectiveNotificationPreferences,
+    *,
+    days_ahead: int = 0,
 ) -> tuple[datetime, datetime]:
     local_now = now.astimezone(preferences.zoneinfo)
     midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0).time()
+    local_date = local_now.date() + timedelta(days=days_ahead)
     start = resolve_local_datetime(
-        local_now.date(), midnight, preferences.zoneinfo
+        local_date, midnight, preferences.zoneinfo
     ).astimezone(UTC)
     end = resolve_local_datetime(
-        local_now.date() + timedelta(days=1), midnight, preferences.zoneinfo
+        local_date + timedelta(days=1), midnight, preferences.zoneinfo
     ).astimezone(UTC)
     return start, end
 
@@ -283,6 +288,33 @@ async def list_today_section(
         limit,
         offset,
         page.has_more,
+    )
+
+
+async def list_tomorrow_items(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    now: datetime,
+    preferences: EffectiveNotificationPreferences,
+    limit: int,
+    offset: int,
+) -> PageResult:
+    start, end = local_day_bounds(now, preferences, days_ahead=1)
+    items = await list_scheduled_items(
+        session,
+        user_id,
+        start=start,
+        end=end,
+        limit=limit + 1,
+        offset=offset,
+    )
+    page_items = items[:limit]
+    return PageResult(
+        list(await build_work_item_cards(session, user_id, page_items, now=now)),
+        limit,
+        offset,
+        len(items) > limit,
     )
 
 

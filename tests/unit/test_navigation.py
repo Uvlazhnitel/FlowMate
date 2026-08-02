@@ -1,5 +1,5 @@
 # ruff: noqa: RUF001
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, patch
@@ -14,6 +14,7 @@ from flowmate.ai.schemas import SearchIntent, SearchWorkItemType
 from flowmate.bot.handlers.commands import cancel_command
 from flowmate.bot.handlers.navigation import (
     NavigationPage,
+    build_navigation_page,
     execute_search_intent,
     list_callback,
     list_keyboard,
@@ -23,6 +24,7 @@ from flowmate.bot.handlers.navigation import (
     parse_search_callback,
     parse_search_expression,
     send_navigation_page,
+    tomorrow_command,
 )
 from flowmate.bot.menu import (
     CANCEL_BUTTON,
@@ -33,11 +35,13 @@ from flowmate.bot.menu import (
     SETTINGS_BUTTON,
     TASKS_BUTTON,
     TODAY_BUTTON,
+    TOMORROW_BUTTON,
     WAITING_BUTTON,
     WORKSPACE_BUTTON,
     main_menu_keyboard,
 )
 from flowmate.db.models import WorkItem
+from flowmate.reminders.preferences import NotificationDefaults
 
 
 def make_message() -> Message:
@@ -55,12 +59,92 @@ def test_main_menu_has_persistent_layout_and_workspace_button() -> None:
 
     assert keyboard.is_persistent is True
     assert [[button.text for button in row] for row in keyboard.keyboard] == [
-        [RECORD_BUTTON, TODAY_BUTTON],
+        [RECORD_BUTTON],
+        [TODAY_BUTTON, TOMORROW_BUTTON],
         [TASKS_BUTTON, FOLLOW_UPS_BUTTON],
         [WAITING_BUTTON, QUESTIONS_BUTTON],
         [SEARCH_BUTTON, SETTINGS_BUTTON],
         [WORKSPACE_BUTTON, CANCEL_BUTTON],
     ]
+
+
+@pytest.mark.asyncio
+async def test_tomorrow_navigation_uses_exact_next_local_day() -> None:
+    session = AsyncMock(spec=AsyncSession)
+    timezone = ZoneInfo("America/New_York")
+    with patch(
+        "flowmate.bot.handlers.navigation.list_scheduled_items",
+        new=AsyncMock(return_value=[]),
+    ) as scheduled:
+        page = await build_navigation_page(
+            cast(AsyncSession, session),
+            uuid4(),
+            view="n",
+            page=0,
+            timezone=timezone,
+        )
+
+    assert "📆 На завтра" in page.text
+    assert "На завтра записей нет." in page.text
+    call = scheduled.await_args
+    assert call is not None
+    start = call.kwargs["start"]
+    end = call.kwargs["end"]
+    expected_date = datetime.now(timezone).date() + timedelta(days=1)
+    assert start.astimezone(timezone).date() == expected_date
+    assert end.astimezone(timezone).date() == expected_date + timedelta(days=1)
+
+
+@pytest.mark.asyncio
+async def test_tomorrow_command_uses_user_notification_timezone() -> None:
+    message = make_message()
+    session = AsyncMock(spec=AsyncSession)
+    user = SimpleNamespace(id=uuid4())
+    preferences = SimpleNamespace(zoneinfo=ZoneInfo("Asia/Tokyo"))
+    defaults = NotificationDefaults(
+        timezone="UTC",
+        morning_digest_time=datetime.min.time(),
+        evening_digest_time=datetime.min.time(),
+        quiet_hours_start=datetime.min.time(),
+        quiet_hours_end=datetime.min.time(),
+        snooze_minutes=60,
+    )
+    navigation_page = NavigationPage(
+        text="Tomorrow",
+        keyboard=list_keyboard(view="n", page=0, has_next=False, item_ids=[]),
+    )
+    with (
+        patch(
+            "flowmate.bot.handlers.navigation.get_user_by_telegram_id",
+            new=AsyncMock(return_value=user),
+        ),
+        patch(
+            "flowmate.bot.handlers.navigation.cancel_transient_dialogs",
+            new=AsyncMock(),
+        ),
+        patch(
+            "flowmate.bot.handlers.navigation.get_effective_notification_preferences",
+            new=AsyncMock(return_value=preferences),
+        ),
+        patch(
+            "flowmate.bot.handlers.navigation.build_navigation_page",
+            new=AsyncMock(return_value=navigation_page),
+        ) as build,
+        patch(
+            "flowmate.bot.handlers.navigation.send_navigation_page",
+            new=AsyncMock(),
+        ),
+    ):
+        await tomorrow_command(
+            message,
+            cast(AsyncSession, session),
+            ZoneInfo("UTC"),
+            defaults,
+        )
+
+    assert build.await_args is not None
+    assert build.await_args.kwargs["view"] == "n"
+    assert build.await_args.kwargs["timezone"] == ZoneInfo("Asia/Tokyo")
 
 
 @pytest.mark.asyncio
@@ -89,6 +173,15 @@ async def test_list_callback_acknowledges_before_loading_page() -> None:
     )
     session = AsyncMock(spec=AsyncSession)
     user = SimpleNamespace(id=uuid4())
+    preferences = SimpleNamespace(zoneinfo=ZoneInfo("Asia/Tokyo"))
+    defaults = NotificationDefaults(
+        timezone="UTC",
+        morning_digest_time=datetime.min.time(),
+        evening_digest_time=datetime.min.time(),
+        quiet_hours_start=datetime.min.time(),
+        quiet_hours_end=datetime.min.time(),
+        snooze_minutes=60,
+    )
     page = NavigationPage(
         text="Page",
         keyboard=list_keyboard(view="t", page=1, has_next=False, item_ids=[]),
@@ -110,6 +203,10 @@ async def test_list_callback_acknowledges_before_loading_page() -> None:
         patch(
             "flowmate.bot.handlers.navigation.build_navigation_page",
             new=AsyncMock(side_effect=build),
+        ) as build_page,
+        patch(
+            "flowmate.bot.handlers.navigation.get_effective_notification_preferences",
+            new=AsyncMock(return_value=preferences),
         ),
         patch(
             "flowmate.bot.handlers.navigation.send_navigation_page",
@@ -121,10 +218,17 @@ async def test_list_callback_acknowledges_before_loading_page() -> None:
             new=AsyncMock(side_effect=acknowledge),
         ) as answer,
     ):
-        await list_callback(callback, cast(AsyncSession, session), ZoneInfo("UTC"))
+        await list_callback(
+            callback,
+            cast(AsyncSession, session),
+            ZoneInfo("UTC"),
+            defaults,
+        )
 
     answer.assert_awaited_once_with("⏳ Открываю…")
     assert events == ["acknowledged", "loaded"]
+    assert build_page.await_args is not None
+    assert build_page.await_args.kwargs["timezone"] == ZoneInfo("Asia/Tokyo")
     send.assert_awaited_once_with(message, page, edit=True)
 
 

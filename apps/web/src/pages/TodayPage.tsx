@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowRight, ArrowUpRight } from "lucide-react";
 import { Link, Navigate, useLocation, useSearchParams } from "react-router-dom";
 
 import { getToday, getTodayOverview, operationsKeys } from "../api/operations";
@@ -200,6 +200,10 @@ function TodaySummary({
           )}
         </nav>
       )}
+      <Link className="today-tomorrow-link" to="/tomorrow">
+        Посмотреть задачи на завтра
+        <ArrowRight size={16} aria-hidden />
+      </Link>
     </>
   );
 }

@@ -189,6 +189,7 @@ export interface ActionResponse {
 export const operationsKeys = {
   all: ["operations"] as const,
   todayOverview: ["operations", "today", "overview"] as const,
+  tomorrow: ["operations", "tomorrow"] as const,
 };
 
 function query(path: string, values: Record<string, string | number | undefined>) {
@@ -205,6 +206,11 @@ export const getTodayOverview = () =>
 export const getToday = (section: string, offset = 0) =>
   apiRequest<PageResponse<WorkItemCardData>>(
     query("/api/v1/today", { section, limit: 20, offset }),
+  );
+
+export const getTomorrow = (offset = 0) =>
+  apiRequest<PageResponse<WorkItemCardData>>(
+    query("/api/v1/tomorrow", { limit: 20, offset }),
   );
 
 export const getTopics = (q: string, offset: number) =>

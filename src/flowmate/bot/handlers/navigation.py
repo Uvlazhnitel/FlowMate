@@ -29,6 +29,10 @@ from flowmate.bot.presentation import (
 )
 from flowmate.db.models import WorkItem, WorkItemActionSession
 from flowmate.db.users import get_user_by_telegram_id
+from flowmate.reminders.preferences import (
+    NotificationDefaults,
+    get_effective_notification_preferences,
+)
 from flowmate.reminders.timezone import resolve_local_datetime
 from flowmate.task_engine.action_sessions import (
     create_action_session,
@@ -46,6 +50,7 @@ from flowmate.task_engine.queries import (
     list_open_questions,
     list_person_counts,
     list_recent_tasks,
+    list_scheduled_items,
     list_today_items,
     list_topic_counts,
     list_waiting_items,
@@ -68,6 +73,7 @@ LIST_FAILED_MESSAGE = "Не удалось загрузить список. По
 
 VIEW_HEADINGS = {
     "d": "📅 Просрочено и на сегодня",
+    "n": "📆 На завтра",
     "t": "✅ Активные задачи",
     "f": "🔁 Активные follow-up",
     "w": "⏳ Ожидания",
@@ -347,12 +353,26 @@ async def _work_item_page(
     limit = PAGE_SIZE + 1
     now = datetime.now(timezone)
     if view == "d":
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = resolve_local_datetime(now.date(), time.min, timezone)
         items = await list_today_items(
             session,
             user_id,
             start=start,
-            end=start + timedelta(days=1),
+            end=resolve_local_datetime(
+                now.date() + timedelta(days=1), time.min, timezone
+            ),
+            limit=limit,
+            offset=offset,
+        )
+    elif view == "n":
+        tomorrow = now.date() + timedelta(days=1)
+        items = await list_scheduled_items(
+            session,
+            user_id,
+            start=resolve_local_datetime(tomorrow, time.min, timezone),
+            end=resolve_local_datetime(
+                tomorrow + timedelta(days=1), time.min, timezone
+            ),
             limit=limit,
             offset=offset,
         )
@@ -433,7 +453,7 @@ async def _work_item_page(
         else (
             "Ничего не найдено. Попробуйте изменить запрос."
             if view == "s"
-            else "Записей нет."
+            else ("На завтра записей нет." if view == "n" else "Записей нет.")
         )
     )
     return NavigationPage(
@@ -614,6 +634,7 @@ async def show_list_view(
     *,
     view: str,
     page: int = 0,
+    notification_defaults: NotificationDefaults | None = None,
 ) -> None:
     telegram_user = message.from_user
     if telegram_user is None:
@@ -625,12 +646,18 @@ async def show_list_view(
             return
         await cancel_transient_dialogs(db_session, user.id)
         await db_session.commit()
+        timezone = app_timezone
+        if notification_defaults is not None:
+            preferences = await get_effective_notification_preferences(
+                db_session, user.id, notification_defaults
+            )
+            timezone = preferences.zoneinfo
         value = await build_navigation_page(
             db_session,
             user.id,
             view=view,
             page=page,
-            timezone=app_timezone,
+            timezone=timezone,
         )
         await send_navigation_page(message, value)
     except SQLAlchemyError:
@@ -642,6 +669,21 @@ async def today_command(
     message: Message, db_session: AsyncSession, app_timezone: ZoneInfo
 ) -> None:
     await show_list_view(message, db_session, app_timezone, view="d")
+
+
+async def tomorrow_command(
+    message: Message,
+    db_session: AsyncSession,
+    app_timezone: ZoneInfo,
+    notification_defaults: NotificationDefaults,
+) -> None:
+    await show_list_view(
+        message,
+        db_session,
+        app_timezone,
+        view="n",
+        notification_defaults=notification_defaults,
+    )
 
 
 async def tasks_command(
@@ -970,6 +1012,7 @@ async def list_callback(
     callback_query: CallbackQuery,
     db_session: AsyncSession,
     app_timezone: ZoneInfo,
+    notification_defaults: NotificationDefaults | None = None,
 ) -> None:
     feedback = CallbackFeedback(callback_query)
     parsed = parse_list_callback(callback_query.data)
@@ -984,12 +1027,18 @@ async def list_callback(
         return
     view, page, people_scope = parsed
     try:
+        timezone = app_timezone
+        if notification_defaults is not None:
+            preferences = await get_effective_notification_preferences(
+                db_session, user.id, notification_defaults
+            )
+            timezone = preferences.zoneinfo
         value = await build_navigation_page(
             db_session,
             user.id,
             view=view,
             page=page,
-            timezone=app_timezone,
+            timezone=timezone,
             people_scope=people_scope or "work",
         )
         await send_navigation_page(message, value, edit=True)

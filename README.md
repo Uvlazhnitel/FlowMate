@@ -139,12 +139,13 @@ and each user's default reminder time.
 
 The PWA lives in `apps/web` and uses React, TypeScript, Vite, TanStack Query,
 React Router, Radix primitives, and a generated service worker. It provides the
-responsive application shell and protected routes for Today, Inbox, Agenda,
-Timeline, Topics, People, Planner Queue, and Settings. Today is the start screen
-and combines the daily summary, recommended focus, later tasks, and paginated
-priority sections. The legacy `/dashboard` route redirects to `/today` for
-compatibility and is not a separate screen. Operational views reuse ownership-safe
-Task Engine services for work-item actions. Inbox supports explicit review and
+responsive application shell and protected routes for Today, Tomorrow, Inbox,
+Agenda, Timeline, Topics, People, Planner Queue, and Settings. Today is the start
+screen and combines the daily summary, recommended focus, later tasks, and
+paginated priority sections. `/tomorrow` lists all supported open records
+scheduled for the next local day. The legacy `/dashboard` route redirects to `/today` for
+compatibility and is not a separate screen. Operational views reuse
+ownership-safe Task Engine services for work-item actions. Inbox supports explicit review and
 atomic conversion of uncertain drafts, Planner Queue tracks manual transfer
 state without Microsoft integration, Timeline shows WorkItem history, and
 Settings manages notification preferences, active topics, people, aliases, and
@@ -154,8 +155,8 @@ provider readiness booleans without returning secrets.
 
 FlowMate has two database-backed spaces: `Личное` (`personal`) and `Работа`
 (`work`). Select the current space in the PWA shell or with Telegram command
-`/workspace`. Today, Topics, Agenda, Inbox, Planner Queue, Timeline, notes,
-search, and new captures use only that space. People and
+`/workspace`. Today, Tomorrow, Topics, Agenda, Inbox, Planner Queue, Timeline,
+notes, search, and new captures use only that space. People and
 notification preferences are shared, while each person's operational counts
 and history are calculated for the current space.
 
@@ -283,9 +284,9 @@ make up-worker
 ```
 
 The bot supports `/start`, `/menu`, `/help`, `/status`, `/notes`, `/search`,
-`/draft`, `/cancel`, `/today`, `/tasks`, `/followups`, `/waiting`, `/questions`,
-`/topics`, and `/people`. `/start` and `/menu` show the persistent main menu;
-the menu buttons call the same handlers as their slash-command equivalents.
+`/draft`, `/cancel`, `/today`, `/tomorrow`, `/tasks`, `/followups`, `/waiting`,
+`/questions`, `/topics`, and `/people`. `/start` and `/menu` show the persistent
+main menu; the menu buttons call the same handlers as their slash-command equivalents.
 Without AI routing, non-command text is stored as a Note. With AI
 routing enabled, text is classified as either a new Note/draft or management of
 one existing WorkItem; management input does not create an unrelated Note.
@@ -417,9 +418,10 @@ WorkItem relations when both referenced items are actionable.
 
 ### Telegram work-item management
 
-`/today` shows overdue and due-today open records. `/tasks`, `/followups`,
-`/waiting`, and `/questions` show compact lists of the corresponding active
-records; `/topics` and `/people` include open-record counts. Lists use pages of
+`/today` shows overdue and due-today open records. `/tomorrow` shows task,
+follow-up, waiting, and question records scheduled for the next local day.
+`/tasks`, `/followups`, `/waiting`, and `/questions` show compact lists of the
+corresponding active records; `/topics` and `/people` include open-record counts. Lists use pages of
 five records with `Назад`, `Вперёд`, and `Главное меню` inline actions. Each
 WorkItem summary includes its type, title, human-readable date, status, and a
 details button.

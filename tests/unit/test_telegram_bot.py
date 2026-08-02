@@ -501,6 +501,7 @@ async def test_help_response() -> None:
         "Нажмите «Записать» и отправьте текст или голосовое сообщение.\n\n"
         "📋 <b>Работа</b>\n"
         "/today — дела на сегодня\n"
+        "/tomorrow — дела на завтра\n"
         "/tasks — задачи\n"
         "/followups — follow-up\n"
         "/waiting — ожидания\n"

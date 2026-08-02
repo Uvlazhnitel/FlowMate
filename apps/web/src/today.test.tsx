@@ -117,6 +117,9 @@ describe("Today home", () => {
       screen.getByRole("link", { name: "Показать все задачи на сегодня" }),
     ).toBeVisible();
     expect(
+      screen.getByRole("link", { name: "Посмотреть задачи на завтра" }),
+    ).toHaveAttribute("href", "/tomorrow");
+    expect(
       fetchMock.mock.calls.filter(([input]) =>
         requestPath(input).includes("/api/v1/today?section="),
       ),

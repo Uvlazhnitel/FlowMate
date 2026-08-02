@@ -44,6 +44,7 @@ from flowmate.task_engine.operational import (
     list_context_content,
     list_people_summary,
     list_today_section,
+    list_tomorrow_items,
     list_topics_summary,
     today_overview_snapshot,
 )
@@ -216,6 +217,26 @@ async def today(
         offset=offset,
     )
     return {"section": section, **_page_payload(page, timezone=preferences.timezone)}
+
+
+@router.get("/tomorrow")
+async def tomorrow(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    identity: Annotated[PwaIdentity, Depends(require_pwa_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> dict[str, object]:
+    preferences = await _preferences(session, identity, settings)
+    page = await list_tomorrow_items(
+        session,
+        identity.user.id,
+        now=_clock(),
+        preferences=preferences,
+        limit=limit,
+        offset=offset,
+    )
+    return _page_payload(page, timezone=preferences.timezone)
 
 
 @router.get("/topics")

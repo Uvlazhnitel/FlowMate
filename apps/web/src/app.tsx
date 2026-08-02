@@ -15,6 +15,7 @@ import { ContextDetailPage } from "./pages/ContextDetailPage";
 import { PeoplePage } from "./pages/PeoplePage";
 import { TodayPage } from "./pages/TodayPage";
 import { TimelinePage } from "./pages/TimelinePage";
+import { TomorrowPage } from "./pages/TomorrowPage";
 import { TopicsPage } from "./pages/TopicsPage";
 import type { DateTimePreferences } from "./lib/dates";
 
@@ -23,6 +24,7 @@ function UserRoute({
 }: {
   page:
     | "today"
+    | "tomorrow"
     | "topics"
     | "people"
     | "agenda"
@@ -41,6 +43,13 @@ function UserRoute({
   if (page === "today")
     return (
       <TodayPage
+        dateTimePreferences={dateTimePreferences}
+        defaultSnoozeMinutes={user.default_snooze_minutes}
+      />
+    );
+  if (page === "tomorrow")
+    return (
+      <TomorrowPage
         dateTimePreferences={dateTimePreferences}
         defaultSnoozeMinutes={user.default_snooze_minutes}
       />
@@ -121,6 +130,7 @@ export function AppRoutes() {
         <Route index element={<Navigate to="/today" replace />} />
         <Route path="dashboard" element={<DashboardRedirect />} />
         <Route path="today" element={<UserRoute page="today" />} />
+        <Route path="tomorrow" element={<UserRoute page="tomorrow" />} />
         <Route path="topics" element={<UserRoute page="topics" />} />
         <Route path="topics/:id" element={<UserRoute page="topic" />} />
         <Route path="people" element={<UserRoute page="people" />} />

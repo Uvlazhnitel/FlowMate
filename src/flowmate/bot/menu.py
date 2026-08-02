@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 RECORD_BUTTON = "🎙 Записать"
 TODAY_BUTTON = "📅 Сегодня"
+TOMORROW_BUTTON = "📆 Завтра"
 TASKS_BUTTON = "✅ Задачи"
 FOLLOW_UPS_BUTTON = "🔁 Follow-up"
 WAITING_BUTTON = "⏳ Ждём"
@@ -22,7 +23,8 @@ CANCEL_BUTTON = "❌ Отмена"
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=RECORD_BUTTON), KeyboardButton(text=TODAY_BUTTON)],
+            [KeyboardButton(text=RECORD_BUTTON)],
+            [KeyboardButton(text=TODAY_BUTTON), KeyboardButton(text=TOMORROW_BUTTON)],
             [KeyboardButton(text=TASKS_BUTTON), KeyboardButton(text=FOLLOW_UPS_BUTTON)],
             [
                 KeyboardButton(text=WAITING_BUTTON),

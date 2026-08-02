@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from flowmate.db.models import Person, Topic, WorkItem, WorkItemPerson
-from flowmate.task_engine.enums import WorkItemStatus, WorkItemType
+from flowmate.task_engine.enums import WorkItemPriority, WorkItemStatus, WorkItemType
 
 OPEN_STATUSES = tuple(
     status.value
@@ -23,6 +23,15 @@ OPEN_STATUSES = tuple(
 
 PersonScope = Literal["work", "recent", "all"]
 PEOPLE_RECENT_DAYS = 90
+SCHEDULED_LIST_TYPES = tuple(
+    item_type.value
+    for item_type in (
+        WorkItemType.TASK,
+        WorkItemType.FOLLOW_UP,
+        WorkItemType.WAITING,
+        WorkItemType.QUESTION,
+    )
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +72,39 @@ def effective_date_expression() -> ColumnElement[datetime]:
         ),
         else_=WorkItem.due_at,
     )
+
+
+async def list_scheduled_items(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    start: datetime,
+    end: datetime,
+    limit: int = 10,
+    offset: int = 0,
+) -> list[WorkItem]:
+    validate_pagination(limit, offset)
+    effective_date = effective_date_expression()
+    priority_rank = case(
+        (WorkItem.priority == WorkItemPriority.URGENT.value, 0),
+        (WorkItem.priority == WorkItemPriority.HIGH.value, 1),
+        (WorkItem.priority == WorkItemPriority.NORMAL.value, 2),
+        else_=3,
+    )
+    statement = (
+        select(WorkItem)
+        .where(
+            WorkItem.user_id == user_id,
+            WorkItem.status.in_(OPEN_STATUSES),
+            WorkItem.type.in_(SCHEDULED_LIST_TYPES),
+            effective_date >= start,
+            effective_date < end,
+        )
+        .order_by(effective_date, priority_rank, WorkItem.id)
+        .offset(offset)
+        .limit(limit)
+    )
+    return list(await session.scalars(statement))
 
 
 async def list_today_items(
