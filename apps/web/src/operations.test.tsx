@@ -104,7 +104,11 @@ describe("operational screens", () => {
       expect.anything(),
     );
     await user.click(screen.getByRole("button", { name: "Готово" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Запись завершена");
+    expect(await screen.findByRole("status")).toHaveTextContent("Выполнено");
+    expect(screen.getByRole("button", { name: "Готово" })).toBeDisabled();
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Запись завершена"),
+    );
     await user.click(screen.getByRole("button", { name: "Вернуть" }));
     expect(await screen.findByText("Подготовить запуск")).toBeVisible();
     const actionCalls = fetchMock.mock.calls.filter(([input]) =>
@@ -222,10 +226,26 @@ describe("operational screens", () => {
       );
       await Promise.resolve();
     });
+    expect(screen.getByRole("status")).toHaveTextContent("Выполнено");
+    expect(screen.queryByText("Запись завершена")).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(649);
+    });
+    expect(screen.queryByText("Запись завершена")).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
     expect(screen.getByRole("status")).toHaveTextContent("Запись завершена");
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(8_000);
+      await vi.advanceTimersByTimeAsync(7_999);
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Запись завершена");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
     });
 
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
@@ -234,6 +254,115 @@ describe("operational screens", () => {
         requestPath(input).includes("/today/overview"),
       ),
     ).toHaveLength(2);
+  });
+
+  it("keeps non-complete terminal actions immediate", async () => {
+    const waitingItem: WorkItemCardData = {
+      ...workItem,
+      id: "43f060bd-77e1-45e3-b07d-57a60e310768",
+      type: "waiting",
+      title: "Получить подтверждение",
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/actions")) {
+        const body = JSON.parse(requestBody(init)) as { action: string };
+        expect(body.action).toBe("waiting_received");
+        return Promise.resolve(
+          jsonResponse({
+            changed: true,
+            work_item: { ...waitingItem, status: "done", revision: 2 },
+          }),
+        );
+      }
+      if (path.includes("/today/overview")) return Promise.resolve(overview());
+      if (path.includes("section=overdue")) return Promise.resolve(page([waitingItem]));
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApplication("/today?section=overdue");
+
+    await user.click(await screen.findByRole("button", { name: "Получено" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Запись завершена");
+    expect(screen.queryByText("Выполнено")).not.toBeInTheDocument();
+  });
+
+  it("does not animate or repeat a failed complete action", async () => {
+    let resolveAction: (response: Response) => void = () => undefined;
+    const actionResponse = new Promise<Response>((resolve) => {
+      resolveAction = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/actions")) return actionResponse;
+      if (path.includes("/today/overview")) return Promise.resolve(overview());
+      if (path.includes("section=overdue")) return Promise.resolve(page([workItem]));
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApplication("/today?section=overdue");
+
+    const completeButton = await screen.findByRole("button", { name: "Готово" });
+    await user.click(completeButton);
+    expect(completeButton).toBeDisabled();
+    await user.click(completeButton);
+    expect(
+      fetchMock.mock.calls.filter(([input]) => requestPath(input).includes("/actions")),
+    ).toHaveLength(1);
+
+    resolveAction(jsonResponse({ detail: "stale revision" }, 409));
+
+    expect(
+      await screen.findByText(
+        "Не удалось выполнить действие. Обновите данные и повторите.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("Выполнено")).not.toBeInTheDocument();
+    expect(screen.queryByText("Запись завершена")).not.toBeInTheDocument();
+  });
+
+  it("skips the completion transition when reduced motion is preferred", async () => {
+    vi.spyOn(window, "matchMedia").mockImplementation((query: string) => ({
+      matches: query === "(prefers-reduced-motion: reduce)",
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/actions")) {
+        return Promise.resolve(
+          jsonResponse({
+            changed: true,
+            work_item: { ...workItem, status: "done", revision: 2 },
+          }),
+        );
+      }
+      if (path.includes("/today/overview")) return Promise.resolve(overview());
+      if (path.includes("section=overdue")) return Promise.resolve(page([workItem]));
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApplication("/today?section=overdue");
+
+    await user.click(await screen.findByRole("button", { name: "Готово" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Запись завершена");
+    expect(screen.queryByText("Выполнено")).not.toBeInTheDocument();
   });
 
   it("loads additional detail records and exposes mobile navigation", async () => {

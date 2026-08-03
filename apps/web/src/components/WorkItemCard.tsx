@@ -38,6 +38,7 @@ const typeLabels: Record<string, string> = {
 };
 
 const UNDO_WINDOW_MS = 8_000;
+const COMPLETION_ANIMATION_MS = 650;
 const PLANNER_TYPES = new Set(["task", "follow_up", "waiting"]);
 
 type DialogMode = "note" | "result" | "decision" | null;
@@ -71,16 +72,48 @@ export function WorkItemCard({
   const [rescheduleStatus, setRescheduleStatus] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [hidden, setHidden] = useState(false);
+  const [completing, setCompleting] = useState(false);
   const [undoItem, setUndoItem] = useState<WorkItemCardData | null>(null);
   const [undoError, setUndoError] = useState(false);
+  const completionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
     () => () => {
+      if (completionTimer.current !== null) clearTimeout(completionTimer.current);
       if (undoTimer.current !== null) clearTimeout(undoTimer.current);
     },
     [],
   );
+
+  function startUndoWindow() {
+    undoTimer.current = setTimeout(() => {
+      undoTimer.current = null;
+      setUndoItem(null);
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
+    }, UNDO_WINDOW_MS);
+  }
+
+  function showUndo(itemToUndo: WorkItemCardData, animateCompletion: boolean) {
+    if (completionTimer.current !== null) clearTimeout(completionTimer.current);
+    if (undoTimer.current !== null) clearTimeout(undoTimer.current);
+    setUndoItem(itemToUndo);
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!animateCompletion || reduceMotion) {
+      setHidden(true);
+      startUndoWindow();
+      return;
+    }
+
+    setCompleting(true);
+    completionTimer.current = setTimeout(() => {
+      completionTimer.current = null;
+      setCompleting(false);
+      setHidden(true);
+      startUndoWindow();
+    }, COMPLETION_ANIMATION_MS);
+  }
 
   const mutation = useMutation({
     mutationFn: (payload: Omit<ActionPayload, "client_action_id">) =>
@@ -107,14 +140,7 @@ export function WorkItemCard({
         ) &&
         response.work_item
       ) {
-        if (undoTimer.current !== null) clearTimeout(undoTimer.current);
-        setHidden(true);
-        setUndoItem(response.work_item);
-        undoTimer.current = setTimeout(() => {
-          undoTimer.current = null;
-          setUndoItem(null);
-          void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
-        }, UNDO_WINDOW_MS);
+        showUndo(response.work_item, variables.action === "complete");
       } else {
         void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
       }
@@ -164,6 +190,10 @@ export function WorkItemCard({
 
   async function undo() {
     if (!undoItem) return;
+    if (completionTimer.current !== null) {
+      clearTimeout(completionTimer.current);
+      completionTimer.current = null;
+    }
     if (undoTimer.current !== null) {
       clearTimeout(undoTimer.current);
       undoTimer.current = null;
@@ -175,6 +205,7 @@ export function WorkItemCard({
         client_action_id: crypto.randomUUID(),
         expected_revision: undoItem.revision,
       });
+      setCompleting(false);
       setHidden(false);
       setUndoItem(null);
       await queryClient.invalidateQueries({ queryKey: operationsKeys.all });
@@ -210,9 +241,21 @@ export function WorkItemCard({
     : item.type === "waiting"
       ? "Получено"
       : "Готово";
+  const interactionsDisabled = mutation.isPending || completing;
 
   return (
-    <article className={`work-card ${item.overdue ? "work-card--overdue" : ""}`}>
+    <article
+      className={`work-card ${item.overdue ? "work-card--overdue" : ""} ${completing ? "work-card--completing" : ""}`}
+      aria-busy={interactionsDisabled}
+    >
+      {completing && (
+        <div className="work-card__completion" role="status" aria-live="polite">
+          <span className="work-card__completion-icon">
+            <Check size={18} strokeWidth={2.5} aria-hidden />
+          </span>
+          <span>Выполнено</span>
+        </div>
+      )}
       <div className="work-card__topline">
         <StatusBadge item={item} />
         <span className={`priority priority--${item.priority}`}>{item.priority}</span>
@@ -233,16 +276,23 @@ export function WorkItemCard({
         <button
           className="card-action card-action--primary"
           type="button"
+          disabled={interactionsDisabled}
           onClick={() => act(primaryAction)}
         >
           <Check size={15} aria-hidden /> {primaryLabel}
         </button>
-        <button className="card-action" type="button" onClick={openReschedule}>
+        <button
+          className="card-action"
+          type="button"
+          disabled={interactionsDisabled}
+          onClick={openReschedule}
+        >
           <Clock3 size={15} aria-hidden /> {agenda ? "Отложить" : "Перенести"}
         </button>
         <button
           className="card-action"
           type="button"
+          disabled={interactionsDisabled}
           onClick={() => setDialog(agenda ? "result" : "note")}
         >
           <FilePlus2 size={15} aria-hidden /> {agenda ? "Результат" : "Заметка"}
@@ -251,7 +301,7 @@ export function WorkItemCard({
           <button
             className="card-action"
             type="button"
-            disabled={mutation.isPending}
+            disabled={interactionsDisabled}
             onClick={() => act("planner_needs_transfer")}
           >
             <ListPlus size={15} aria-hidden /> Добавить в Planner
@@ -261,6 +311,7 @@ export function WorkItemCard({
           <button
             className="card-action"
             type="button"
+            disabled={interactionsDisabled}
             onClick={() =>
               act("snooze", {
                 duration_minutes: defaultSnoozeMinutes,
@@ -277,6 +328,7 @@ export function WorkItemCard({
             <button
               className="card-action"
               type="button"
+              disabled={interactionsDisabled}
               onClick={() => setDialog("decision")}
             >
               Решение
@@ -284,6 +336,7 @@ export function WorkItemCard({
             <button
               className="card-action"
               type="button"
+              disabled={interactionsDisabled}
               onClick={() =>
                 confirmAction("convert_to_task", "Преобразовать запись в задачу?")
               }
@@ -296,6 +349,7 @@ export function WorkItemCard({
           className="card-action card-action--danger"
           type="button"
           aria-label="Отменить запись"
+          disabled={interactionsDisabled}
           onClick={() =>
             confirmAction("cancel", "Отменить запись? Она останется в истории.")
           }
