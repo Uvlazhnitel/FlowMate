@@ -52,3 +52,36 @@ jobs:
       - name: Check Alembic schema consistency
         run: uv run alembic check
       - run: make check
+
+  backup-restore:
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      APP_DEBUG: false
+      APP_API_KEY: ci-test-secret
+      DATABASE_URL: postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test
+      TEST_DATABASE_URL: postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test
+      LOG_LEVEL: INFO
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2
+        with:
+          version: "0.11.26"
+          enable-cache: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+      - name: Install backup tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes age rclone shellcheck
+      - run: uv sync --frozen --group dev
+      - name: Check backup shell scripts
+        run: shellcheck scripts/backup_postgres.sh scripts/restore_postgres.sh scripts/upload_backup_offsite.sh scripts/restore_backup_offsite.sh
+      - name: Start PostgreSQL 16
+        run: make test-db-up
+      - name: Test backup, restore, and local off-site transport
+        run: make backup-restore-test
+      - name: Stop PostgreSQL 16
+        if: always()
+        run: make test-db-down

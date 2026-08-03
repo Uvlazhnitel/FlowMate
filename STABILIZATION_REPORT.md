@@ -33,11 +33,15 @@
 
 ## Backup status
 
-- `make backup` creates compressed custom-format dumps, SHA-256 manifests, and
-  rotates seven daily plus four weekly copies.
-- `make restore-check backup=...` restores only into `*_restore_test` and checks
-  checksum, schema revision, and basic table readability.
-- Off-host replication and encryption remain deployment responsibilities.
+- `make backup` creates validated compressed custom-format dumps and strict v2
+  manifests, then rotates seven daily plus four weekly copies.
+- `make restore-check backup=...` validates the artifact and dynamic project
+  head before target mutation, restores transactionally into staging, and cuts
+  over with rollback-safe database renames.
+- `make backup-offsite backup=...` encrypts a dump/manifest bundle with age and
+  uploads only ciphertext plus its checksum manifest through rclone.
+- Legacy manifests without version 2 are retained only for manual recovery and
+  rejected by automated restore. A fresh v2 backup is required before rollout.
 
 ## Audit and cleanup
 
@@ -91,4 +95,5 @@ processing. No real audio or transcript is stored in the repository.
 All automated, migration, build, health, worker, cleanup, and backup/restore
 gates pass. The code is ready for an MVP stabilization candidate; production
 release approval remains conditional on completing the manual real-voice
-checklist and configuring protected off-host backup replication.
+checklist and configuring protected age identities and separate rclone test and
+production remotes.

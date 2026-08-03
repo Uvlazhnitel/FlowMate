@@ -240,9 +240,9 @@ a new PWA. A previously installed localhost or SSH-tunnel PWA has a different
 origin and cannot be reused.
 
 Add `--profile bot --profile scheduler` only when the Telegram bot and reminder
-worker are configured. API startup applies Alembic migrations through
-`0020_stage8_stabilization` before serving requests; Nginx serves the built PWA
-and proxies `/api` to FastAPI on the same origin.
+worker are configured. API startup applies all migrations through the current
+Alembic head before serving requests; Nginx serves the built PWA and proxies
+`/api` to FastAPI on the same origin.
 
 Authentication endpoints are:
 
@@ -606,10 +606,19 @@ Create a compressed PostgreSQL custom-format backup:
 BACKUP_DIR=/var/backups/flowmate make backup
 ```
 
-The directory receives mode `0700`, dump and manifest files receive `0600`, and
-the manifest contains SHA-256 and size only. Daily runs retain seven daily and
-four Sunday weekly copies. Configure host cron to run `make backup`;
+The directory receives mode `0700`; dump and manifest files receive `0600`.
+The strict JSON manifest v2 records the artifact name, RFC3339 creation time,
+custom-dump format, byte size, SHA-256, PostgreSQL and `pg_dump` versions, and
+the complete Alembic revision set. The dump is accepted only after
+`pg_restore --list`, then published with its manifest. Sunday copies receive a
+separate manifest with the weekly artifact name. Daily runs retain seven daily
+and four Sunday weekly copies. Configure host cron to run `make backup`;
 application APScheduler intentionally does not own backups.
+
+Manifests without `manifest_version: 2`, including manifests produced by older
+FlowMate releases, are legacy and fail closed. Before deploying this release,
+create and verify a new v2 backup. Retain legacy dumps according to policy for a
+manual, operator-reviewed recovery path; automated restore does not accept them.
 
 Verify an isolated restore using the test PostgreSQL container:
 
@@ -617,9 +626,54 @@ Verify an isolated restore using the test PostgreSQL container:
 make restore-check backup=/var/backups/flowmate/flowmate-daily-TIMESTAMP.dump
 ```
 
-The command refuses targets not ending in `_restore_test`, verifies checksum
-and Alembic head, and never replaces production. Backups are not encrypted or
-copied off-host by FlowMate; production storage must provide both separately.
+The command refuses targets not ending in `_restore_test`. Before Compose or any
+target mutation it validates the strict manifest, name, size, SHA-256, archive,
+and exact revisions against the dynamically discovered project head; multiple
+heads fail immediately. It restores with `--single-transaction --exit-on-error`
+into a unique staging database, checks revisions and key tables, then cuts over
+with PostgreSQL database renames. The existing target remains as `previous`
+until final smoke passes and is restored automatically if that smoke fails.
+
+### Encrypted off-site backups
+
+Install `age` and `rclone`, create an age identity outside the repository, and
+store one or more public recipients in a protected recipients file:
+
+```bash
+age-keygen -o /secure/flowmate-age-identity.txt
+age-keygen -y /secure/flowmate-age-identity.txt \
+  > /secure/flowmate-age-recipients.txt
+
+export FLOWMATE_OFFSITE_REMOTE=remote:flowmate-backups
+export FLOWMATE_AGE_RECIPIENTS_FILE=/secure/flowmate-age-recipients.txt
+export FLOWMATE_AGE_IDENTITY_FILE=/secure/flowmate-age-identity.txt
+export RCLONE_CONFIG=/secure/rclone.conf
+
+make backup-offsite backup=/var/backups/flowmate/flowmate-daily-TIMESTAMP.dump
+make restore-offsite-check \
+  backup=remote:flowmate-backups/flowmate-daily-TIMESTAMP.dump.tar.age
+```
+
+Upload validates the inner v2 manifest and dump, packs exactly the dump and its
+manifest, encrypts the tar with the recipients file, and uploads only the
+`*.tar.age` ciphertext and an external v1 name/format/size/SHA-256 manifest. It
+downloads both through rclone and verifies them. Restore verifies ciphertext
+before decryption, extracts exactly two regular files into a temporary `0700`
+directory, repeats the inner checks, and invokes the standard staging restore.
+Traps remove plaintext on success, failure, and signals. Wrong identities and
+modified ciphertext fail before database mutation.
+
+Rotate keys with an overlap period: add the new recipient, create and
+restore-test a new backup, retain both identities through the retention period
+of archives encrypted to the old key, then remove the old recipient. Remote
+retention remains operator policy; upload never performs broad remote cleanup.
+
+`make backup-restore-test` runs the isolated PostgreSQL/off-site suite. GitHub
+Actions uses an ephemeral age identity and local rclone backend. The manual
+**Off-site backup smoke** workflow uses protected environment `backup-test` and
+requires `FLOWMATE_RCLONE_CONFIG_B64` and `FLOWMATE_OFFSITE_TEST_REMOTE`
+secrets. It creates a unique `${run_id}-${run_attempt}` prefix and deletes only
+that prefix. Use dedicated test credentials, never production credentials.
 
 ### Offline AI evaluation and real voice smoke
 

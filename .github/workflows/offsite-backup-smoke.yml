@@ -1,0 +1,72 @@
+name: Off-site backup smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  remote-smoke:
+    runs-on: ubuntu-latest
+    environment: backup-test
+    env:
+      APP_ENV: test
+      APP_DEBUG: false
+      APP_API_KEY: ci-test-secret
+      DATABASE_URL: postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test
+      TEST_DATABASE_URL: postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test
+      FLOWMATE_OFFSITE_TEST_REMOTE: ${{ secrets.FLOWMATE_OFFSITE_TEST_REMOTE }}
+      FLOWMATE_RCLONE_CONFIG_B64: ${{ secrets.FLOWMATE_RCLONE_CONFIG_B64 }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2
+        with:
+          version: "0.11.26"
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+      - name: Install backup tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes age rclone
+      - run: uv sync --frozen --group dev
+      - name: Start and migrate PostgreSQL 16
+        run: |
+          make test-db-up
+          uv run alembic upgrade head
+      - name: Exercise protected remote
+        env:
+          RUN_PREFIX: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          test -n "$FLOWMATE_OFFSITE_TEST_REMOTE"
+          test -n "$FLOWMATE_RCLONE_CONFIG_B64"
+          work=$(mktemp -d)
+          remote="${FLOWMATE_OFFSITE_TEST_REMOTE%/}/${RUN_PREFIX}"
+          cleanup() {
+            rclone purge "$remote" >/dev/null 2>&1 || true
+            rm -rf -- "$work"
+          }
+          trap cleanup EXIT HUP INT TERM
+          printf '%s' "$FLOWMATE_RCLONE_CONFIG_B64" | base64 --decode >"$work/rclone.conf"
+          age-keygen -o "$work/identity.txt"
+          age-keygen -y "$work/identity.txt" >"$work/recipients.txt"
+          BACKUP_DIR="$work/backups" \
+            FLOWMATE_DB_COMPOSE_FILE="$PWD/docker-compose.test.yml" \
+            FLOWMATE_DB_SERVICE=postgres-test \
+            FLOWMATE_BACKUP_DATABASE=flowmate_test \
+            FLOWMATE_BACKUP_USER=flowmate_test \
+            bash scripts/backup_postgres.sh
+          dump=$(find "$work/backups" -type f -name '*.dump' -print -quit)
+          export RCLONE_CONFIG="$work/rclone.conf"
+          export FLOWMATE_OFFSITE_REMOTE="$remote"
+          export FLOWMATE_AGE_RECIPIENTS_FILE="$work/recipients.txt"
+          export FLOWMATE_AGE_IDENTITY_FILE="$work/identity.txt"
+          bash scripts/upload_backup_offsite.sh "$dump"
+          ciphertext="$remote/$(basename "$dump").tar.age"
+          bash scripts/restore_backup_offsite.sh "$ciphertext" flowmate_remote_restore_test
+      - name: Stop PostgreSQL 16
+        if: always()
+        run: make test-db-down

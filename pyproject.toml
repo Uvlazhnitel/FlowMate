@@ -34,10 +34,13 @@ dev = [
 packages = ["src/flowmate"]
 
 [tool.pytest.ini_options]
-addopts = "-ra --cov=flowmate --cov-report=term-missing"
+addopts = "-ra --import-mode=importlib --cov=flowmate --cov-report=term-missing"
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["integration: requires a PostgreSQL test database"]
+markers = [
+    "integration: requires a PostgreSQL test database",
+    "ops: requires Docker, PostgreSQL client tools, age, and rclone",
+]
 
 [tool.coverage.run]
 branch = true
