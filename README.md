@@ -114,26 +114,27 @@ Migration `0015_pwa_remaining_screens` adds manual Planner state and transfer
 timestamps, Note inbox disposition, display preferences, and ownership-safe
 exact topic/person selections for draft items. It also adds the
 `planner_status_changed` history event used by Timeline.
-Migration `0016_meeting_mode_foundation` adds ownership-safe meetings,
-participants, topics, captured-note links, state history, and persistent
-Telegram setup sessions. A partial unique index permits only one active meeting
-per user.
-Migration `0017_meeting_fast_capture` links independent DraftSessions to active
-meetings, preserves immutable source Notes and context snapshots, and adds
-stable per-meeting capture numbering and non-destructive review state.
-Migration `0018_meeting_review_completion` adds validated meeting reviews,
-agenda outcomes, idempotent result links, and meeting-to-WorkItem provenance.
-Migration `0019_stage7_stabilization` indexes ownership-scoped Meeting events
-for stable unified Timeline pagination.
+Historical migrations `0016_meeting_mode_foundation` through
+`0019_stage7_stabilization` created the unfinished Meeting Mode schema,
+captures, reviews, and Timeline indexes. They remain in the migration chain so
+existing databases can still upgrade safely, but Meeting Mode is no longer an
+application feature.
 Migration `0020_stage8_stabilization` adds persistent Telegram receipts,
 PostgreSQL-backed AI recovery jobs, safe audit events, prompt versions,
 transcript redaction metadata, and an explicit unknown-delivery reminder state.
 Migration `0021_workspace_separation` persists `personal` and `work` on users,
-topics, work items, notes, drafts, meetings, reminders, and dialog sessions.
+topics, work items, notes, drafts, the historical Meeting tables, reminders,
+and dialog sessions.
 Existing data is assigned to `personal`; topic names are unique within each
 workspace rather than across the whole user account.
 Migration `0022_fast_capture_defaults` adds persistent quick-capture sessions
 and each user's default reminder time.
+Migration `0024_remove_meeting_mode` officially removes the retired Meeting
+tables, DraftSession capture fields, and Meeting AI job kinds. It refuses to
+run when legacy Meeting data exists; export or archive the reported records,
+verify the archive, and consciously clear them before retrying the migration.
+The migration is intentionally irreversible because deleted data cannot be
+reconstructed. Agenda and the `agenda_item` WorkItem type remain supported.
 
 ## PWA and Login
 
@@ -364,7 +365,7 @@ when the provider reports at least the configured split confidence. Otherwise
 the backend uses the provider's validated single-item fallback. The phrases
 `одна задача`, `одним пунктом`, and `не разделяй` force one item; `две задачи`
 and `несколько задач` explicitly request multiple items. The same policy is
-used for text, voice, Meeting captures, and Meeting review source boundaries.
+used for text and voice captures.
 
 Every temporal candidate retains its original phrase. Resolved values are
 timezone-aware ISO datetimes; date-only due dates use `23:59:59` in the user's
@@ -580,15 +581,14 @@ volumes, so it permanently deletes local database data.
 
 Telegram update IDs are claimed in PostgreSQL before handler execution. A
 completed receipt is permanent; a stale processing lease may be reclaimed after
-a restart. Draft parsing, Meeting captures, and Meeting review generation also
-have unique PostgreSQL jobs. The bot normally completes them synchronously, and
-the scheduler retries pending or stale jobs up to three times without relying on
-process memory.
+a restart. Draft parsing has unique PostgreSQL jobs. The bot normally completes
+them synchronously, and the scheduler retries pending or stale jobs up to three
+times without relying on process memory.
 
 The scheduler runs cleanup hourly. Completed/converted voice transcripts are
 redacted after 30 days; unresolved transcripts are redacted after 90 days.
-Structured records, Meeting links, events, source IDs, and idempotency records
-remain. Expired login codes, revoked sessions, and expired dialog sessions are
+Structured records, source IDs, and idempotency records remain. Expired login
+codes, revoked sessions, and expired dialog sessions are
 removed after 30 days. Old inactive ordinary drafts lose bulky AI payloads but
 retain stable provenance where required. Orphan `flowmate-*.ogg` files older
 than one hour are removed at bot startup and before creating a new temp file.
@@ -630,7 +630,7 @@ use fictional names and contain no corporate data.
 For a release candidate, send newly recorded non-sensitive Telegram voice clips
 covering: a short action; `7 августа` without time; an explicit date and time;
 multiple items; noisy speech; silence; oversized audio; voice clarification;
-Meeting capture/review; duplicate update delivery; and restart during parsing.
+duplicate update delivery; and restart during parsing.
 Verify acknowledgement, dates, deferred clarification, idempotency, recovery,
 final records/reminders, and absence of `.ogg` files. Never commit recordings or
 their real transcripts.

@@ -16,6 +16,7 @@ from tests.conftest import (
     TEST_DATABASE_URL,
     database_has_table,
     get_table_names,
+    reset_test_database,
 )
 
 
@@ -230,23 +231,13 @@ async def read_planner_statuses(
         await engine.dispose()
 
 
-async def delete_manual_planner_user(database_url: str) -> None:
-    engine = create_engine(database_url)
-    try:
-        async with engine.begin() as connection:
-            await connection.execute(
-                text("DELETE FROM users WHERE telegram_user_id = 699003")
-            )
-    finally:
-        await engine.dispose()
-
-
 def test_migrations_upgrade_from_previous_stage_revision(
     migrated_database: None,
 ) -> None:
     alembic_config = Config("alembic.ini")
     try:
-        command.downgrade(alembic_config, "0009_create_reminders")
+        asyncio.run(reset_test_database(TEST_DATABASE_URL))
+        command.upgrade(alembic_config, "0009_create_reminders")
         assert asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_sessions"))
         assert asyncio.run(database_has_table(TEST_DATABASE_URL, "draft_items"))
         assert asyncio.run(
@@ -263,6 +254,7 @@ def test_migrations_upgrade_from_previous_stage_revision(
         for table_name in APPLICATION_TABLES:
             assert asyncio.run(database_has_table(TEST_DATABASE_URL, table_name))
     finally:
+        asyncio.run(reset_test_database(TEST_DATABASE_URL))
         command.upgrade(alembic_config, "head")
 
 
@@ -271,7 +263,8 @@ def test_notification_preferences_migration_from_0010(
 ) -> None:
     alembic_config = Config("alembic.ini")
     try:
-        command.downgrade(alembic_config, "0010_connect_work_item_reminders")
+        asyncio.run(reset_test_database(TEST_DATABASE_URL))
+        command.upgrade(alembic_config, "0010_connect_work_item_reminders")
         assert not asyncio.run(
             database_has_table(TEST_DATABASE_URL, "user_notification_preferences")
         )
@@ -280,17 +273,21 @@ def test_notification_preferences_migration_from_0010(
             database_has_table(TEST_DATABASE_URL, "user_notification_preferences")
         )
     finally:
+        asyncio.run(reset_test_database(TEST_DATABASE_URL))
         command.upgrade(alembic_config, "head")
 
 
 def test_planner_event_survives_downgrade_to_0014(migrated_database: None) -> None:
     alembic_config = Config("alembic.ini")
+    asyncio.run(reset_test_database(TEST_DATABASE_URL))
+    command.upgrade(alembic_config, "0023_planner_manual_queue")
     event_id = asyncio.run(seed_planner_status_event(TEST_DATABASE_URL))
     try:
         command.downgrade(alembic_config, "0014_pwa_operations")
         assert asyncio.run(read_event_type(TEST_DATABASE_URL, event_id)) == "updated"
         asyncio.run(delete_planner_event_user(TEST_DATABASE_URL))
     finally:
+        asyncio.run(reset_test_database(TEST_DATABASE_URL))
         command.upgrade(alembic_config, "head")
 
 
@@ -300,7 +297,8 @@ def test_manual_planner_queue_migration_clears_only_automatic_entries(
     alembic_config = Config("alembic.ini")
     item_ids: dict[str, UUID] = {}
     try:
-        command.downgrade(alembic_config, "0022_fast_capture_defaults")
+        asyncio.run(reset_test_database(TEST_DATABASE_URL))
+        command.upgrade(alembic_config, "0022_fast_capture_defaults")
         item_ids = asyncio.run(seed_manual_planner_queue(TEST_DATABASE_URL))
         command.upgrade(alembic_config, "head")
         assert asyncio.run(read_planner_statuses(TEST_DATABASE_URL, item_ids)) == {
@@ -310,9 +308,8 @@ def test_manual_planner_queue_migration_clears_only_automatic_entries(
             "sent": "transferred",
         }
     finally:
+        asyncio.run(reset_test_database(TEST_DATABASE_URL))
         command.upgrade(alembic_config, "head")
-        if item_ids:
-            asyncio.run(delete_manual_planner_user(TEST_DATABASE_URL))
 
 
 @pytest.mark.integration
@@ -369,19 +366,21 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
         "ck_users_telegram_user_id_positive"
     }
     assert columns["active_workspace"]["nullable"] is False
-    assert revision == "0023_planner_manual_queue"
+    assert revision == "0024_remove_meeting_mode"
 
 
 def test_pwa_auth_migration_from_0012(migrated_database: None) -> None:
     alembic_config = Config("alembic.ini")
     try:
-        command.downgrade(alembic_config, "0012_main_menu_navigation")
+        asyncio.run(reset_test_database(TEST_DATABASE_URL))
+        command.upgrade(alembic_config, "0012_main_menu_navigation")
         assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "pwa_login_codes"))
         assert not asyncio.run(database_has_table(TEST_DATABASE_URL, "pwa_sessions"))
         command.upgrade(alembic_config, "head")
         assert asyncio.run(database_has_table(TEST_DATABASE_URL, "pwa_login_codes"))
         assert asyncio.run(database_has_table(TEST_DATABASE_URL, "pwa_sessions"))
     finally:
+        asyncio.run(reset_test_database(TEST_DATABASE_URL))
         command.upgrade(alembic_config, "head")
 
 

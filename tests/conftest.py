@@ -175,6 +175,17 @@ async def database_has_table(database_url: str, table_name: str) -> bool:
         await engine.dispose()
 
 
+async def reset_test_database(database_url: str) -> None:
+    validate_test_database_url(database_url)
+    engine = create_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(text("DROP SCHEMA public CASCADE"))
+            await connection.execute(text("CREATE SCHEMA public"))
+    finally:
+        await engine.dispose()
+
+
 @pytest.fixture(scope="session")
 def migrated_database() -> Iterator[None]:
     validate_test_database_url(TEST_DATABASE_URL)
@@ -183,7 +194,7 @@ def migrated_database() -> Iterator[None]:
     get_settings.cache_clear()
     alembic_config = Config("alembic.ini")
     try:
-        command.downgrade(alembic_config, "base")
+        asyncio.run(reset_test_database(TEST_DATABASE_URL))
         for table_name in APPLICATION_TABLES:
             assert not asyncio.run(database_has_table(TEST_DATABASE_URL, table_name))
         command.upgrade(alembic_config, "head")
@@ -194,7 +205,7 @@ def migrated_database() -> Iterator[None]:
     try:
         yield
     finally:
-        command.downgrade(alembic_config, "base")
+        asyncio.run(reset_test_database(TEST_DATABASE_URL))
         for table_name in APPLICATION_TABLES:
             assert not asyncio.run(database_has_table(TEST_DATABASE_URL, table_name))
         command.upgrade(alembic_config, "head")
