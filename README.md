@@ -25,6 +25,18 @@ make setup
 Replace the placeholder values in `.env` before starting services. In
 particular, set a strong `APP_API_KEY` and `POSTGRES_PASSWORD`; keep the
 credentials embedded in `DATABASE_URL` consistent with PostgreSQL settings.
+`make setup` creates `.env` atomically with mode `0600`. Existing files are
+never rewritten or chmodded automatically: documented Make startup and
+operational commands fail closed unless `.env` is a regular, non-symlink file
+owned by the current user with exactly that mode. Fix an insecure file with
+`chmod 600 .env`. A missing file is allowed when every required value is
+provided through the process environment.
+
+The root and PWA Docker contexts exclude environment files, backups and dump
+manifests, voice audio, plaintext/encrypted backup bundles, rclone
+configuration, age identities, private keys, and logs. Keep real credentials
+outside the repository even though the mandatory Docker canary check prevents
+these file classes from being sent in either build context.
 
 ## Start the application
 
@@ -34,6 +46,11 @@ Build and start PostgreSQL, the API, and the PWA:
 make up
 make ps
 ```
+
+Use these Make entrypoints for local and production startup. Running
+`docker compose` directly bypasses the host-side `.env` permission preflight
+and is not a supported secure startup path. Emergency `make down`, `make logs`,
+and `make ps` remain available even when `.env` permissions need repair.
 
 The API startup applies Alembic migrations before starting Uvicorn. PostgreSQL
 is available only on the internal Compose network and is not published to the
@@ -210,9 +227,9 @@ For a production Compose deployment, configure `APP_ENV=production`, a strong
 `PWA_PUBLIC_ORIGIN`, and `PWA_COOKIE_SECURE=true`, then run:
 
 ```bash
-docker compose up -d --build postgres api web
-docker compose ps
-docker compose logs -f api web
+make up
+make ps
+make logs
 ```
 
 For a private Tailscale deployment, expose only the local reverse-proxy targets

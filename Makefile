@@ -3,19 +3,27 @@ revision ?= -1
 TEST_DATABASE_URL ?= postgresql+asyncpg://flowmate_test:flowmate_test@localhost:5433/flowmate_test
 export TEST_DATABASE_URL
 
-.PHONY: help setup sync format format-check lint typecheck test test-unit test-integration check web-setup web-dev web-format web-format-check web-lint web-typecheck web-test web-build migrate migration downgrade migration-current migration-history api bot scheduler maintenance-once ai-eval backup backup-offsite restore-check restore-offsite-check backup-restore-test reminder-retry up up-all up-worker down logs ps test-db-up test-db-down clean
+.PHONY: help setup sync env-check check-build-context format format-check lint typecheck test test-unit test-integration check web-setup web-dev web-format web-format-check web-lint web-typecheck web-test web-build migrate migration downgrade migration-current migration-history api bot scheduler maintenance-once ai-eval backup backup-offsite restore-check restore-offsite-check backup-restore-test reminder-retry up up-all up-worker down logs ps test-db-up test-db-down clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "FlowMate commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 setup: ## Create .env if needed and install development dependencies
-	@test -f .env || cp .env.example .env
+	python3 scripts/env_file.py ensure --template .env.example --target .env
 	uv sync --frozen --group dev
 	npm ci --prefix apps/web
 
 sync: ## Install locked development dependencies
 	uv sync --frozen --group dev
 	npm ci --prefix apps/web
+
+env-check: ## Fail if an existing .env is not an owned regular 0600 file
+	python3 scripts/env_file.py check --target .env
+
+check-build-context: ## Verify private files are excluded from Docker contexts
+	bash scripts/check_docker_context.sh
+
+migrate migration downgrade migration-current api bot scheduler maintenance-once backup reminder-retry up up-all up-worker: env-check
 
 format: ## Format Python code with Ruff
 	uv run ruff format .

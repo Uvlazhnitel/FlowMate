@@ -4,6 +4,7 @@ set -eu
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy src tests
+bash scripts/check_docker_context.sh
 uv run pytest tests/unit
 uv run pytest tests/integration
 npm run format:check --prefix apps/web
