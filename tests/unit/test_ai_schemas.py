@@ -146,38 +146,31 @@ def test_preserves_resolved_date_only_reminder_for_service_policy() -> None:
     assert item.reminder_candidate.time_was_explicit is False
 
 
-@pytest.mark.parametrize(
-    "dependency",
-    [
+def test_normalizes_targetless_dependency_as_external_condition() -> None:
+    dependency = DependencyCandidate.model_validate(
         {
             "relation": DependencyRelation.AFTER,
-            "original_phrase": "после этого",
+            "original_phrase": "после того как получу данные",
             "target_item_number": None,
             "condition": None,
-        },
-        {
-            "relation": DependencyRelation.BLOCKED_BY,
-            "original_phrase": "заблокировано до ответа",
-            "target_item_number": None,
-            "condition": None,
-        },
-        {
-            "relation": DependencyRelation.WAITING_FOR,
-            "original_phrase": "ждёт результата",
-            "target_item_number": None,
-            "condition": None,
-        },
-        {
-            "relation": DependencyRelation.CONDITIONAL,
-            "original_phrase": "если согласуют",
-            "target_item_number": None,
-            "condition": None,
-        },
-    ],
-)
-def test_rejects_incomplete_dependencies(dependency: dict[str, object]) -> None:
+        }
+    )
+
+    assert dependency.relation is DependencyRelation.CONDITIONAL
+    assert dependency.condition == "после того как получу данные"
+    assert dependency.target_item_number is None
+
+
+def test_rejects_conditional_dependency_without_condition() -> None:
     with pytest.raises(ValidationError):
-        DependencyCandidate.model_validate(dependency)
+        DependencyCandidate.model_validate(
+            {
+                "relation": DependencyRelation.CONDITIONAL,
+                "original_phrase": "если согласуют",
+                "target_item_number": None,
+                "condition": None,
+            }
+        )
 
 
 @pytest.mark.parametrize("target", [1, 3])

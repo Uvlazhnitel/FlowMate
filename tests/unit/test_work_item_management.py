@@ -23,6 +23,7 @@ from flowmate.bot.handlers.work_items import (
     action_session_message,
     apply_management_intent,
     details_keyboard,
+    edit_options_keyboard,
     encode_revision,
     execute_management_intent,
     format_datetime,
@@ -161,6 +162,7 @@ def test_detail_card_is_safe_concise_and_context_sensitive() -> None:
         "📅 Перенести",
         "📝 Заметка",
         "❌ Отменить",
+        "✏️ Изменить",
         "📖 История",
     ]
     assert all(
@@ -191,6 +193,20 @@ def test_completed_detail_has_only_reopen_and_history() -> None:
     assert [button.text for row in keyboard.inline_keyboard for button in row] == [
         "↩️ Вернуть",
         "📖 История",
+    ]
+
+
+def test_edit_menu_exposes_content_date_and_clear_actions() -> None:
+    details = make_details()
+
+    keyboard = edit_options_keyboard(details.item)
+
+    assert [button.text for row in keyboard.inline_keyboard for button in row] == [
+        "Название",
+        "Описание",
+        "Дата",
+        "Очистить описание",
+        "Назад",
     ]
 
 
@@ -712,6 +728,52 @@ async def test_high_confidence_management_executes_single_match() -> None:
     )
     cast(AsyncMock, session.commit).assert_awaited_once()
     answer.assert_awaited_once_with(f"✅ Выполнено: {item.title}")
+
+
+@pytest.mark.asyncio
+async def test_contextual_management_without_reply_never_guesses_target() -> None:
+    message = make_message("нужно завтра выполнить эту задачу")
+    update = Update(update_id=9003, message=message)
+    user_id = uuid4()
+    intent = make_intent().model_copy(
+        update={
+            "action": ManagementAction.RESCHEDULE,
+            "contextual_reference": True,
+            "record_query": "задача",
+        }
+    )
+    session = MagicMock(spec=AsyncSession)
+    find_targets = AsyncMock()
+    with (
+        patch(
+            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
+            new=AsyncMock(return_value=SimpleNamespace(id=user_id)),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.get_active_draft_for_user",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "flowmate.bot.handlers.work_items.find_intent_targets",
+            new=find_targets,
+        ),
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+    ):
+        outcome = await execute_management_intent(
+            message,
+            update,
+            cast(AsyncSession, session),
+            intent,
+            high_confidence_threshold=0.8,
+            action_ttl_minutes=30,
+            app_timezone=ZoneInfo("UTC"),
+        )
+
+    assert outcome.value == "ambiguous"
+    find_targets.assert_not_awaited()
+    answer.assert_awaited_once_with(
+        "Ответьте Reply на карточку нужной записи или укажите её название."
+    )
 
 
 @pytest.mark.asyncio

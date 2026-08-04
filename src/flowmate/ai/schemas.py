@@ -72,6 +72,8 @@ class ManagementAction(StrEnum):
     CHANGE_TOPIC = "change_topic"
     ADD_PERSON = "add_person"
     REPLACE_PERSON = "replace_person"
+    CHANGE_TITLE = "change_title"
+    CHANGE_DESCRIPTION = "change_description"
     SHOW_DETAILS = "show_details"
 
 
@@ -134,6 +136,31 @@ class DependencyCandidate(StrictDraftModel):
     original_phrase: NonEmptyText
     target_item_number: int | None = Field(ge=1)
     condition: NonEmptyText | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_external_condition(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        relation = value.get("relation")
+        target_relations = {
+            DependencyRelation.BEFORE,
+            DependencyRelation.AFTER,
+            DependencyRelation.BLOCKED_BY,
+            DependencyRelation.WAITING_FOR,
+            "before",
+            "after",
+            "blocked_by",
+            "waiting_for",
+        }
+        if relation in target_relations and value.get("target_item_number") is None:
+            normalized = dict(value)
+            normalized["relation"] = DependencyRelation.CONDITIONAL
+            normalized["condition"] = value.get("condition") or value.get(
+                "original_phrase"
+            )
+            return normalized
+        return value
 
     @model_validator(mode="after")
     def validate_relation_fields(self) -> Self:
@@ -207,6 +234,8 @@ class ManagementIntent(StrictDraftModel):
     person_candidate: NonEmptyText | None
     topic_candidate: NonEmptyText | None
     note_text: NonEmptyText | None
+    replacement_text: NonEmptyText | None = None
+    clear_description: bool = False
     temporal_candidate: TemporalCandidate | None
     missing_fields: list[NonEmptyText]
     ambiguities: list[NonEmptyText]

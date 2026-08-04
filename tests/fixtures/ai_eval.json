@@ -406,6 +406,86 @@
     "expected": null
   },
   {
+    "id": "external_condition_rate_card_first_wording",
+    "input": "Вставить для Sweta и Imamsab rate card как только получу эти данные. Вставить в staffing plan",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Внести rate card Sweta и Imamsab в staffing plan",
+          "description": null,
+          "person_candidates": ["Sweta", "Imamsab"],
+          "topic_candidates": ["staffing plan"],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [
+            {
+              "relation": "after",
+              "original_phrase": "как только получу эти данные",
+              "target_item_number": null,
+              "condition": null
+            }
+          ],
+          "confidence": 0.94
+        }
+      ],
+      "itemization_decision": "single",
+      "itemization_basis": "single_goal",
+      "itemization_confidence": 0.96,
+      "consolidated_item": null,
+      "ambiguities": [],
+      "confidence": 0.94
+    },
+    "expected_types": ["task"],
+    "expected_due": null,
+    "expected_reminder": null,
+    "expected_description": "Условие: как только получу эти данные"
+  },
+  {
+    "id": "external_condition_rate_card_second_wording",
+    "input": "Нужно после того как я получу Rate card Sweta и Imamsab - записать в staffing plan",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Внести rate card Sweta и Imamsab в staffing plan",
+          "description": null,
+          "person_candidates": ["Sweta", "Imamsab"],
+          "topic_candidates": ["staffing plan"],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [
+            {
+              "relation": "after",
+              "original_phrase": "после того как я получу Rate card Sweta и Imamsab",
+              "target_item_number": null,
+              "condition": null
+            }
+          ],
+          "confidence": 0.95
+        }
+      ],
+      "itemization_decision": "single",
+      "itemization_basis": "single_goal",
+      "itemization_confidence": 0.97,
+      "consolidated_item": null,
+      "ambiguities": [],
+      "confidence": 0.95
+    },
+    "expected_types": ["task"],
+    "expected_due": null,
+    "expected_reminder": null,
+    "expected_description": "Условие: после того как я получу Rate card Sweta и Imamsab"
+  },
+  {
     "kind": "invalid_provider_output",
     "id": "provider_empty_items",
     "recorded_output": {

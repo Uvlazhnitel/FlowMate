@@ -5,7 +5,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from flowmate.ai.schemas import DraftSource
+from flowmate.ai.schemas import (
+    DraftAnalysisResult,
+    DraftItemType,
+    DraftReadiness,
+    DraftSource,
+    TemporalStatus,
+)
 from flowmate.ai.service import DraftParsingService
 from flowmate.db.drafts import load_analysis, replace_draft_analysis
 from flowmate.db.models import AIProcessingJob, DraftSession, Note
@@ -18,8 +24,34 @@ from flowmate.stabilization.jobs import (
     complete_ai_job,
     fail_ai_job,
 )
+from flowmate.task_engine.conversion import DraftConversionService
 
 logger = logging.getLogger(__name__)
+
+
+def recovery_fast_capture_is_ready(
+    analysis: DraftAnalysisResult,
+    *,
+    high_confidence_threshold: float,
+) -> bool:
+    if analysis.confidence < high_confidence_threshold:
+        return False
+    for assessment in analysis.items:
+        if (
+            assessment.readiness is not DraftReadiness.READY
+            or assessment.item.type is DraftItemType.UNKNOWN
+            or assessment.item.confidence < high_confidence_threshold
+        ):
+            return False
+        if any(
+            candidate is not None and candidate.status is not TemporalStatus.RESOLVED
+            for candidate in (
+                assessment.item.due_date_candidate,
+                assessment.item.reminder_candidate,
+            )
+        ):
+            return False
+    return True
 
 
 class AIRecoveryProcessor:
@@ -28,6 +60,7 @@ class AIRecoveryProcessor:
         session_factory: async_sessionmaker[AsyncSession],
         parsing_service: DraftParsingService | None,
         *,
+        conversion_service: DraftConversionService | None = None,
         draft_ttl_hours: int,
         high_threshold: float,
         clarification_threshold: float,
@@ -37,6 +70,7 @@ class AIRecoveryProcessor:
     ) -> None:
         self._session_factory = session_factory
         self._parsing_service = parsing_service
+        self._conversion_service = conversion_service or DraftConversionService()
         self._draft_ttl_hours = draft_ttl_hours
         self._high_threshold = high_threshold
         self._clarification_threshold = clarification_threshold
@@ -140,6 +174,15 @@ class AIRecoveryProcessor:
             question=next_clarification_question(analysis),
             ttl_hours=self._draft_ttl_hours,
         )
+        if recovery_fast_capture_is_ready(
+            analysis,
+            high_confidence_threshold=self._high_threshold,
+        ):
+            await self._conversion_service.convert(
+                session,
+                draft_id=draft.id,
+                user_id=draft.user_id,
+            )
 
     async def _recover_refinement(
         self, session: AsyncSession, job: AIProcessingJob

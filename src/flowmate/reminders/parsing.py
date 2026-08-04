@@ -89,6 +89,113 @@ class SnoozeParsingService:
                 continue
             return resolve_local_datetime(parsed.date(), parsed.time(), timezone)
 
+        local_now = now.astimezone(timezone)
+        clock = re.search(r"\b(?:в\s*)?(\d{1,2}):(\d{2})\b", normalized)
+        explicit_time: time | None = None
+        if clock is not None:
+            try:
+                explicit_time = time(int(clock.group(1)), int(clock.group(2)))
+            except ValueError:
+                return None
+        day_part = re.search(
+            r"\b(утром|днем|после обеда|вечером)\b",
+            normalized,
+        )
+        embedded_day_part_time = (
+            {
+                "утром": time(9),
+                "днем": time(14),
+                "после обеда": time(15),
+                "вечером": time(19),
+            }[day_part.group(1)]
+            if day_part is not None
+            else None
+        )
+        embedded_time = explicit_time or embedded_day_part_time or default_time
+
+        if re.search(r"\bзавтра\b", normalized) and not re.search(
+            r"\bне\s+завтра\b|\bзавтра\s+или\b",
+            normalized,
+        ):
+            return resolve_local_datetime(
+                local_now.date() + timedelta(days=1),
+                embedded_time,
+                timezone,
+            )
+
+        weekdays = {
+            "понедельник": 0,
+            "вторник": 1,
+            "среду": 2,
+            "четверг": 3,
+            "пятницу": 4,
+            "субботу": 5,
+            "воскресенье": 6,
+        }
+        weekday_match = re.search(
+            r"\b(?:в\s+)?(?:(следующ(?:ий|ую|ее))\s+)?(" + "|".join(weekdays) + r")\b",
+            normalized,
+        )
+        if weekday_match is not None and " или " not in normalized:
+            target_weekday = weekdays[weekday_match.group(2)]
+            days = (target_weekday - local_now.weekday()) % 7
+            if days == 0:
+                days = 7
+            if weekday_match.group(1) and days < 7:
+                days += 7
+            return resolve_local_datetime(
+                local_now.date() + timedelta(days=days),
+                embedded_time,
+                timezone,
+            )
+
+        months = {
+            "января": 1,
+            "февраля": 2,
+            "марта": 3,
+            "апреля": 4,
+            "мая": 5,
+            "июня": 6,
+            "июля": 7,
+            "августа": 8,
+            "сентября": 9,
+            "октября": 10,
+            "ноября": 11,
+            "декабря": 12,
+        }
+        absolute = re.search(
+            r"\b(?P<day>\d{1,2})\s+(?P<month>"
+            + "|".join(months)
+            + r")(?:\s+(?P<year>20\d{2}))?\b",
+            normalized,
+        )
+        if absolute is not None and " или " not in normalized:
+            year = int(absolute.group("year") or local_now.year)
+            try:
+                target_date = date(
+                    year,
+                    months[absolute.group("month")],
+                    int(absolute.group("day")),
+                )
+                if absolute.group("year") is None and target_date < local_now.date():
+                    target_date = target_date.replace(year=year + 1)
+            except ValueError:
+                return None
+            return resolve_local_datetime(target_date, embedded_time, timezone)
+
+        numeric_date = re.search(
+            r"(?<!\d)(?P<date>20\d{2}-\d{2}-\d{2}|\d{2}\.\d{2}\.20\d{2})(?!\d)",
+            normalized,
+        )
+        if numeric_date is not None and " или " not in normalized:
+            date_value = numeric_date.group("date")
+            pattern = "%Y-%m-%d" if "-" in date_value else "%d.%m.%Y"
+            try:
+                parsed_date = datetime.strptime(date_value, pattern).date()
+            except ValueError:
+                return None
+            return resolve_local_datetime(parsed_date, embedded_time, timezone)
+
         if normalized == "через час":
             return now + timedelta(hours=1)
 
@@ -98,7 +205,6 @@ class SnoozeParsingService:
             normalized,
         )
         if normalized == "через неделю":
-            local_now = now.astimezone(timezone)
             return resolve_local_datetime(
                 local_now.date() + timedelta(days=7),
                 default_time,
@@ -121,7 +227,6 @@ class SnoozeParsingService:
             if unit.startswith("час"):
                 return now + timedelta(hours=count)
             if count.is_integer():
-                local_now = now.astimezone(timezone)
                 return resolve_local_datetime(
                     local_now.date() + timedelta(days=7 * int(count)),
                     default_time,
@@ -155,7 +260,6 @@ class SnoozeParsingService:
             }[day_part_match.group(1)]
             date_phrase = date_phrase[: day_part_match.start()].strip()
 
-        local_now = now.astimezone(timezone)
         target_time = explicit_clock or day_part_time or default_time
         if date_phrase == "завтра":
             return resolve_local_datetime(
@@ -164,15 +268,6 @@ class SnoozeParsingService:
                 timezone,
             )
 
-        weekdays = {
-            "понедельник": 0,
-            "вторник": 1,
-            "среду": 2,
-            "четверг": 3,
-            "пятницу": 4,
-            "субботу": 5,
-            "воскресенье": 6,
-        }
         weekday_match = re.fullmatch(
             r"в\s+(?:(следующ(?:ий|ую|ее))\s+)?(" + "|".join(weekdays) + r")",
             date_phrase,
@@ -190,20 +285,6 @@ class SnoozeParsingService:
                 timezone,
             )
 
-        months = {
-            "января": 1,
-            "февраля": 2,
-            "марта": 3,
-            "апреля": 4,
-            "мая": 5,
-            "июня": 6,
-            "июля": 7,
-            "августа": 8,
-            "сентября": 9,
-            "октября": 10,
-            "ноября": 11,
-            "декабря": 12,
-        }
         absolute = re.fullmatch(
             r"(?P<day>\d{1,2})\s+(?P<month>" + "|".join(months) + r")"
             r"(?:\s+(?P<year>20\d{2}))?",

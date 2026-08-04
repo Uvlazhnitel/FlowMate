@@ -23,6 +23,7 @@ from flowmate.ai.schemas import (
     DraftItem,
     DraftParseResult,
     DraftSource,
+    ManagementAction,
     ManagementIntent,
     SearchIntent,
     TelegramTextParseResult,
@@ -60,6 +61,10 @@ TEMPORAL_AMBIGUITY_MARKERS = (
     "напомин",
     "срок",
     *MONTHS,
+)
+EXPLICIT_REOPEN = re.compile(
+    r"\b(?:верн(?:и|уть)|переоткро\w*|откро\w*\s+снова|reopen)\b",
+    re.IGNORECASE,
 )
 
 
@@ -313,7 +318,16 @@ class DraftParsingService:
         if parsed.mode == "management":
             if parsed.management is None:
                 raise AIInvalidResponseError("management payload is missing")
-            return parsed.management
+            intent = parsed.management
+            if (
+                intent.action is ManagementAction.REOPEN
+                and intent.temporal_candidate is not None
+                and not EXPLICIT_REOPEN.search(normalized)
+            ):
+                intent = intent.model_copy(
+                    update={"action": ManagementAction.RESCHEDULE}
+                )
+            return intent
         if parsed.mode == "search":
             if parsed.search is None:
                 raise AIInvalidResponseError("search payload is missing")

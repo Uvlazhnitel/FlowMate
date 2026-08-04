@@ -51,6 +51,7 @@ from flowmate.task_engine.management import (
     reopen_work_item,
     reschedule_work_item,
     sync_planner_status,
+    update_work_item_content,
     work_item_revision,
 )
 from flowmate.task_engine.queries import (
@@ -762,3 +763,80 @@ async def test_repeated_force_reply_update_stops_before_ai_and_new_note(
         )
         == 1
     )
+
+
+@pytest.mark.integration
+async def test_content_edit_is_owned_idempotent_and_event_safe(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, 630_020)
+    other = await create_telegram_user(database_session, 630_021)
+    item = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Old title",
+        description="Old description",
+    )
+    revision = work_item_revision(item.updated_at)
+
+    result = await update_work_item_content(
+        database_session,
+        user.id,
+        item.id,
+        830_200,
+        title="New title",
+        description=None,
+        update_title=True,
+        update_description=True,
+        expected_revision=revision,
+    )
+    duplicate = await update_work_item_content(
+        database_session,
+        user.id,
+        item.id,
+        830_200,
+        title="Ignored duplicate",
+        update_title=True,
+    )
+
+    assert result.work_item.title == "New title"
+    assert result.work_item.description is None
+    assert result.event.payload == {"fields": ["title", "description"]}
+    assert "New title" not in str(result.event.payload)
+    assert duplicate.event.id == result.event.id
+    with pytest.raises(ValueError, match="work item not found"):
+        await update_work_item_content(
+            database_session,
+            other.id,
+            item.id,
+            830_201,
+            title="Cross-user edit",
+            update_title=True,
+        )
+
+
+@pytest.mark.integration
+async def test_edit_field_action_is_allowed_by_current_schema(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, 630_022)
+    item = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Editable task",
+    )
+
+    action = await create_action_session(
+        database_session,
+        user.id,
+        action=WorkItemAction.EDIT_FIELD,
+        work_item_id=item.id,
+        ttl_minutes=30,
+        context={"edit_field": "title"},
+        telegram_update_id=830_202,
+    )
+    await database_session.flush()
+
+    assert action.action == WorkItemAction.EDIT_FIELD.value

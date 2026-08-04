@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from flowmate.ai.schemas import (
     DependencyCandidate,
+    DependencyRelation,
     DraftAnalysisResult,
     DraftInputContext,
     DraftItem,
@@ -195,6 +196,34 @@ def normalize_due_date(item: DraftItem, timezone: ZoneInfo) -> DraftItem:
     )
 
 
+def materialize_external_conditions(item: DraftItem) -> DraftItem:
+    conditions = unique_texts(
+        [
+            dependency.condition
+            for dependency in item.dependencies
+            if dependency.relation is DependencyRelation.CONDITIONAL
+            and dependency.target_item_number is None
+            and dependency.condition is not None
+        ]
+    )
+    if not conditions:
+        return item
+    current_description = normalize_text(item.description)
+    additions = [
+        f"Условие: {condition}"
+        for condition in conditions
+        if normalize_text(f"Условие: {condition}") not in current_description
+    ]
+    if not additions:
+        return item
+    description = "\n\n".join(
+        value
+        for value in (item.description, *additions)
+        if value is not None and value.strip()
+    )
+    return item.model_copy(update={"description": description})
+
+
 def merge_duplicate_item(existing: DraftItem, duplicate: DraftItem) -> DraftItem:
     return DraftItem.model_validate(
         {
@@ -271,7 +300,7 @@ def deduplicate_items(
     old_to_new: dict[int, int] = {}
 
     for old_number, raw_item in enumerate(items, start=1):
-        item = normalize_due_date(raw_item, timezone)
+        item = materialize_external_conditions(normalize_due_date(raw_item, timezone))
         key = item_key(item)
         new_number = key_to_new_number.get(key)
         if new_number is None:

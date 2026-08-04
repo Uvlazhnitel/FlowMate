@@ -80,7 +80,7 @@ def run_evaluation() -> tuple[int, int]:
             failures.append(f"{case['id']}: due")
         if actual_reminder != case["expected_reminder"]:
             failures.append(f"{case['id']}: reminder")
-        if "expected_readiness" in case:
+        if "expected_readiness" in case or "expected_description" in case:
             evaluation_context = DraftInputContext(
                 current_datetime=datetime(
                     2026, 7, 22, 12, tzinfo=ZoneInfo("Europe/Riga")
@@ -96,9 +96,15 @@ def run_evaluation() -> tuple[int, int]:
                 high_threshold=0.8,
                 clarification_threshold=0.5,
             )
-            actual_readiness = [item.readiness.value for item in analysis.items]
-            if actual_readiness != case["expected_readiness"]:
-                failures.append(f"{case['id']}: readiness")
+            if "expected_readiness" in case:
+                actual_readiness = [item.readiness.value for item in analysis.items]
+                if actual_readiness != case["expected_readiness"]:
+                    failures.append(f"{case['id']}: readiness")
+            if (
+                "expected_description" in case
+                and analysis.items[0].item.description != case["expected_description"]
+            ):
+                failures.append(f"{case['id']}: description")
 
     timezone = ZoneInfo("Europe/Riga")
     context = DraftInputContext(

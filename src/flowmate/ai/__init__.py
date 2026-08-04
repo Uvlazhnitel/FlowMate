@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from flowmate.ai.provider import AIProvider
 from flowmate.ai.schemas import (
     DraftAnalysisResult,
@@ -7,7 +9,9 @@ from flowmate.ai.schemas import (
     DraftReadiness,
     DraftSource,
 )
-from flowmate.ai.service import DraftParsingService
+
+if TYPE_CHECKING:
+    from flowmate.ai.service import DraftParsingService
 
 __all__ = [
     "AIProvider",
@@ -19,3 +23,11 @@ __all__ = [
     "DraftReadiness",
     "DraftSource",
 ]
+
+
+def __getattr__(name: str) -> object:
+    if name == "DraftParsingService":
+        from flowmate.ai.service import DraftParsingService
+
+        return DraftParsingService
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

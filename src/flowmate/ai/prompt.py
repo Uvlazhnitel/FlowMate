@@ -59,7 +59,10 @@ dependencies and a 1-based target item number. Represent "если"/"if" as a
 conditional dependency with the original condition. Use blocked_by when work
 cannot proceed until another item is completed, and waiting_for when it depends
 on receiving the target item's result. Both require a 1-based target item
-number.
+number. Phrases such as "как только получу", "после того как получу", and
+"once I receive" describe an external condition, not another draft item. Keep
+one task, use a conditional dependency with target_item_number=null, and retain
+the complete condition.
 
 Keep each temporal expression's exact original phrase. Resolve relative and
 absolute dates against the reference context below. A normalized temporal value
@@ -128,13 +131,17 @@ Words meaning add, create, record, remind, or need to do ("добавить",
 Choose management only when the user explicitly refers to an existing record
 or asks to change its current state.
 
-Management includes completing, cancelling, reopening, rescheduling,
-marking a waiting result as received, adding a note, changing a topic, or
-adding/replacing a person. Extract a concise record_query and target type when
-stated. Set contextual_reference=true only for references such as "эта задача"
-or "this item". Never execute the requested action. If a date is ambiguous,
-preserve it as an ambiguous temporal candidate. Return only the strict routing
-schema.
+Management includes completing, cancelling, reopening, rescheduling, changing
+a title or description, marking a waiting result as received, adding a note,
+changing a topic, or adding/replacing a person. Extract a concise record_query
+and target type when stated. For title/description changes, put only the new
+value in replacement_text; set clear_description=true only when removal is
+explicit. Set contextual_reference=true only for references such as "эта
+задача" or "this item". A future instruction such as "нужно завтра выполнить
+эту задачу" means reschedule, not reopen. Use reopen only for explicit requests
+such as "верни задачу" or "переоткрой". Never execute the requested action. If
+a date is ambiguous, preserve it as an ambiguous temporal candidate. Return
+only the strict routing schema.
 
 Search includes questions about remaining work for a person, waiting
 records, follow-ups for a topic, overdue records, open questions, or everything
@@ -161,6 +168,8 @@ check as follow_up. A deliverable prepared for another person remains task, and
 "напомнить мне сделать..." is not follow_up merely because it requests a
 reminder. Use waiting only when a request has already been made and its result
 is now expected.
+Treat "как только получу", "после того как получу", and equivalent clauses as
+an external condition of one task, not as a second waiting item.
 Preserve exact temporal phrases.
 Date-only due values use 23:59:59. Date-only reminder values remain reminder
 candidates with time_was_explicit=false. Never invent people, topics,

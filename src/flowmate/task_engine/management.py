@@ -623,6 +623,52 @@ async def edit_work_item(
     return MutationResult(item, event, True)
 
 
+async def update_work_item_content(
+    session: AsyncSession,
+    user_id: UUID,
+    work_item_id: UUID,
+    telegram_update_id: int,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    update_title: bool = False,
+    update_description: bool = False,
+    expected_revision: int | None = None,
+) -> MutationResult:
+    if not update_title and not update_description:
+        raise ValueError("at least one content field must be updated")
+    if update_title and title is None:
+        raise ValueError("title is required")
+    duplicate = await existing_mutation(session, user_id, telegram_update_id)
+    if duplicate is not None:
+        return duplicate
+    item = await lock_work_item(
+        session,
+        user_id,
+        work_item_id,
+        expected_revision=expected_revision,
+    )
+    if item.status == WorkItemStatus.ARCHIVED.value:
+        raise InvalidWorkItemTransitionError("archived work items cannot be changed")
+    fields: list[str] = []
+    if update_title:
+        assert title is not None
+        item.title = normalize_required_text(title, "title")
+        fields.append("title")
+    if update_description:
+        item.description = normalize_optional_text(description)
+        fields.append("description")
+    event = await append_management_event(
+        session,
+        item,
+        WorkItemEventType.UPDATED,
+        telegram_update_id,
+        {"fields": fields},
+    )
+    await sync_planner_status(session, item, reason="details_changed")
+    return MutationResult(item, event, True)
+
+
 async def add_work_item_note(
     session: AsyncSession,
     user_id: UUID,

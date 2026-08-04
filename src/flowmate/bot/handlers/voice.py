@@ -1,6 +1,7 @@
 # ruff: noqa: RUF001
 import logging
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -9,27 +10,41 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.errors import AIError
-from flowmate.ai.schemas import DraftAnalysisResult, DraftSource
+from flowmate.ai.schemas import (
+    DraftAnalysisResult,
+    DraftSource,
+    ManagementIntent,
+    SearchIntent,
+)
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.formatting import TELEGRAM_TEXT_LIMIT, split_plain_text
 from flowmate.bot.handlers.drafts import (
     DRAFT_ANALYZING_MESSAGE,
+    DRAFT_RETRY_MESSAGE,
     analyze_note_content,
 )
+from flowmate.bot.handlers.navigation import execute_search_intent
 from flowmate.bot.handlers.notes import (
     NOTE_ALREADY_SAVED_MESSAGE,
     NOTE_SAVE_FAILED_MESSAGE,
     NOTE_SAVED_MESSAGE,
     capture_workspace_override,
+    explicitly_manages_existing_item,
     save_note_for_message,
     selected_capture_workspace,
+)
+from flowmate.bot.handlers.work_items import (
+    ManagementIntentOutcome,
+    execute_management_intent,
 )
 from flowmate.db.models import WorkItemActionSession
 from flowmate.db.notes import get_note_by_telegram_update_id
 from flowmate.reminders.preferences import NotificationDefaults
+from flowmate.reminders.sync import ReminderPolicy
 from flowmate.speech.errors import AudioTooLargeError, SpeechError, SpeechTimeoutError
 from flowmate.speech.service import TranscriptionService
 from flowmate.task_engine.conversion import DraftConversionService
+from flowmate.task_engine.rescheduling import ReschedulingService
 from flowmate.workspaces import active_workspace
 
 PROCESSING_MESSAGE = "Обрабатываю голосовое сообщение."
@@ -60,6 +75,10 @@ async def voice_message(
     ai_high_confidence_threshold: float = 0.8,
     draft_conversion_service: DraftConversionService | None = None,
     notification_defaults: NotificationDefaults | None = None,
+    work_item_action_ttl_minutes: int = 30,
+    app_timezone: ZoneInfo | None = None,
+    reminder_policy: ReminderPolicy | None = None,
+    rescheduling_service: ReschedulingService | None = None,
 ) -> None:
     voice = message.voice
     telegram_user = message.from_user
@@ -131,19 +150,95 @@ async def voice_message(
         return
 
     parse_content, explicit_workspace = capture_workspace_override(transcription)
-    analysis: DraftAnalysisResult | None = None
+    routed: DraftAnalysisResult | ManagementIntent | SearchIntent | None = None
+    transcription_shown = False
     if draft_parsing_service is not None:
         try:
-            analysis = await draft_parsing_service.parse(
+            workspace = active_workspace(db_session)
+            routed = (
+                await draft_parsing_service.parse(
+                    parse_content,
+                    source=DraftSource.VOICE,
+                    active_workspace=workspace,
+                )
+                if active_capture is not None
+                else await draft_parsing_service.parse_text(
+                    parse_content,
+                    active_workspace=workspace,
+                )
+                if workspace is not None
+                else await draft_parsing_service.parse_text(parse_content)
+            )
+        except AIError as error:
+            logger.warning(
+                "telegram_voice_routing_failed user_id=%s category=%s",
+                telegram_user.id,
+                type(error).__name__,
+            )
+    if isinstance(routed, ManagementIntent):
+        for chunk in split_transcription(transcription):
+            await message.answer(chunk, parse_mode=None)
+        transcription_shown = True
+        try:
+            outcome = await execute_management_intent(
+                message,
+                event_update,
+                db_session,
+                routed,
+                high_confidence_threshold=ai_high_confidence_threshold,
+                action_ttl_minutes=work_item_action_ttl_minutes,
+                app_timezone=app_timezone or ZoneInfo("UTC"),
+                reminder_policy=reminder_policy,
+                notification_defaults=notification_defaults,
+                rescheduling_service=rescheduling_service,
+            )
+        except SQLAlchemyError:
+            await db_session.rollback()
+            logger.error(
+                "telegram_voice_management_database_failed user_id=%s",
+                telegram_user.id,
+            )
+            await message.answer("Не удалось изменить запись. Попробуйте позже.")
+            return
+        if outcome is not ManagementIntentOutcome.NOT_FOUND:
+            return
+        if explicitly_manages_existing_item(message, transcription):
+            await message.answer("Подходящая запись не найдена.")
+            return
+        if draft_parsing_service is None:
+            return
+        try:
+            routed = await draft_parsing_service.parse(
                 parse_content,
                 source=DraftSource.VOICE,
                 active_workspace=active_workspace(db_session),
             )
         except AIError:
-            logger.warning(
-                "telegram_voice_draft_preparse_failed user_id=%s category=ai",
+            routed = None
+    if isinstance(routed, SearchIntent):
+        for chunk in split_transcription(transcription):
+            await message.answer(chunk, parse_mode=None)
+        transcription_shown = True
+        try:
+            await execute_search_intent(
+                message,
+                event_update,
+                db_session,
+                routed,
+                high_confidence_threshold=ai_high_confidence_threshold,
+                action_ttl_minutes=work_item_action_ttl_minutes,
+                timezone=app_timezone or ZoneInfo("UTC"),
+            )
+        except SQLAlchemyError:
+            await db_session.rollback()
+            logger.error(
+                "telegram_voice_search_database_failed user_id=%s",
                 telegram_user.id,
             )
+            await message.answer("Не удалось выполнить поиск. Попробуйте позже.")
+        return
+
+    analysis = routed if isinstance(routed, DraftAnalysisResult) else None
     current_workspace = active_workspace(db_session) or default_workspace
     selected_workspace, update_workspace = selected_capture_workspace(
         analysis,
@@ -171,8 +266,9 @@ async def voice_message(
         await message.answer(NOTE_ALREADY_SAVED_MESSAGE)
         return
 
-    for chunk in split_transcription(transcription):
-        await message.answer(chunk, parse_mode=None)
+    if not transcription_shown:
+        for chunk in split_transcription(transcription):
+            await message.answer(chunk, parse_mode=None)
     if draft_parsing_service is None or save_result.draft is None:
         await message.answer(NOTE_SAVED_MESSAGE)
         return
@@ -192,4 +288,5 @@ async def voice_message(
         high_confidence_threshold=ai_high_confidence_threshold,
         draft_conversion_service=draft_conversion_service,
         notification_defaults=notification_defaults,
+        failure_message=DRAFT_RETRY_MESSAGE,
     )

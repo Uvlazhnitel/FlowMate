@@ -22,7 +22,11 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from flowmate.ai.schemas import DraftItemType, DraftSource
+from flowmate.ai.schemas import (
+    DraftItemType,
+    ManagementAction,
+    ManagementIntent,
+)
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.app import create_dispatcher, run_bot
 from flowmate.bot.callback_feedback import CallbackFeedback, with_callback_status
@@ -50,6 +54,7 @@ from flowmate.bot.handlers.voice import (
     split_transcription,
     voice_message,
 )
+from flowmate.bot.handlers.work_items import ManagementIntentOutcome
 from flowmate.bot.handlers.workspaces import (
     workspace_callback,
     workspace_keyboard,
@@ -711,6 +716,7 @@ async def test_new_voice_note_is_parsed_after_transcription() -> None:
     )
     draft_service = MagicMock(spec=DraftParsingService)
     draft_service.parse = AsyncMock(return_value=result)
+    draft_service.parse_text = AsyncMock(return_value=result)
 
     with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
         await invoke_voice(
@@ -720,11 +726,10 @@ async def test_new_voice_note_is_parsed_after_transcription() -> None:
             draft_service=cast(DraftParsingService, draft_service),
         )
 
-    cast(AsyncMock, draft_service.parse).assert_awaited_once_with(
+    cast(AsyncMock, draft_service.parse_text).assert_awaited_once_with(
         "Распознанный текст",
-        source=DraftSource.VOICE,
-        active_workspace=None,
     )
+    cast(AsyncMock, draft_service.parse).assert_not_awaited()
     assert [call.args[0] for call in answer.await_args_list[:3]] == [
         PROCESSING_MESSAGE,
         "Распознанный текст",
@@ -734,6 +739,49 @@ async def test_new_voice_note_is_parsed_after_transcription() -> None:
     assert answer.await_args_list[3].kwargs["parse_mode"] == "HTML"
     assert "reply_markup" in answer.await_args_list[3].kwargs
     assert len(answer.await_args_list) == 4
+
+
+@pytest.mark.asyncio
+async def test_ordinary_voice_can_execute_management_without_creating_note() -> None:
+    provider = FakeSpeechProvider("Переименуй задачу Отчёт в Новый отчёт")
+    message = make_voice_message(123)
+    intent = ManagementIntent(
+        action=ManagementAction.CHANGE_TITLE,
+        target_type=DraftItemType.TASK,
+        record_query="Отчёт",
+        contextual_reference=False,
+        person_candidate=None,
+        topic_candidate=None,
+        note_text=None,
+        replacement_text="Новый отчёт",
+        temporal_candidate=None,
+        missing_fields=[],
+        ambiguities=[],
+        confidence=0.95,
+    )
+    draft_service = MagicMock(spec=DraftParsingService)
+    draft_service.parse = AsyncMock()
+    draft_service.parse_text = AsyncMock(return_value=intent)
+    with (
+        patch(
+            "flowmate.bot.handlers.voice.execute_management_intent",
+            new=AsyncMock(return_value=ManagementIntentOutcome.HANDLED),
+        ) as execute,
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+    ):
+        _, save_note = await invoke_voice(
+            message,
+            make_mock_bot(),
+            make_transcription_service(provider),
+            draft_service=cast(DraftParsingService, draft_service),
+        )
+
+    execute.assert_awaited_once()
+    save_note.assert_not_awaited()
+    assert [call.args[0] for call in answer.await_args_list] == [
+        PROCESSING_MESSAGE,
+        "Переименуй задачу Отчёт в Новый отчёт",
+    ]
 
 
 @pytest.mark.asyncio

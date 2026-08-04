@@ -69,6 +69,10 @@ from flowmate.workspaces import WORKSPACE_LABELS
 
 DRAFT_ANALYZING_MESSAGE = "⏳ Запись принята. Разбираю…"
 DRAFT_FAILED_MESSAGE = "Не получилось разобрать запись. Она сохранена в Inbox."
+DRAFT_RETRY_MESSAGE = (
+    "Не получилось разобрать запись сейчас. Она сохранена в Inbox; "
+    "повторю автоматически."
+)
 DRAFT_CANCELLED_MESSAGE = "Черновик отменён. Исходная запись сохранена."
 DRAFT_CONVERSION_FAILED_MESSAGE = (
     "Не получилось создать запись. Черновик сохранён — можно повторить позже."
@@ -465,6 +469,7 @@ async def analyze_note_content(
     high_confidence_threshold: float = 0.8,
     draft_conversion_service: DraftConversionService | None = None,
     notification_defaults: NotificationDefaults | None = None,
+    failure_message: str = DRAFT_FAILED_MESSAGE,
 ) -> None:
     preferences: EffectiveNotificationPreferences | None = None
     try:
@@ -520,7 +525,7 @@ async def analyze_note_content(
             telegram_user_id,
             type(error).__name__,
         )
-        await message.answer(DRAFT_FAILED_MESSAGE)
+        await message.answer(failure_message)
         return
     except SQLAlchemyError:
         await db_session.rollback()
@@ -529,7 +534,7 @@ async def analyze_note_content(
             telegram_user_id,
         )
         await mark_draft_failed_safely(db_session, draft)
-        await message.answer(DRAFT_FAILED_MESSAGE)
+        await message.answer(failure_message)
         return
 
     if draft_conversion_service is not None and fast_capture_is_ready(

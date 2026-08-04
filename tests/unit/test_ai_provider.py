@@ -29,6 +29,8 @@ from flowmate.ai.schemas import (
     SearchIntent,
     SearchWorkItemType,
     TelegramTextParseResult,
+    TemporalCandidate,
+    TemporalStatus,
 )
 from flowmate.ai.service import DraftParsingService
 from flowmate.core.config import Settings
@@ -280,6 +282,46 @@ async def test_service_routes_management_without_creating_a_draft() -> None:
     assert provider.user_text == "Антон ответил"
     assert "new_draft" in provider.system_prompt
     assert "management" in provider.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_service_corrects_future_contextual_reopen_to_reschedule() -> None:
+    intent = ManagementIntent(
+        action=ManagementAction.REOPEN,
+        target_type=DraftItemType.TASK,
+        record_query="задача",
+        contextual_reference=True,
+        person_candidate=None,
+        topic_candidate=None,
+        note_text=None,
+        temporal_candidate=TemporalCandidate(
+            original_phrase="завтра",
+            normalized_value=datetime(2026, 7, 21, 23, 59, 59, tzinfo=UTC),
+            status=TemporalStatus.RESOLVED,
+            explanation=None,
+            time_was_explicit=False,
+        ),
+        missing_fields=[],
+        ambiguities=[],
+        confidence=0.9,
+    )
+    provider = RoutingProvider(
+        TelegramTextParseResult(mode="management", management=intent)
+    )
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("UTC"),
+        active_workspace="personal",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=fixed_clock,
+    )
+
+    result = await service.parse_text("нужно завтра выполнить эту задачу")
+
+    assert isinstance(result, ManagementIntent)
+    assert result.action is ManagementAction.RESCHEDULE
 
 
 @pytest.mark.asyncio

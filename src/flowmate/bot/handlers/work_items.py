@@ -84,6 +84,7 @@ from flowmate.task_engine.management import (
     mark_waiting_received,
     reopen_work_item,
     reschedule_work_item,
+    update_work_item_content,
     work_item_revision,
 )
 from flowmate.task_engine.queries import WorkItemListEntry, enrich_work_item_list
@@ -390,11 +391,14 @@ def details_keyboard(details: WorkItemDetails) -> InlineKeyboardMarkup:
         rows.append(
             [
                 InlineKeyboardButton(
+                    text="✏️ Изменить", callback_data=item_action_data("e", item)
+                ),
+                InlineKeyboardButton(
                     text="📖 История",
                     callback_data=work_item_callback_data(
                         "h", item.id, workspace=item.workspace
                     ),
-                )
+                ),
             ]
         )
     else:
@@ -408,6 +412,40 @@ def details_keyboard(details: WorkItemDetails) -> InlineKeyboardMarkup:
                 )
             ]
         )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def edit_options_keyboard(item: WorkItem) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="Название", callback_data=item_action_data("et", item)
+            ),
+            InlineKeyboardButton(
+                text="Описание", callback_data=item_action_data("ed", item)
+            ),
+        ],
+        [InlineKeyboardButton(text="Дата", callback_data=item_action_data("er", item))],
+    ]
+    if item.description:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Очистить описание",
+                    callback_data=item_action_data("ec", item),
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Назад",
+                callback_data=work_item_callback_data(
+                    "b", item.id, workspace=item.workspace
+                ),
+            )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -749,6 +787,69 @@ async def work_item_callback(
         if expected_revision is None:
             await feedback.error("Карточка устарела. Откройте запись заново.")
             return
+        if action == "e":
+            if work_item_revision(item.updated_at) != expected_revision:
+                raise StaleWorkItemError("work item card is stale")
+            await message.edit_reply_markup(reply_markup=edit_options_keyboard(item))
+            return
+        if action in {"et", "ed", "er"}:
+            if work_item_revision(item.updated_at) != expected_revision:
+                raise StaleWorkItemError("work item card is stale")
+            session_action = (
+                WorkItemAction.RESCHEDULE
+                if action == "er"
+                else WorkItemAction.EDIT_FIELD
+            )
+            prompt = {
+                "et": "Отправьте новое название текстом или голосом.",
+                "ed": "Отправьте новое описание текстом или голосом.",
+                "er": (
+                    "Когда выполнить задачу? Можно ответить свободной фразой "
+                    "текстом или голосом."
+                ),
+            }[action]
+            input_context: dict[str, object] = {
+                "origin_chat_id": message.chat.id,
+                "origin_message_id": message.message_id,
+                "work_item_revision": work_item_revision(item.updated_at),
+            }
+            if action != "er":
+                input_context["edit_field"] = (
+                    "title" if action == "et" else "description"
+                )
+            await start_input_session(
+                message,
+                db_session,
+                user_id=user.id,
+                item_id=item.id,
+                action=session_action,
+                prompt=f"{prompt} Для отмены используйте /cancel.",
+                ttl_minutes=work_item_action_ttl_minutes,
+                telegram_update_id=event_update.update_id,
+                context=input_context,
+            )
+            await feedback.prompt("Жду ответ.", remove_keyboard=True)
+            return
+        if action == "ec":
+            edit_result = await update_work_item_content(
+                db_session,
+                user.id,
+                item.id,
+                event_update.update_id,
+                description=None,
+                update_description=True,
+                expected_revision=expected_revision,
+            )
+            await db_session.commit()
+            await refresh_work_item_card(
+                message,
+                db_session,
+                user.id,
+                edit_result.work_item,
+                app_timezone,
+                notice="✅ Описание очищено.",
+            )
+            return
         if action == "s":
             details = await get_work_item_details(db_session, user.id, item.id)
             keyboard = snooze_options_keyboard(details) if details is not None else None
@@ -1047,6 +1148,7 @@ async def action_session_message(
     if voice is not None and action in {
         WorkItemAction.REMINDER_SNOOZE,
         WorkItemAction.RESCHEDULE,
+        WorkItemAction.EDIT_FIELD,
     }:
         if transcription_service is None:
             await message.answer("Распознавание речи пока не настроено.")
@@ -1075,10 +1177,10 @@ async def action_session_message(
             OSError,
         ):
             logger.warning(
-                "reminder_snooze_voice_failed user_id=%s category=transcription",
+                "work_item_action_voice_failed user_id=%s category=transcription",
                 message.from_user.id if message.from_user else 0,
             )
-            await message.answer("Не удалось распознать дату. Попробуйте текстом.")
+            await message.answer("Не удалось распознать ответ. Попробуйте текстом.")
             return
     if not text or active_work_item_action.work_item_id is None:
         await message.answer("Нужен текстовый ответ.")
@@ -1156,6 +1258,28 @@ async def action_session_message(
                 ),
             )
             response = "Заметка добавлена."
+        elif action is WorkItemAction.EDIT_FIELD:
+            field = active_work_item_action.context.get("edit_field")
+            if field not in {"title", "description"}:
+                raise ValueError("edit field is invalid")
+            await update_work_item_content(
+                db_session,
+                action_user_id,
+                item_id,
+                event_update.update_id,
+                title=text if field == "title" else None,
+                description=text if field == "description" else None,
+                update_title=field == "title",
+                update_description=field == "description",
+                expected_revision=(
+                    int(active_work_item_action.context["work_item_revision"])
+                    if "work_item_revision" in active_work_item_action.context
+                    else None
+                ),
+            )
+            response = (
+                "Название изменено." if field == "title" else "Описание изменено."
+            )
         elif action is WorkItemAction.CHANGE_TOPIC:
             topic_id: UUID | None = None
             if text.casefold() not in {"без темы", "none", "нет"}:
@@ -1222,10 +1346,15 @@ async def action_session_message(
         await message.answer(message_text)
     except (AIError, InvalidWorkItemTransitionError, SnoozeParsingError, ValueError):
         await db_session.rollback()
-        await message.answer(
-            "Не удалось понять дату. Можно написать: завтра утром, через час "
-            "или 15 августа в 14:00. Для отмены нажмите ❌ Отмена."
-        )
+        if action in {WorkItemAction.RESCHEDULE, WorkItemAction.REMINDER_SNOOZE}:
+            await message.answer(
+                "Не удалось понять дату. Можно написать: завтра утром, через час "
+                "или 15 августа в 14:00. Для отмены нажмите ❌ Отмена."
+            )
+        else:
+            await message.answer(
+                "Не удалось сохранить изменение. Проверьте ответ и попробуйте снова."
+            )
     except SQLAlchemyError:
         await db_session.rollback()
         logger.error(
@@ -1243,7 +1372,7 @@ def replied_work_item_id(message: Message) -> UUID | None:
     for row in replied.reply_markup.inline_keyboard:
         for button in row:
             parsed = parse_work_item_callback(button.callback_data)
-            if parsed is not None and parsed[0] == "details":
+            if parsed is not None and not parsed[0].startswith("z"):
                 return parsed[1]
     return None
 
@@ -1260,6 +1389,8 @@ async def apply_management_intent(
     action_ttl_minutes: int,
     app_timezone: ZoneInfo,
     reminder_policy: ReminderPolicy | None = None,
+    notification_defaults: NotificationDefaults | None = None,
+    rescheduling_service: ReschedulingService | None = None,
 ) -> None:
     update_id = event_update.update_id
     try:
@@ -1304,14 +1435,33 @@ async def apply_management_intent(
                     telegram_update_id=update_id,
                 )
                 return
-            await reschedule_work_item(
-                db_session,
-                user_id,
-                item.id,
-                update_id,
-                temporal.normalized_value,
-                reminder_policy=reminder_policy,
-            )
+            if notification_defaults is not None:
+                preferences = await get_effective_notification_preferences(
+                    db_session,
+                    user_id,
+                    notification_defaults,
+                )
+                service = rescheduling_service or ReschedulingService(
+                    SnoozeParsingService(None, timeout_seconds=1)
+                )
+                await service.reschedule_text(
+                    db_session,
+                    user_id,
+                    item.id,
+                    update_id,
+                    temporal.original_phrase,
+                    preferences=preferences,
+                    reminder_policy=reminder_policy,
+                )
+            else:
+                await reschedule_work_item(
+                    db_session,
+                    user_id,
+                    item.id,
+                    update_id,
+                    temporal.normalized_value,
+                    reminder_policy=reminder_policy,
+                )
             response = "Дата изменена."
         elif intent.action is ManagementAction.ADD_NOTE:
             if intent.note_text is None:
@@ -1370,6 +1520,51 @@ async def apply_management_intent(
                 replace_person_id=replace_person_id,
             )
             response = "Человек добавлен."
+        elif intent.action in {
+            ManagementAction.CHANGE_TITLE,
+            ManagementAction.CHANGE_DESCRIPTION,
+        }:
+            field = (
+                "title"
+                if intent.action is ManagementAction.CHANGE_TITLE
+                else "description"
+            )
+            if intent.replacement_text is None and not (
+                field == "description" and intent.clear_description
+            ):
+                await start_input_session(
+                    message,
+                    db_session,
+                    user_id=user_id,
+                    item_id=item.id,
+                    action=WorkItemAction.EDIT_FIELD,
+                    prompt=(
+                        "Отправьте новое название текстом или голосом."
+                        if field == "title"
+                        else "Отправьте новое описание текстом или голосом."
+                    ),
+                    ttl_minutes=action_ttl_minutes,
+                    telegram_update_id=update_id,
+                    context={"edit_field": field},
+                )
+                return
+            await update_work_item_content(
+                db_session,
+                user_id,
+                item.id,
+                update_id,
+                title=(intent.replacement_text if field == "title" else None),
+                description=(
+                    intent.replacement_text
+                    if field == "description" and not intent.clear_description
+                    else None
+                ),
+                update_title=field == "title",
+                update_description=field == "description",
+            )
+            response = (
+                "Название изменено." if field == "title" else "Описание изменено."
+            )
         elif intent.action is ManagementAction.SHOW_DETAILS:
             await send_details(message, db_session, user_id, item, app_timezone)
             return
@@ -1428,6 +1623,8 @@ async def execute_management_intent(
     action_ttl_minutes: int,
     app_timezone: ZoneInfo,
     reminder_policy: ReminderPolicy | None = None,
+    notification_defaults: NotificationDefaults | None = None,
+    rescheduling_service: ReschedulingService | None = None,
 ) -> ManagementIntentOutcome:
     telegram_user = message.from_user
     if telegram_user is None:
@@ -1441,6 +1638,11 @@ async def execute_management_intent(
     contextual_id = (
         replied_work_item_id(message) if intent.contextual_reference else None
     )
+    if intent.contextual_reference and contextual_id is None:
+        await message.answer(
+            "Ответьте Reply на карточку нужной записи или укажите её название."
+        )
+        return ManagementIntentOutcome.AMBIGUOUS
     matches = await find_intent_targets(
         db_session,
         user.id,
@@ -1494,6 +1696,8 @@ async def execute_management_intent(
         action_ttl_minutes=action_ttl_minutes,
         app_timezone=app_timezone,
         reminder_policy=reminder_policy,
+        notification_defaults=notification_defaults,
+        rescheduling_service=rescheduling_service,
     )
     return ManagementIntentOutcome.HANDLED
 
@@ -1505,6 +1709,8 @@ async def work_item_selection_callback(
     app_timezone: ZoneInfo,
     work_item_action_ttl_minutes: int,
     reminder_policy: ReminderPolicy | None = None,
+    notification_defaults: NotificationDefaults | None = None,
+    rescheduling_service: ReschedulingService | None = None,
 ) -> None:
     feedback = CallbackFeedback(callback_query)
     message = callback_query.message
@@ -1574,5 +1780,7 @@ async def work_item_selection_callback(
         action_ttl_minutes=work_item_action_ttl_minutes,
         app_timezone=app_timezone,
         reminder_policy=reminder_policy,
+        notification_defaults=notification_defaults,
+        rescheduling_service=rescheduling_service,
     )
     await feedback.success("Запись выбрана.", remove_keyboard=True)

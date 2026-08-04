@@ -74,6 +74,7 @@ class WorkItemAction(StrEnum):
     REMINDER_SNOOZE = "reminder_snooze"
     DIGEST_REVIEW = "digest_review"
     SEARCH = "search"
+    EDIT_FIELD = "edit_field"
 
 
 class NoteTargetType(StrEnum):

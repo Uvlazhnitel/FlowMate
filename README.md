@@ -476,7 +476,10 @@ provide fuzzy, semantic, vector, or standalone Note search.
 
 Open **Подробнее** from a list to see its description, dates, up to three
 relevant notes, recent history, and context-sensitive actions. Active
-tasks can be completed, snoozed, rescheduled, annotated, or cancelled;
+tasks can be completed, snoozed, rescheduled, annotated, edited, or cancelled.
+**Изменить** opens focused title, description, and date actions. Title and
+description accept text or voice; date replies accept natural phrases such as
+`нужно завтра выполнить эту задачу` while preserving the current task time;
 follow-ups also support **Ответ получен**; waiting records support **Получено**
 and creation of one linked follow-up. Completed records can be reopened.
 
@@ -490,16 +493,18 @@ does not create an unrelated Note or AI draft. Every significant mutation is
 recorded as a `WorkItemEvent`. `/cancel` atomically closes all standalone
 work-item input and draft sessions without deleting their source Notes.
 
-When AI is configured, ordinary Telegram text is routed once as a new
-Note/draft, a search, or a management intent. A high-confidence intent with one
-owned match can be applied directly. Multiple matches require an explicit
-button selection showing type, title, people, topic, and date; the intended
-action is applied only after selection. The selection can be cancelled and
-expires with the standard action-session TTL. Ambiguous dates or missing values
-start one expiring input session.
+When AI is configured, ordinary Telegram text and voice transcripts are routed
+once as a new Note/draft, a search, or a management intent. The explicit
+**🎙 Записать** action always creates a new capture and cannot be intercepted as
+management. A high-confidence intent with one owned match can be applied
+directly. Multiple matches require an explicit button selection showing type,
+title, people, topic, and date; the intended action is applied only after
+selection. The selection can be cancelled and expires with the standard
+action-session TTL. Ambiguous dates or missing values start one expiring input
+session.
 Reply references such as "эта задача" work only when replying to a WorkItem
-message. Voice messages normally remain Note input; the only management
-exception is a voice date inside an active custom-snooze prompt.
+message or inside an active card action; FlowMate never guesses the most
+recently viewed record.
 
 This stage does not expose new HTTP endpoints, permanently delete records, or
 run a calendar integration. Dated WorkItems synchronize PostgreSQL reminders in
@@ -600,7 +605,11 @@ Telegram update IDs are claimed in PostgreSQL before handler execution. A
 completed receipt is permanent; a stale processing lease may be reclaimed after
 a restart. Draft parsing has unique PostgreSQL jobs. The bot normally completes
 them synchronously, and the scheduler retries pending or stale jobs up to three
-times without relying on process memory.
+times without relying on process memory. Explicit captures create their
+DraftSession and recovery job even when the first AI response is invalid. A
+recovered high-confidence draft is converted through the same idempotent
+DraftConversion service; unresolved drafts remain available for clarification.
+Recovery logs and audit metadata never contain note or transcription text.
 
 The scheduler runs cleanup hourly. Completed/converted voice transcripts are
 redacted after 30 days; unresolved transcripts are redacted after 90 days.

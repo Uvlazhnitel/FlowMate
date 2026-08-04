@@ -174,3 +174,70 @@ def test_later_today_rounds_up_when_candidate_has_seconds() -> None:
     )
 
     assert result == datetime(2026, 7, 30, 13, 15, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_natural_sentence_with_tomorrow_preserves_current_task_time() -> None:
+    service = ReschedulingService(SnoozeParsingService(None, timeout_seconds=5))
+
+    result = await service.resolve_text(
+        work_item(due_at=datetime(2026, 7, 30, 16, 45, tzinfo=UTC)),
+        "нужно завтра выполнить эту задачу",
+        preferences=preferences(),
+        now=datetime(2026, 7, 30, 10, tzinfo=UTC),
+    )
+
+    assert result == datetime(2026, 7, 31, 16, 45, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_natural_sentence_with_weekday_preserves_current_task_time() -> None:
+    service = ReschedulingService(SnoozeParsingService(None, timeout_seconds=5))
+
+    result = await service.resolve_text(
+        work_item(due_at=datetime(2026, 7, 30, 16, 45, tzinfo=UTC)),
+        "нужно выполнить эту задачу в пятницу",
+        preferences=preferences(),
+        now=datetime(2026, 7, 30, 10, tzinfo=UTC),
+    )
+
+    assert result == datetime(2026, 7, 31, 16, 45, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_natural_sentence_with_date_and_time_overrides_current_time() -> None:
+    service = ReschedulingService(SnoozeParsingService(None, timeout_seconds=5))
+
+    result = await service.resolve_text(
+        work_item(due_at=datetime(2026, 7, 30, 16, 45, tzinfo=UTC)),
+        "эту задачу нужно выполнить 15 августа в 14:00",
+        preferences=preferences(),
+        now=datetime(2026, 7, 30, 10, tzinfo=UTC),
+    )
+
+    assert result == datetime(2026, 8, 15, 14, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_natural_sentence_without_existing_date_uses_user_default_time() -> None:
+    service = ReschedulingService(SnoozeParsingService(None, timeout_seconds=5))
+
+    result = await service.resolve_text(
+        work_item(),
+        "поставь выполнение на 15 августа",
+        preferences=preferences(default_reminder_time=time(7, 45)),
+        now=datetime(2026, 7, 30, 10, tzinfo=UTC),
+    )
+
+    assert result == datetime(2026, 8, 15, 7, 45, tzinfo=UTC)
+
+
+def test_deterministic_parser_rejects_date_alternatives() -> None:
+    parsed = SnoozeParsingService.parse_deterministic(
+        "выполнить в пятницу или субботу",
+        timezone=ZoneInfo("UTC"),
+        now=datetime(2026, 7, 30, 10, tzinfo=UTC),
+        default_time=time(8, 30),
+    )
+
+    assert parsed is None

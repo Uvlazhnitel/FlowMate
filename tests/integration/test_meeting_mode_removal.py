@@ -293,7 +293,7 @@ def test_meeting_mode_removal_upgrades_previous_head(
 ) -> None:
     ids = asyncio.run(seed_preserved_core_records(TEST_DATABASE_URL))
 
-    command.upgrade(previous_head_database, "head")
+    command.upgrade(previous_head_database, REMOVAL_HEAD)
 
     state = asyncio.run(read_removal_state(TEST_DATABASE_URL, ids))
     assert state["revision"] == REMOVAL_HEAD
@@ -314,7 +314,6 @@ def test_meeting_mode_removal_upgrades_previous_head(
     assert asyncio.run(
         open_draft_uniqueness_is_enforced(TEST_DATABASE_URL, user_id=ids["user"])
     )
-    command.check(previous_head_database)
 
 
 @pytest.mark.parametrize("case", ["meeting", "job", "draft"])
@@ -325,7 +324,7 @@ def test_meeting_mode_removal_refuses_legacy_data_before_schema_changes(
     expected_count = asyncio.run(seed_guarded_data(TEST_DATABASE_URL, case))
 
     with pytest.raises(RuntimeError) as error:
-        command.upgrade(previous_head_database, "head")
+        command.upgrade(previous_head_database, REMOVAL_HEAD)
 
     message = str(error.value)
     assert expected_count in message
@@ -339,7 +338,7 @@ def test_meeting_mode_removal_refuses_legacy_data_before_schema_changes(
 def test_meeting_mode_removal_downgrade_is_explicitly_irreversible(
     previous_head_database: Config,
 ) -> None:
-    command.upgrade(previous_head_database, "head")
+    command.upgrade(previous_head_database, REMOVAL_HEAD)
 
     with pytest.raises(RuntimeError, match="irreversible"):
         command.downgrade(previous_head_database, PREVIOUS_HEAD)

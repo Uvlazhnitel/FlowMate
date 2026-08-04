@@ -25,6 +25,7 @@ from flowmate.ai.service import DraftParsingService
 from flowmate.bot.handlers.drafts import (
     DRAFT_ANALYZING_MESSAGE,
     DRAFT_FAILED_MESSAGE,
+    DRAFT_RETRY_MESSAGE,
     apply_default_reminder_time,
     fast_capture_is_ready,
     format_draft_summary,
@@ -324,6 +325,44 @@ async def test_record_capture_bypasses_routing_and_keeps_two_new_tasks() -> None
     assert "Добавить Личи Home Office" in response
     assert "Отправить сообщение клиенту" in response
     assert "Подходящая запись не найдена" not in response
+
+
+@pytest.mark.asyncio
+async def test_record_capture_ai_failure_still_creates_retryable_draft() -> None:
+    private_content = "private conditional task"
+    message = make_message(text=private_content)
+    service, parse = make_draft_service(error=AIProviderError("private model response"))
+    capture = WorkItemActionSession(
+        id=uuid4(),
+        user_id=uuid4(),
+        action="capture_new",
+        status="open",
+        context={},
+        expires_at=datetime(2026, 7, 28, tzinfo=UTC),
+    )
+    save_note = AsyncMock(return_value=make_save_outcome("created", with_draft=True))
+    with (
+        patch(
+            "flowmate.bot.handlers.notes.save_note_for_message",
+            new=save_note,
+        ),
+        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
+    ):
+        await text_note(
+            message,
+            make_update(message),
+            make_session(),
+            service,
+            active_capture=capture,
+        )
+
+    assert parse.await_count == 2
+    assert save_note.await_args is not None
+    assert save_note.await_args.kwargs["create_draft"] is True
+    assert [call.args[0] for call in answer.await_args_list] == [
+        DRAFT_ANALYZING_MESSAGE,
+        DRAFT_RETRY_MESSAGE,
+    ]
 
 
 def test_workspace_selection_uses_explicit_ai_and_current_fallback() -> None:

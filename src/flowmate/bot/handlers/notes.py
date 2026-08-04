@@ -20,6 +20,7 @@ from flowmate.ai.service import DraftParsingService
 from flowmate.bot.handlers.drafts import (
     DRAFT_ANALYZING_MESSAGE,
     DRAFT_FAILED_MESSAGE,
+    DRAFT_RETRY_MESSAGE,
     analyze_note_content,
 )
 from flowmate.bot.handlers.navigation import execute_search_intent
@@ -55,6 +56,7 @@ from flowmate.reminders.sync import ReminderPolicy
 from flowmate.task_engine.action_sessions import finish_action_session
 from flowmate.task_engine.conversion import DraftConversionService
 from flowmate.task_engine.intents import management_update_was_processed
+from flowmate.task_engine.rescheduling import ReschedulingService
 from flowmate.workspaces import activate_workspace, active_workspace
 
 NOTE_SAVED_MESSAGE = "✅ Заметка сохранена"
@@ -99,6 +101,12 @@ MANAGEMENT_MARKERS = (
     "перенеси существующ",
     "верни задачу",
     "переоткрой",
+    "переимен",
+    "измени название",
+    "измени описание",
+    "удали описание",
+    "change title",
+    "change description",
 )
 WORKSPACE_PREFIX = re.compile(
     r"^\s*(?P<label>работа|в\s+работу|личное|в\s+личное)\s*:\s*",
@@ -231,6 +239,7 @@ async def text_note(
     active_capture: WorkItemActionSession | None = None,
     draft_conversion_service: DraftConversionService | None = None,
     notification_defaults: NotificationDefaults | None = None,
+    rescheduling_service: ReschedulingService | None = None,
 ) -> None:
     content = message.text.strip() if message.text is not None else ""
     if not content:
@@ -305,6 +314,8 @@ async def text_note(
                 action_ttl_minutes=work_item_action_ttl_minutes,
                 app_timezone=timezone,
                 reminder_policy=reminder_policy,
+                notification_defaults=notification_defaults,
+                rescheduling_service=rescheduling_service,
             )
         except SQLAlchemyError:
             await db_session.rollback()
@@ -356,13 +367,16 @@ async def text_note(
         explicit=explicit_workspace,
         high_confidence_threshold=ai_high_confidence_threshold,
     )
+    create_draft = draft_parsing_service is not None and (
+        active_capture is not None or isinstance(routed, DraftAnalysisResult)
+    )
     result = await save_note_for_message(
         message,
         event_update,
         db_session,
         content=content,
         source="text",
-        create_draft=isinstance(routed, DraftAnalysisResult),
+        create_draft=create_draft,
         draft_ttl_hours=draft_ttl_hours,
         default_workspace=default_workspace,
         capture_session=active_capture,
@@ -375,7 +389,7 @@ async def text_note(
         await message.answer(NOTE_ALREADY_SAVED_MESSAGE)
     elif (
         draft_parsing_service is not None
-        and isinstance(routed, DraftAnalysisResult)
+        and create_draft
         and message.from_user is not None
         and result.draft is not None
     ):
@@ -389,11 +403,18 @@ async def text_note(
             db_session=db_session,
             draft=result.draft,
             draft_ttl_hours=draft_ttl_hours,
-            precomputed_result=routed,
+            precomputed_result=(
+                routed if isinstance(routed, DraftAnalysisResult) else None
+            ),
             active_workspace=result.draft.workspace,
             high_confidence_threshold=ai_high_confidence_threshold,
             draft_conversion_service=draft_conversion_service,
             notification_defaults=notification_defaults,
+            failure_message=(
+                DRAFT_RETRY_MESSAGE
+                if active_capture is not None
+                else DRAFT_FAILED_MESSAGE
+            ),
         )
     elif draft_parsing_service is not None and routed is None:
         await message.answer(NOTE_SAVED_MESSAGE)

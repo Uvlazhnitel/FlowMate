@@ -17,7 +17,9 @@ from flowmate.db.session import create_engine, create_session_factory
 from flowmate.reminders.notifications import TelegramNotificationService
 from flowmate.reminders.preferences import NotificationDefaults
 from flowmate.reminders.processor import ReminderProcessor
+from flowmate.reminders.sync import ReminderPolicy
 from flowmate.stabilization.recovery import AIRecoveryProcessor, MaintenanceProcessor
+from flowmate.task_engine.conversion import DraftConversionService
 
 
 def create_scheduler(
@@ -112,6 +114,11 @@ async def run_scheduler(
         recovery_processor = AIRecoveryProcessor(
             session_factory,
             parsing_service,
+            conversion_service=DraftConversionService(
+                reminder_policy=ReminderPolicy(
+                    deadline_lead_minutes=(app_settings.deadline_reminder_lead_minutes)
+                )
+            ),
             draft_ttl_hours=app_settings.draft_ttl_hours,
             high_threshold=app_settings.ai_high_confidence_threshold,
             clarification_threshold=app_settings.ai_clarification_confidence_threshold,

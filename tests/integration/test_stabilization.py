@@ -1,11 +1,17 @@
 from datetime import UTC, datetime, timedelta
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from flowmate.db.models import AuditEvent, Note
+from flowmate.ai.service import DraftParsingService
+from flowmate.db.drafts import create_parsing_draft
+from flowmate.db.models import AIProcessingJob, AuditEvent, Note, WorkItem
+from flowmate.db.notes import create_note_idempotently
+from flowmate.db.session import create_session_factory
 from flowmate.db.users import create_telegram_user
 from flowmate.reminders.enums import ReminderStatus
 from flowmate.reminders.service import (
@@ -24,7 +30,10 @@ from flowmate.stabilization.jobs import (
     complete_ai_job,
     enqueue_ai_job,
 )
+from flowmate.stabilization.recovery import AIRecoveryProcessor
+from flowmate.task_engine.conversion import DraftConversionService
 from flowmate.task_engine.service import create_work_item
+from tests.ai_factories import make_analysis_result, make_draft_item, make_parse_result
 
 
 @pytest.mark.integration
@@ -113,6 +122,66 @@ async def test_ai_jobs_are_unique_claimed_and_completed(
         )
         == []
     )
+
+
+@pytest.mark.integration
+async def test_recovered_ready_capture_is_converted_once(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, 9_100_006)
+    note, _ = await create_note_idempotently(
+        database_session,
+        user_id=user.id,
+        content="Private source content",
+        source="text",
+        telegram_update_id=9_100_006,
+    )
+    draft = await create_parsing_draft(
+        database_session,
+        user_id=user.id,
+        source_note_id=note.id,
+        ttl_hours=24,
+    )
+    job = await database_session.scalar(
+        select(AIProcessingJob).where(AIProcessingJob.entity_id == draft.id)
+    )
+    assert job is not None
+    analysis = make_analysis_result(
+        make_parse_result([make_draft_item(title="Recovered task")])
+    )
+    parsing_service = MagicMock(spec=DraftParsingService)
+    parsing_service.parse = AsyncMock(return_value=analysis)
+    engine = cast(AsyncEngine, database_session.bind)
+    processor = AIRecoveryProcessor(
+        create_session_factory(engine),
+        cast(DraftParsingService, parsing_service),
+        conversion_service=DraftConversionService(),
+        draft_ttl_hours=24,
+        high_threshold=0.8,
+        clarification_threshold=0.6,
+    )
+
+    await processor._recover_draft(database_session, job)
+    await processor._recover_draft(database_session, job)
+    await database_session.flush()
+
+    await database_session.refresh(draft)
+    await database_session.refresh(job)
+    item = await database_session.scalar(
+        select(WorkItem).where(WorkItem.source_note_id == note.id)
+    )
+    assert draft.status == "confirmed"
+    assert job.status == "completed"
+    assert item is not None
+    assert item.title == "Recovered task"
+    assert item.source_note_id == note.id
+    assert (
+        await database_session.scalar(
+            select(func.count(WorkItem.id)).where(WorkItem.source_note_id == note.id)
+        )
+        == 1
+    )
+    cast(AsyncMock, parsing_service.parse).assert_awaited_once()
 
 
 @pytest.mark.integration
