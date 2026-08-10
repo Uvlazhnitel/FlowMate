@@ -17,6 +17,7 @@ from flowmate.ai.schemas import (
     TemporalStatus,
 )
 from flowmate.db.models import (
+    AIProcessingJob,
     DraftItemPerson,
     DraftSession,
     Note,
@@ -27,6 +28,7 @@ from flowmate.db.models import (
     WorkItemEvent,
     WorkItemPerson,
 )
+from flowmate.stabilization.audit import record_audit_event
 from flowmate.task_engine.enums import PlannerStatus, WorkItemPriority, WorkItemType
 from flowmate.task_engine.operational import PageResult, build_work_item_cards
 from flowmate.task_engine.planner import ELIGIBLE_PLANNER_TYPES
@@ -39,6 +41,9 @@ from flowmate.task_engine.service import (
 )
 
 InboxKind = Literal["draft", "work_item", "note"]
+DELETABLE_DRAFT_STATUSES = frozenset(
+    {"parsing", "needs_clarification", "ready", "expired", "failed"}
+)
 TimelineEventType = Literal[
     "created",
     "converted_from_draft",
@@ -67,8 +72,160 @@ class DraftItemEdit:
     due_at: datetime | None
 
 
+@dataclass(frozen=True, slots=True)
+class DeletedInboxNote:
+    note_id: UUID
+    draft_id: UUID | None
+    workspace: str
+    category: Literal["standalone", "draft_source"]
+
+
+class InboxDeletionNotFoundError(ValueError):
+    pass
+
+
+class InboxDeletionConflictError(ValueError):
+    pass
+
+
 def _draft_revision(draft: DraftSession) -> int:
     return int(draft.updated_at.astimezone(UTC).timestamp() * 1_000_000)
+
+
+async def _note_has_provenance(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    note_id: UUID,
+) -> bool:
+    linked = await session.scalar(
+        select(
+            exists().where(
+                NoteLink.note_id == note_id,
+                NoteLink.user_id == user_id,
+            )
+        )
+    )
+    sourced = await session.scalar(
+        select(
+            exists().where(
+                WorkItem.source_note_id == note_id,
+                WorkItem.user_id == user_id,
+            )
+        )
+    )
+    return bool(linked or sourced)
+
+
+async def _delete_note_and_audit(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    note: Note,
+    draft_id: UUID | None,
+    category: Literal["standalone", "draft_source"],
+) -> DeletedInboxNote:
+    result = DeletedInboxNote(
+        note_id=note.id,
+        draft_id=draft_id,
+        workspace=note.workspace,
+        category=category,
+    )
+    await session.delete(note)
+    await session.flush()
+    await record_audit_event(
+        session,
+        actor_kind="pwa",
+        action="note.deleted",
+        outcome="success",
+        user_id=user_id,
+        entity_kind="note",
+        entity_id=result.note_id,
+        safe_metadata={"workspace": result.workspace, "category": result.category},
+    )
+    return result
+
+
+async def delete_standalone_inbox_note(
+    session: AsyncSession,
+    user_id: UUID,
+    note_id: UUID,
+) -> DeletedInboxNote:
+    note = await session.scalar(
+        select(Note)
+        .where(Note.id == note_id, Note.user_id == user_id)
+        .with_for_update()
+    )
+    if note is None:
+        raise InboxDeletionNotFoundError("Заметка не найдена")
+    if note.inbox_disposition != "pending":
+        raise InboxDeletionConflictError(
+            "Удалять можно только необработанные заметки из Входящих"
+        )
+    has_draft = await session.scalar(
+        select(exists().where(DraftSession.source_note_id == note.id))
+    )
+    if has_draft:
+        raise InboxDeletionConflictError(
+            "Заметка является источником черновика; удалите карточку черновика"
+        )
+    if await _note_has_provenance(session, user_id=user_id, note_id=note.id):
+        raise InboxDeletionConflictError(
+            "Заметку нельзя удалить: она уже связана с другой записью"  # noqa: RUF001
+        )
+    return await _delete_note_and_audit(
+        session,
+        user_id=user_id,
+        note=note,
+        draft_id=None,
+        category="standalone",
+    )
+
+
+async def delete_inbox_draft(
+    session: AsyncSession,
+    user_id: UUID,
+    draft_id: UUID,
+    *,
+    expected_revision: int,
+) -> DeletedInboxNote:
+    draft = await get_owned_draft(session, user_id, draft_id, for_update=True)
+    if draft is None:
+        raise InboxDeletionNotFoundError("Черновик не найден")
+    if _draft_revision(draft) != expected_revision:
+        raise InboxDeletionConflictError(
+            "Черновик изменился. Обновите Входящие и повторите"
+        )
+    if draft.status not in DELETABLE_DRAFT_STATUSES:
+        raise InboxDeletionConflictError("Закрытый черновик нельзя удалить из Входящих")
+    note = await session.scalar(
+        select(Note)
+        .where(Note.id == draft.source_note_id, Note.user_id == user_id)
+        .with_for_update()
+    )
+    if note is None:
+        raise InboxDeletionConflictError("Исходная заметка недоступна")
+    if note.inbox_disposition != "pending":
+        raise InboxDeletionConflictError(
+            "Удалять можно только необработанные заметки из Входящих"
+        )
+    if await _note_has_provenance(session, user_id=user_id, note_id=note.id):
+        raise InboxDeletionConflictError(
+            "Заметку нельзя удалить: она уже связана с другой записью"  # noqa: RUF001
+        )
+    await session.execute(
+        delete(AIProcessingJob).where(
+            AIProcessingJob.entity_id == draft.id,
+            AIProcessingJob.user_id == user_id,
+        )
+    )
+    return await _delete_note_and_audit(
+        session,
+        user_id=user_id,
+        note=note,
+        draft_id=draft.id,
+        category="draft_source",
+    )
 
 
 async def _draft_people(

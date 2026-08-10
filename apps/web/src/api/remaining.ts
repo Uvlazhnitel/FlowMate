@@ -2,6 +2,9 @@ import { apiRequest } from "./client";
 import type { PageResponse, PlannerStatus, WorkItemCardData } from "./operations";
 
 export type InboxKind = "draft" | "work_item" | "note";
+export type DraftInboxAction = "confirm" | "save_as_note" | "cancel" | "recover" | "delete";
+export type NoteInboxAction = "keep" | "archive" | "delete";
+export type BulkInboxAction = "cancel" | "archive" | "keep" | "delete";
 export type { PlannerStatus } from "./operations";
 
 export interface EntityRef {
@@ -142,7 +145,7 @@ export const updateDraftItem = (
 
 export const runDraftAction = (
   draftId: string,
-  action: string,
+  action: DraftInboxAction,
   expectedRevision: number,
   acceptUncertainty = false,
 ) =>
@@ -155,13 +158,13 @@ export const runDraftAction = (
     }),
   });
 
-export const runNoteAction = (noteId: string, action: "keep" | "archive") =>
+export const runNoteAction = (noteId: string, action: NoteInboxAction) =>
   apiRequest<Record<string, unknown>>(`/api/v1/inbox/notes/${noteId}/actions`, {
     method: "POST",
     body: JSON.stringify({ action }),
   });
 
-export const runBulkInboxAction = (action: string, entries: unknown[]) =>
+export const runBulkInboxAction = (action: BulkInboxAction, entries: unknown[]) =>
   apiRequest<{ processed: number }>("/api/v1/inbox/bulk-actions", {
     method: "POST",
     body: JSON.stringify({ action, entries }),

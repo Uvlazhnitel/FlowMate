@@ -39,6 +39,10 @@ from flowmate.task_engine.management import (
 from flowmate.task_engine.operational import PageResult
 from flowmate.task_engine.remaining import (
     DraftItemEdit,
+    InboxDeletionConflictError,
+    InboxDeletionNotFoundError,
+    delete_inbox_draft,
+    delete_standalone_inbox_note,
     edit_draft_item,
     get_owned_draft,
     list_inbox,
@@ -74,13 +78,13 @@ class DraftItemEditRequest(StrictRequest):
 
 
 class DraftActionRequest(StrictRequest):
-    action: Literal["confirm", "save_as_note", "cancel", "recover"]
+    action: Literal["confirm", "save_as_note", "cancel", "recover", "delete"]
     expected_revision: int = Field(ge=0)
     accept_uncertainty: bool = False
 
 
 class NoteActionRequest(StrictRequest):
-    action: Literal["keep", "archive"]
+    action: Literal["keep", "archive", "delete"]
 
 
 class BulkEntry(StrictRequest):
@@ -91,7 +95,7 @@ class BulkEntry(StrictRequest):
 
 
 class BulkActionRequest(StrictRequest):
-    action: Literal["cancel", "archive", "keep"]
+    action: Literal["cancel", "archive", "keep", "delete"]
     entries: list[BulkEntry] = Field(min_length=1, max_length=50)
 
 
@@ -275,6 +279,23 @@ async def draft_action(
     identity: Annotated[PwaIdentity, Depends(require_csrf)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
+    if payload.action == "delete":
+        try:
+            deleted = await delete_inbox_draft(
+                session,
+                identity.user.id,
+                draft_id,
+                expected_revision=payload.expected_revision,
+            )
+        except InboxDeletionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InboxDeletionConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {
+            "status": "deleted",
+            "id": deleted.note_id,
+            "draft_id": deleted.draft_id,
+        }
     draft = await get_owned_draft(session, identity.user.id, draft_id, for_update=True)
     if draft is None:
         raise HTTPException(status_code=404, detail="Draft not found")
@@ -337,6 +358,16 @@ async def note_action(
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_csrf)],
 ) -> dict[str, object]:
+    if payload.action == "delete":
+        try:
+            deleted = await delete_standalone_inbox_note(
+                session, identity.user.id, note_id
+            )
+        except InboxDeletionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InboxDeletionConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"status": "deleted", "id": deleted.note_id}
     note = await session.scalar(
         select(Note)
         .where(Note.id == note_id, Note.user_id == identity.user.id)
@@ -359,11 +390,30 @@ async def bulk_inbox_action(
         "cancel": {"draft"},
         "archive": {"note", "work_item"},
         "keep": {"note"},
+        "delete": {"draft", "note"},
     }
     if any(entry.kind not in allowed[payload.action] for entry in payload.entries):
         raise HTTPException(status_code=422, detail="Action is not safe for selection")
     for entry in payload.entries:
         if entry.kind == "draft":
+            if payload.action == "delete":
+                if entry.expected_revision is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Draft revision is required",
+                    )
+                try:
+                    await delete_inbox_draft(
+                        session,
+                        identity.user.id,
+                        entry.id,
+                        expected_revision=entry.expected_revision,
+                    )
+                except InboxDeletionNotFoundError as error:
+                    raise HTTPException(status_code=404, detail=str(error)) from error
+                except InboxDeletionConflictError as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
+                continue
             draft = await get_owned_draft(
                 session, identity.user.id, entry.id, for_update=True
             )
@@ -377,6 +427,16 @@ async def bulk_inbox_action(
             if note is not None and note.user_id == identity.user.id:
                 note.inbox_disposition = "archived"
         elif entry.kind == "note":
+            if payload.action == "delete":
+                try:
+                    await delete_standalone_inbox_note(
+                        session, identity.user.id, entry.id
+                    )
+                except InboxDeletionNotFoundError as error:
+                    raise HTTPException(status_code=404, detail=str(error)) from error
+                except InboxDeletionConflictError as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
+                continue
             note = await session.scalar(
                 select(Note)
                 .where(Note.id == entry.id, Note.user_id == identity.user.id)

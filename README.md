@@ -164,7 +164,12 @@ paginated priority sections. `/tomorrow` lists all supported open records
 scheduled for the next local day. The legacy `/dashboard` route redirects to `/today` for
 compatibility and is not a separate screen. Operational views reuse
 ownership-safe Task Engine services for work-item actions. Inbox supports explicit review and
-atomic conversion of uncertain drafts, Planner Queue tracks manual transfer
+atomic conversion of uncertain drafts. Pending standalone notes and unfinished AI drafts can
+also be permanently deleted from Inbox, individually or as an atomic same-kind selection,
+after an explicit irreversible-action confirmation. Draft deletion removes its source Note and
+queued AI jobs. Notes already kept, archived, converted, or linked to a WorkItem, person, or
+topic retain their provenance and cannot be deleted; archiving remains the safe alternative.
+Planner Queue tracks manual transfer
 state without Microsoft integration, Timeline shows WorkItem history, and
 Settings manages notification preferences, active topics, people, aliases, and
 provider readiness booleans without returning secrets.

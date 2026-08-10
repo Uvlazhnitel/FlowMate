@@ -170,6 +170,124 @@ describe("remaining operational screens", () => {
     });
   });
 
+  it("permanently deletes a draft only after confirmation and blocks repeat clicks", async () => {
+    document.cookie = "flowmate_csrf=test-csrf; path=/";
+    const draft = {
+      id: "b507cd6c-3620-427b-8145-39eb4dd2b639",
+      kind: "draft",
+      status: "failed",
+      revision: 31,
+      reasons: ["unresolved_draft", "interrupted"],
+      recoverable: false,
+      source_excerpt: "Черновик для удаления",
+      created_at: "2026-07-22T07:00:00Z",
+      updated_at: "2026-07-22T08:00:00Z",
+      expires_at: "2026-07-23T08:00:00Z",
+      items: [],
+    };
+    let finishDelete: ((response: Response) => void) | undefined;
+    const deleteResponse = new Promise<Response>((resolve) => {
+      finishDelete = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      const options = optionsResponse(path);
+      if (options) return Promise.resolve(options);
+      if (path.includes("/inbox/drafts/") && init?.method === "POST") {
+        return deleteResponse;
+      }
+      if (path.includes("/api/v1/inbox")) return Promise.resolve(page([draft]));
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const confirm = vi
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    const user = userEvent.setup();
+
+    renderApplication("/inbox?kind=draft");
+
+    const deleteButton = await screen.findByRole("button", { name: "Удалить" });
+    await user.click(deleteButton);
+    expect(
+      fetchMock.mock.calls.some(([input]) => requestPath(input).includes("/actions")),
+    ).toBe(false);
+    await user.click(deleteButton);
+    await waitFor(() => expect(deleteButton).toBeDisabled());
+    const action = fetchMock.mock.calls.find(([input]) =>
+      requestPath(input).includes(`/inbox/drafts/${draft.id}/actions`),
+    );
+    expect(requestBody(action?.[1])).toEqual({
+      action: "delete",
+      expected_revision: 31,
+      accept_uncertainty: false,
+    });
+    expect(confirm).toHaveBeenLastCalledWith(
+      "Удалить заметку и черновик без возможности восстановления?",
+    );
+    finishDelete?.(jsonResponse({ status: "deleted", id: draft.id }));
+  });
+
+  it("sends atomic bulk note deletion and displays a safe conflict", async () => {
+    document.cookie = "flowmate_csrf=test-csrf; path=/";
+    const notes = [
+      {
+        id: "3195ebcf-15f4-42ef-bf5f-947589cd06bd",
+        kind: "note",
+        reasons: ["unstructured_note"],
+        excerpt: "Первая заметка",
+        source: "manual",
+        created_at: "2026-07-22T07:00:00Z",
+      },
+      {
+        id: "43a92626-84b9-44fb-92ea-5d1961d3d7bf",
+        kind: "note",
+        reasons: ["unstructured_note"],
+        excerpt: "Вторая заметка",
+        source: "manual",
+        created_at: "2026-07-22T08:00:00Z",
+      },
+    ];
+    const safeMessage = "Заметку нельзя удалить: она уже связана с другой записью";
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      const options = optionsResponse(path);
+      if (options) return Promise.resolve(options);
+      if (path.includes("/inbox/bulk-actions") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({ error: { code: "conflict", message: safeMessage } }, 409),
+        );
+      }
+      if (path.includes("/api/v1/inbox")) return Promise.resolve(page(notes));
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+
+    renderApplication("/inbox?kind=note");
+
+    await screen.findByText("Первая заметка");
+    for (const checkbox of screen.getAllByRole("checkbox")) await user.click(checkbox);
+    await user.click(screen.getByRole("button", { name: /Удалить выбранные/ }));
+    await waitFor(() => expect(screen.getByText(safeMessage)).toBeVisible());
+    const action = fetchMock.mock.calls.find(([input]) =>
+      requestPath(input).includes("/inbox/bulk-actions"),
+    );
+    expect(requestBody(action?.[1])).toEqual({
+      action: "delete",
+      entries: notes.map((note) => ({ kind: "note", id: note.id })),
+    });
+    expect(confirm).toHaveBeenCalledWith(
+      "Безвозвратно удалить выбранные заметки? Восстановление невозможно.",
+    );
+  });
+
   it("shows Planner data and sends a server-confirmed manual transition", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
       const path = requestPath(input);

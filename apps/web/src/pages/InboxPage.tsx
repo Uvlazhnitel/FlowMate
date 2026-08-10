@@ -1,5 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, CheckCheck, FilePenLine, Plus, Save, XCircle } from "lucide-react";
+import {
+  Archive,
+  CheckCheck,
+  FilePenLine,
+  Plus,
+  Save,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -19,12 +27,16 @@ import {
   runDraftAction,
   runNoteAction,
   updateDraftItem,
+  type BulkInboxAction,
+  type DraftInboxAction,
   type DraftInboxEntry,
   type DraftItemData,
   type InboxEntry,
+  type NoteInboxAction,
   type SettingsPerson,
   type SettingsTopic,
 } from "../api/remaining";
+import { ApiError } from "../api/client";
 import { OperationalLayout } from "../components/OperationalLayout";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { WorkItemCard } from "../components/WorkItemCard";
@@ -61,6 +73,13 @@ const itemTypeLabels: Record<string, string> = {
   decision: "Решение",
   agenda_item: "Повестка",
 };
+
+function actionError(errors: unknown[]): string | null {
+  const error = errors.find(Boolean);
+  if (!error) return null;
+  if (error instanceof ApiError && error.status === 409) return error.message;
+  return "Действие не выполнено. Обновите данные и повторите.";
+}
 
 function localParts(value: string | null, timezone: string) {
   if (!value) return { date: "", time: "09:00" };
@@ -385,7 +404,13 @@ export function InboxPage({
     ]);
   };
   const draftMutation = useMutation({
-    mutationFn: ({ draft, action }: { draft: DraftInboxEntry; action: string }) => {
+    mutationFn: ({
+      draft,
+      action,
+    }: {
+      draft: DraftInboxEntry;
+      action: DraftInboxAction;
+    }) => {
       const uncertain = draft.items.some(
         (item) => item.readiness !== "ready" || item.confidence < 0.8,
       );
@@ -412,12 +437,12 @@ export function InboxPage({
     onSuccess: () => void refresh(),
   });
   const noteMutation = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: "keep" | "archive" }) =>
+    mutationFn: ({ id, action }: { id: string; action: NoteInboxAction }) =>
       runNoteAction(id, action),
     onSuccess: () => void refresh(),
   });
   const bulkMutation = useMutation({
-    mutationFn: async (action: string) => {
+    mutationFn: async (action: BulkInboxAction) => {
       const values = Object.values(selected);
       return runBulkInboxAction(
         action,
@@ -518,26 +543,45 @@ export function InboxPage({
         <div className="bulk-bar" role="region" aria-label="Групповые действия">
           <strong>Выбрано: {Object.keys(selected).length}</strong>
           {commonKind === "draft" && (
-            <button
-              className="button button--danger"
-              onClick={() => {
-                if (window.confirm("Отменить выбранные черновики без удаления заметок?"))
-                  bulkMutation.mutate("cancel");
-              }}
-            >
-              Отменить черновики
-            </button>
+            <>
+              <button
+                className="button button--danger"
+                disabled={bulkMutation.isPending}
+                onClick={() => {
+                  if (window.confirm("Отменить выбранные черновики без удаления заметок?"))
+                    bulkMutation.mutate("cancel");
+                }}
+              >
+                Отменить черновики
+              </button>
+              <button
+                className="button button--danger"
+                disabled={bulkMutation.isPending}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Безвозвратно удалить выбранные заметки и черновики? Восстановление невозможно.",
+                    )
+                  )
+                    bulkMutation.mutate("delete");
+                }}
+              >
+                <Trash2 size={15} aria-hidden /> Удалить выбранные
+              </button>
+            </>
           )}
           {commonKind === "note" && (
             <>
               <button
                 className="button button--secondary"
+                disabled={bulkMutation.isPending}
                 onClick={() => bulkMutation.mutate("keep")}
               >
                 Оставить заметками
               </button>
               <button
                 className="button button--danger"
+                disabled={bulkMutation.isPending}
                 onClick={() => {
                   if (window.confirm("Архивировать выбранные заметки?"))
                     bulkMutation.mutate("archive");
@@ -545,11 +589,26 @@ export function InboxPage({
               >
                 В архив
               </button>
+              <button
+                className="button button--danger"
+                disabled={bulkMutation.isPending}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Безвозвратно удалить выбранные заметки? Восстановление невозможно.",
+                    )
+                  )
+                    bulkMutation.mutate("delete");
+                }}
+              >
+                <Trash2 size={15} aria-hidden /> Удалить выбранные
+              </button>
             </>
           )}
           {commonKind === "work_item" && (
             <button
               className="button button--danger"
+              disabled={bulkMutation.isPending}
               onClick={() => {
                 if (window.confirm("Архивировать выбранные записи?"))
                   bulkMutation.mutate("archive");
@@ -633,6 +692,7 @@ export function InboxPage({
                     <div className="work-card__actions">
                       <button
                         className="card-action card-action--primary"
+                        disabled={draftMutation.isPending}
                         onClick={() =>
                           draftMutation.mutate({ draft: entry, action: "confirm" })
                         }
@@ -643,6 +703,7 @@ export function InboxPage({
                         ["expired", "failed"].includes(entry.status) && (
                           <button
                             className="card-action"
+                            disabled={draftMutation.isPending}
                             onClick={() =>
                               draftMutation.mutate({ draft: entry, action: "recover" })
                             }
@@ -652,6 +713,7 @@ export function InboxPage({
                         )}
                       <button
                         className="card-action"
+                        disabled={draftMutation.isPending}
                         onClick={() =>
                           draftMutation.mutate({ draft: entry, action: "save_as_note" })
                         }
@@ -660,11 +722,26 @@ export function InboxPage({
                       </button>
                       <button
                         className="card-action card-action--danger"
+                        disabled={draftMutation.isPending}
                         onClick={() =>
                           draftMutation.mutate({ draft: entry, action: "cancel" })
                         }
                       >
                         <XCircle size={15} /> Отменить
+                      </button>
+                      <button
+                        className="card-action card-action--danger"
+                        disabled={draftMutation.isPending}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              "Удалить заметку и черновик без возможности восстановления?",
+                            )
+                          )
+                            draftMutation.mutate({ draft: entry, action: "delete" });
+                        }}
+                      >
+                        <Trash2 size={15} aria-hidden /> Удалить
                       </button>
                     </div>
                   </>
@@ -680,6 +757,7 @@ export function InboxPage({
                     <div className="work-card__actions">
                       <button
                         className="card-action card-action--primary"
+                        disabled={noteMutation.isPending}
                         onClick={() =>
                           noteMutation.mutate({ id: entry.id, action: "keep" })
                         }
@@ -688,12 +766,27 @@ export function InboxPage({
                       </button>
                       <button
                         className="card-action card-action--danger"
+                        disabled={noteMutation.isPending}
                         onClick={() => {
                           if (window.confirm("Архивировать заметку? Текст сохранится."))
                             noteMutation.mutate({ id: entry.id, action: "archive" });
                         }}
                       >
                         <Archive size={15} /> В архив
+                      </button>
+                      <button
+                        className="card-action card-action--danger"
+                        disabled={noteMutation.isPending}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              "Удалить заметку без возможности восстановления?",
+                            )
+                          )
+                            noteMutation.mutate({ id: entry.id, action: "delete" });
+                        }}
+                      >
+                        <Trash2 size={15} aria-hidden /> Удалить
                       </button>
                     </div>
                   </>
@@ -759,8 +852,10 @@ export function InboxPage({
           <Plus size={15} /> Новый человек
         </button>
       </div>
-      {(draftMutation.isError || bulkMutation.isError) && (
-        <p className="inline-error">Действие не выполнено. Обновите данные и повторите.</p>
+      {actionError([draftMutation.error, noteMutation.error, bulkMutation.error]) && (
+        <p className="inline-error">
+          {actionError([draftMutation.error, noteMutation.error, bulkMutation.error])}
+        </p>
       )}
     </OperationalLayout>
   );
