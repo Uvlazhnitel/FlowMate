@@ -63,6 +63,19 @@ def run_evaluation() -> tuple[int, int]:
         actual_types = [item.type.value for item in parsed.draft_items]
         if actual_types != case["expected_types"]:
             failures.append(f"{case['id']}: types")
+        if "expected_titles" in case:
+            actual_titles = [item.title for item in parsed.draft_items]
+            if actual_titles != case["expected_titles"]:
+                failures.append(f"{case['id']}: titles")
+        if "expected_item_count" in case:
+            if len(parsed.draft_items) != case["expected_item_count"]:
+                failures.append(f"{case['id']}: item count")
+        if "expected_terms" in case:
+            serialized = parsed.model_dump_json().casefold()
+            if any(
+                term.casefold() not in serialized for term in case["expected_terms"]
+            ):
+                failures.append(f"{case['id']}: details")
         first = parsed.draft_items[0]
         actual_due = (
             first.due_date_candidate.normalized_value.isoformat()

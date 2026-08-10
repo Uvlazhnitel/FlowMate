@@ -834,6 +834,11 @@ async def _draft_callback(
             await db_session.commit()
             await feedback.prompt("Жду ваши изменения.", remove_keyboard=True)
             return
+        if option.get("action") == "cancel":
+            await transition_draft(db_session, draft, "cancelled")
+            await db_session.commit()
+            await callback_query.message.edit_text(f"🚫 {DRAFT_CANCELLED_MESSAGE}")
+            return
         await refine_draft(
             callback_query.message,
             draft=draft,

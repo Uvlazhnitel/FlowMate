@@ -9,7 +9,7 @@ from flowmate.stabilization.audit import validate_safe_metadata
 
 
 def test_offline_ai_evaluation_passes_without_network() -> None:
-    assert run_evaluation() == (15, 15)
+    assert run_evaluation() == (16, 16)
 
 
 def test_audit_metadata_rejects_user_text_and_secrets() -> None:

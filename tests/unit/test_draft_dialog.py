@@ -298,6 +298,56 @@ def test_question_planner_uses_confirmation_for_medium_confidence() -> None:
     ]
 
 
+def test_question_planner_confirms_complete_low_confidence_list() -> None:
+    analysis = make_analysis_result(
+        make_parse_result(
+            [
+                make_draft_item(title="Первая", confidence=0.95),
+                make_draft_item(title="Вторая", confidence=0.7),
+                make_draft_item(title="Третья", confidence=0.95),
+                make_draft_item(title="Четвёртая", confidence=0.95),
+            ]
+        )
+    )
+
+    question = next_clarification_question(analysis)
+
+    assert question is not None
+    assert question.text == "Сохранить все 4 записи?"
+    assert question.context == {"field": "confidence_all", "item_count": 4}
+    assert [option.label for option in question.options] == [
+        "Сохранить все 4",
+        "Изменить список",
+        "Отменить",
+    ]
+
+
+def test_question_planner_numbers_real_multi_item_ambiguity() -> None:
+    invalid_date = TemporalCandidate(
+        original_phrase="31 февраля",
+        normalized_value=None,
+        status=TemporalStatus.INVALID,
+        explanation="такой даты нет",
+        time_was_explicit=False,
+    )
+    analysis = make_analysis_result(
+        make_parse_result(
+            [
+                make_draft_item(title="Первая"),
+                make_draft_item(title="Вторая", due_date_candidate=invalid_date),
+                make_draft_item(title="Третья"),
+                make_draft_item(title="Четвёртая"),
+            ]
+        )
+    )
+
+    question = next_clarification_question(analysis)
+
+    assert question is not None
+    assert question.text.startswith("Пункт 2 из 4:")
+    assert question.context == {"item_number": 2, "field": "due_date"}
+
+
 @pytest.mark.asyncio
 async def test_active_draft_filter_intercepts_ordinary_text() -> None:
     message = make_message(text="обычная новая заметка")
@@ -352,6 +402,51 @@ async def test_refinement_sends_existing_draft_context_to_provider() -> None:
     assert "Original" in call.kwargs["system_prompt"]
     assert "Кто отвечает?" in call.kwargs["system_prompt"]
     assert "complete updated draft" in call.kwargs["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_refinement_rebuilds_complete_draft_as_multiple_items() -> None:
+    provider = MagicMock()
+    provider.parse = AsyncMock(
+        return_value=make_parse_result(
+            [
+                make_draft_item(title="Первая"),
+                make_draft_item(title="Вторая"),
+                make_draft_item(title="Третья"),
+                make_draft_item(title="Четвёртая"),
+            ],
+            itemization_confidence=0.6,
+        )
+    )
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("UTC"),
+        active_workspace="personal",
+        timeout_seconds=2,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=lambda _: datetime(2026, 7, 21, 12, tzinfo=UTC),
+    )
+    current = make_analysis_result(
+        make_parse_result([make_draft_item(title="Четыре действия одним пунктом")])
+    )
+
+    result = await service.refine(
+        current,
+        "это разные задачи все",
+        answer_source=DraftSource.TEXT,
+        question="Что нужно изменить?",
+    )
+
+    assert [assessment.item.title for assessment in result.items] == [
+        "Первая",
+        "Вторая",
+        "Третья",
+        "Четвёртая",
+    ]
+    prompt = provider.parse.await_args.kwargs["system_prompt"]
+    assert "complete current draft" in prompt
+    assert "Четыре действия одним пунктом" in prompt
 
 
 @pytest.mark.asyncio

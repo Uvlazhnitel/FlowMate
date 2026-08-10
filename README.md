@@ -381,8 +381,14 @@ Independent outcomes such as `Купить молоко и забрать пос
 when the provider reports at least the configured split confidence. Otherwise
 the backend uses the provider's validated single-item fallback. The phrases
 `одна задача`, `одним пунктом`, and `не разделяй` force one item; `две задачи`
-and `несколько задач` explicitly request multiple items. The same policy is
-used for text and voice captures.
+and `несколько задач` explicitly request multiple items. Spoken boundaries such
+as `ещё одна задача`, `другая задача`, `следующая задача`, `отдельная задача`,
+and numbered tasks are detected before the AI request. Each explicit segment
+must produce one item in the original order while related actions inside that
+segment remain together. If the provider returns the wrong count, the backend
+makes one bounded repair request; a second mismatch fails closed and leaves an
+explicit capture available to the recovery worker. The same policy is used for
+text and voice captures.
 
 Every temporal candidate retains its original phrase. Resolved values are
 timezone-aware ISO datetimes; date-only due dates use `23:59:59` in the user's
@@ -401,12 +407,19 @@ not shown in routine Telegram messages. Ready drafts show **Сохранить**
 **Изменить**, and **Отменить** buttons. Drafts that need clarification ask one
 plain-language question at a time; text and voice answers must be sent as a
 Telegram Reply to that question. Clear options are shown as buttons.
+For a multi-item draft where only model confidence is below the ready threshold,
+Telegram shows the complete numbered preview and asks whether to save all
+records, with **Сохранить все**, **Изменить список**, and **Отменить** actions.
+Item-specific questions are reserved for a genuinely unknown type or an invalid
+or ambiguous date and include the item's position in the list.
 
 Only one open draft is kept per user. `/draft` shows it and `/cancel` atomically
 cancels every standalone draft and work-item dialog while preserving source
 Notes. The phrases `сохрани как есть` and `отмена` confirm or cancel the active
 draft; corrections such as `не Антон, а Мария`, `это заметка`, or a corrected
-date refine the same session. Accepted answers refresh the default 24-hour TTL.
+date refine the same session. Phrases such as `это разные задачи` and `раздели
+на отдельные задачи` rebuild the complete draft rather than changing only the
+current item. Accepted answers refresh the default 24-hour TTL.
 Expired drafts reject further answers. New ordinary messages are not saved as
 unrelated notes while a draft dialog is active.
 

@@ -21,6 +21,7 @@ from flowmate.ai.factory import create_ai_provider
 from flowmate.ai.openai_provider import OpenAIAIProvider
 from flowmate.ai.prompt import build_system_prompt
 from flowmate.ai.schemas import (
+    DraftAnalysisResult,
     DraftItemType,
     DraftParseResult,
     DraftSource,
@@ -34,7 +35,7 @@ from flowmate.ai.schemas import (
 )
 from flowmate.ai.service import DraftParsingService
 from flowmate.core.config import Settings
-from tests.ai_factories import make_context, make_parse_result
+from tests.ai_factories import make_context, make_draft_item, make_parse_result
 
 
 def make_result() -> DraftParseResult:
@@ -216,6 +217,38 @@ class RoutingProvider(CapturingProvider):
         return self.result
 
 
+class SequentialProvider(CapturingProvider):
+    def __init__(self, results: list[DraftParseResult]) -> None:
+        super().__init__()
+        self.results = results
+        self.prompts: list[str] = []
+
+    async def parse(self, *, system_prompt: str, user_text: str) -> DraftParseResult:
+        self.prompts.append(system_prompt)
+        self.user_text = user_text
+        return self.results.pop(0)
+
+
+class RepairingRoutingProvider(SequentialProvider):
+    def __init__(
+        self,
+        routing_result: TelegramTextParseResult,
+        repair_results: list[DraftParseResult],
+    ) -> None:
+        super().__init__(repair_results)
+        self.routing_result = routing_result
+
+    async def parse_text(
+        self,
+        *,
+        system_prompt: str,
+        user_text: str,
+    ) -> TelegramTextParseResult:
+        self.system_prompt = system_prompt
+        self.user_text = user_text
+        return self.routing_result
+
+
 def fixed_clock(timezone: ZoneInfo) -> datetime:
     return datetime(2026, 7, 20, 12, 30, tzinfo=UTC).astimezone(timezone)
 
@@ -242,6 +275,105 @@ async def test_service_passes_workspace_source_and_time_context() -> None:
     assert "Reference timezone: Europe/Riga" in provider.system_prompt
     assert result.context.source is DraftSource.VOICE
     assert result.context.active_workspace == "client-alpha"
+
+
+@pytest.mark.asyncio
+async def test_service_repairs_explicit_voice_segments_once() -> None:
+    repaired = make_parse_result(
+        [
+            make_draft_item(title="Первая"),
+            make_draft_item(title="Вторая"),
+            make_draft_item(title="Третья"),
+            make_draft_item(title="Четвёртая"),
+        ]
+    )
+    provider = SequentialProvider([make_result(), repaired])
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("UTC"),
+        active_workspace="work",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=fixed_clock,
+    )
+    text = (
+        "Сделать первое. Еще одна задача. Сделать второе. Другая задача. "
+        "Сделать третье. Следующая задача. Сделать четвертое."
+    )
+
+    result = await service.parse(text, source=DraftSource.VOICE)
+
+    assert [item.item.title for item in result.items] == [
+        "Первая",
+        "Вторая",
+        "Третья",
+        "Четвёртая",
+    ]
+    assert len(provider.prompts) == 2
+    assert "only repair attempt" in provider.prompts[1]
+    assert "exactly 4 items" in provider.prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_second_wrong_explicit_segment_count() -> None:
+    provider = SequentialProvider(
+        [
+            make_result(),
+            make_parse_result(
+                [
+                    make_draft_item(title="Первая"),
+                    make_draft_item(title="Вторая"),
+                    make_draft_item(title="Третья"),
+                ]
+            ),
+        ]
+    )
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("UTC"),
+        active_workspace="work",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=fixed_clock,
+    )
+    text = (
+        "Сделать первое. Еще одна задача. Сделать второе. Другая задача. "
+        "Сделать третье. Следующая задача. Сделать четвертое."
+    )
+
+    with pytest.raises(AIInvalidResponseError, match="explicit boundaries"):
+        await service.parse(text, source=DraftSource.VOICE)
+
+    assert not provider.results
+
+
+@pytest.mark.asyncio
+async def test_text_routing_repairs_new_draft_with_explicit_segments() -> None:
+    initial = make_result()
+    repaired = make_parse_result(
+        [make_draft_item(title="Первая"), make_draft_item(title="Вторая")]
+    )
+    provider = RepairingRoutingProvider(
+        TelegramTextParseResult(mode="new_draft", draft=initial),
+        [repaired],
+    )
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("UTC"),
+        active_workspace="work",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=fixed_clock,
+    )
+
+    result = await service.parse_text("Сделать первое. Другая задача. Сделать второе.")
+
+    assert isinstance(result, DraftAnalysisResult)
+    assert [item.item.title for item in result.items] == ["Первая", "Вторая"]
+    assert "exactly 2 draft items" in provider.system_prompt
 
 
 @pytest.mark.asyncio

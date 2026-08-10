@@ -4,6 +4,23 @@ SINGLE_GOAL_EXAMPLE = "Подготовить отчёт и отправить �
 INDEPENDENT_OUTCOMES_EXAMPLE = "Купить молоко и забрать посылку"
 
 
+def build_explicit_segments_instruction(segments: tuple[str, ...]) -> str:
+    if not segments:
+        return ""
+    numbered = "\n".join(
+        f"Explicit segment {number}: {segment}"
+        for number, segment in enumerate(segments, start=1)
+    )
+    return f"""
+The backend found {len(segments)} explicit task segments in the user's wording.
+Return exactly {len(segments)} draft items in the same order, one per segment.
+Do not split actions inside a segment when they support one outcome. Keep every
+date, person, detail, and unfamiliar term inside its source segment. The
+explicit boundary words themselves are not part of any title.
+{numbered}
+"""
+
+
 def build_reference_context(context: DraftInputContext) -> str:
     offset = context.current_datetime.strftime("%z")
     formatted_offset = f"{offset[:3]}:{offset[3:]}" if offset else "+00:00"
@@ -15,7 +32,10 @@ Input channel: {context.channel}
 Input source: {context.source.value}"""
 
 
-def build_system_prompt(context: DraftInputContext) -> str:
+def build_system_prompt(
+    context: DraftInputContext,
+    explicit_segments: tuple[str, ...] = (),
+) -> str:
     item_types = ", ".join(item_type.value for item_type in DraftItemType)
     return f"""You convert a user's Telegram note into structured draft data.
 
@@ -50,7 +70,10 @@ choice. A multiple result must also include consolidated_item containing a safe
 single-item interpretation of the complete message. A single result must set
 consolidated_item=null. Prefixes "одна задача", "одним пунктом", and "не
 разделяй" force one item. Prefixes "две задачи" and "несколько задач" request
-multiple items; do not include these control words in titles.
+multiple items. Phrases such as "ещё одна задача", "другая задача", "следующая
+задача", and numbered tasks are explicit boundaries. Phrases such as "это
+разные задачи" and "раздели на отдельные задачи" request rebuilding the whole
+draft as multiple items. Do not include control or boundary words in titles.
 
 Extract Russian and English names, roles, topic candidates, supporting notes,
 and dependencies.
@@ -87,6 +110,19 @@ normally mean personal. Leave the candidate empty when the distinction is
 unclear.
 
 {build_reference_context(context)}
+{build_explicit_segments_instruction(explicit_segments)}
+"""
+
+
+def build_itemization_repair_prompt(
+    context: DraftInputContext,
+    explicit_segments: tuple[str, ...],
+) -> str:
+    return f"""{build_system_prompt(context, explicit_segments)}
+
+The previous structured result did not match the explicit segment count. This
+is the only repair attempt. Return exactly {len(explicit_segments)} items in the
+original order. Do not merge segments and do not invent additional items.
 """
 
 
@@ -108,6 +144,9 @@ missing_fields, ambiguities, temporal candidates, and dependencies. The answer
 may correct a person, date, item type, or request that incomplete data be kept.
 Preserve the current item count and itemization metadata unless the answer
 explicitly asks to split or merge items.
+Answers such as "это разные задачи", "это разные задачи все", and "раздели на
+отдельные задачи" apply to the complete current draft. Rebuild all intended
+items from the full current draft; do not modify or split only the current item.
 Do not introduce missing optional amounts, descriptions, topics, people, dates,
 or times merely because the user did not provide them.
 Do not create records or execute tools.
@@ -118,7 +157,10 @@ Answer source: {answer_source}
 """
 
 
-def build_text_routing_prompt(context: DraftInputContext) -> str:
+def build_text_routing_prompt(
+    context: DraftInputContext,
+    explicit_segments: tuple[str, ...] = (),
+) -> str:
     return f"""Classify Telegram text as exactly one mode. Return only the strict
 routing schema and never execute tools or database actions.
 
@@ -162,7 +204,10 @@ return one item. "{SINGLE_GOAL_EXAMPLE}" is one task;
 "{INDEPENDENT_OUTCOMES_EXAMPLE}" is two. Return itemization decision, basis,
 confidence, and a consolidated fallback for every multiple result. Respect
 "одна задача"/"одним пунктом"/"не разделяй" and
-"две задачи"/"несколько задач" prefixes.
+"две задачи"/"несколько задач" prefixes. Treat "ещё одна задача", "другая
+задача", "следующая задача", and numbered tasks as explicit boundaries. Treat
+"это разные задачи" and "раздели на отдельные задачи" as a request to rebuild
+the complete draft, not only one current item.
 Classify an explicit planned contact, repeated contact, call, or response/status
 check as follow_up. A deliverable prepared for another person remains task, and
 "напомнить мне сделать..." is not follow_up merely because it requests a
@@ -177,4 +222,5 @@ dates, database results, or completed actions. Optional amounts, descriptions,
 topics, people, dates, and times must not be reported as blocking missing data.
 
 {build_reference_context(context)}
+{build_explicit_segments_instruction(explicit_segments)}
 """

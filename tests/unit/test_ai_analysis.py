@@ -1,3 +1,4 @@
+# ruff: noqa: RUF001
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -5,6 +6,8 @@ from flowmate.ai.analysis import (
     apply_item_type_policy,
     apply_itemization_policy,
     build_analysis_result,
+    explicit_itemization_decision,
+    explicit_task_segments,
 )
 from flowmate.ai.schemas import (
     DependencyCandidate,
@@ -194,9 +197,7 @@ def test_duplicates_are_merged_and_dependency_targets_are_remapped() -> None:
 
 
 def test_uncertain_multiple_outcomes_collapse_to_consolidated_item() -> None:
-    consolidated = make_draft_item(
-        title="Подготовить отчёт и отправить его клиенту"  # noqa: RUF001
-    )
+    consolidated = make_draft_item(title="Подготовить отчёт и отправить его клиенту")
     result = make_parse_result(
         [
             make_draft_item(title="Подготовить отчёт"),
@@ -209,7 +210,7 @@ def test_uncertain_multiple_outcomes_collapse_to_consolidated_item() -> None:
 
     normalized = apply_itemization_policy(
         result,
-        source_text="Подготовить отчёт и отправить его клиенту",  # noqa: RUF001
+        source_text="Подготовить отчёт и отправить его клиенту",
         split_threshold=0.90,
     )
 
@@ -252,9 +253,7 @@ def test_explicit_single_directive_overrides_confident_split() -> None:
 
     normalized = apply_itemization_policy(
         result,
-        source_text=(
-            "Подготовить отчёт. Отправить его клиенту. Не разделяй."  # noqa: RUF001
-        ),
+        source_text=("Подготовить отчёт. Отправить его клиенту. Не разделяй."),
         split_threshold=0.90,
     )
 
@@ -281,6 +280,53 @@ def test_explicit_multiple_directive_overrides_low_split_confidence() -> None:
 
     assert normalized.itemization_decision is ItemizationDecision.MULTIPLE
     assert len(normalized.draft_items) == 2
+
+
+def test_voice_task_markers_create_four_explicit_segments() -> None:
+    transcript = (
+        "Нужно поменять VP3 на VP4. И сегодня еще одна задача. "
+        "Проверить количество дней в forecast для ЛИЧ. Другая задача. "
+        "Включиться в импорт и отсортировать важную задачу. "
+        "Это ещё одна задача. Посмотреть, что хотели лиды в чате."
+    )
+
+    segments = explicit_task_segments(transcript)
+
+    assert len(segments) == 4
+    assert segments[0] == "Нужно поменять VP3 на VP4"
+    assert segments[1].startswith("сегодня Проверить количество дней")
+    assert segments[2].startswith("Включиться в импорт")
+    assert segments[3].startswith("Посмотреть, что хотели лиды")
+    assert explicit_itemization_decision(transcript) is ItemizationDecision.MULTIPLE
+
+
+def test_numbered_tasks_can_share_one_line() -> None:
+    segments = explicit_task_segments(
+        "1. Купить молоко 2. Забрать посылку 3. Позвонить Антону"
+    )
+
+    assert segments == ("Купить молоко", "Забрать посылку", "Позвонить Антону")
+
+
+def test_spoken_markers_do_not_require_reliable_punctuation() -> None:
+    segments = explicit_task_segments(
+        "Сделать первое еще одна: сделать второе другая задача сделать третье"
+    )
+
+    assert segments == ("Сделать первое", "сделать второе", "сделать третье")
+
+
+def test_single_item_directive_wins_over_boundaries() -> None:
+    assert not explicit_task_segments(
+        "Одна задача: подготовить отчёт. Другая задача: отправить его клиенту"
+    )
+    assert not explicit_task_segments(
+        "Подготовить отчёт. Следующая задача: отправить его. Не разделяй"
+    )
+
+
+def test_multiple_verbs_without_boundaries_are_not_explicit_segments() -> None:
+    assert not explicit_task_segments("Подготовить и отправить отчёт клиенту")
 
 
 def test_explicit_follow_up_is_corrected_when_provider_returns_task() -> None:

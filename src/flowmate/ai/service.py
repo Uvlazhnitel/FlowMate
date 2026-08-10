@@ -9,9 +9,11 @@ from flowmate.ai.analysis import (
     apply_item_type_policy,
     apply_itemization_policy,
     build_analysis_result,
+    explicit_task_segments,
 )
 from flowmate.ai.errors import AIInvalidResponseError, AITimeoutError
 from flowmate.ai.prompt import (
+    build_itemization_repair_prompt,
     build_refinement_prompt,
     build_system_prompt,
     build_text_routing_prompt,
@@ -248,10 +250,12 @@ class DraftParsingService:
             source,
             active_workspace=active_workspace,
         )
+        segments = explicit_task_segments(normalized)
         return await self._parse_with_prompt(
             user_text=normalized,
-            system_prompt=build_system_prompt(parse_context),
+            system_prompt=build_system_prompt(parse_context, segments),
             context=parse_context,
+            explicit_segments=segments,
         )
 
     async def refine(
@@ -303,12 +307,13 @@ class DraftParsingService:
             DraftSource.TEXT,
             active_workspace=active_workspace,
         )
+        segments = explicit_task_segments(normalized)
         if not isinstance(self._provider, TextRoutingProvider):
             raise AIInvalidResponseError("AI provider does not support text routing")
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 parsed = await self._provider.parse_text(
-                    system_prompt=build_text_routing_prompt(context),
+                    system_prompt=build_text_routing_prompt(context, segments),
                     user_text=normalized,
                 )
         except TimeoutError as error:
@@ -334,8 +339,14 @@ class DraftParsingService:
             return parsed.search
         if parsed.draft is None:
             raise AIInvalidResponseError("draft payload is missing")
-        draft = apply_itemization_policy(
+        parsed_draft = await self._repair_explicit_itemization(
             parsed.draft,
+            user_text=normalized,
+            context=context,
+            explicit_segments=segments,
+        )
+        draft = apply_itemization_policy(
+            parsed_draft,
             source_text=normalized,
             split_threshold=self._split_confidence_threshold,
         )
@@ -345,6 +356,7 @@ class DraftParsingService:
             context=context,
             high_threshold=self._high_confidence_threshold,
             clarification_threshold=self._clarification_confidence_threshold,
+            preserve_explicit_items=bool(segments),
         )
 
     def _build_context(
@@ -367,6 +379,7 @@ class DraftParsingService:
         user_text: str,
         system_prompt: str,
         context: DraftInputContext,
+        explicit_segments: tuple[str, ...] = (),
     ) -> DraftAnalysisResult:
         try:
             async with asyncio.timeout(self._timeout_seconds):
@@ -379,6 +392,12 @@ class DraftParsingService:
 
         if not isinstance(parsed, DraftParseResult):
             raise AIInvalidResponseError("AI provider returned an invalid draft")
+        parsed = await self._repair_explicit_itemization(
+            parsed,
+            user_text=user_text,
+            context=context,
+            explicit_segments=explicit_segments,
+        )
         parsed = apply_itemization_policy(
             parsed,
             source_text=user_text,
@@ -390,4 +409,37 @@ class DraftParsingService:
             context=context,
             high_threshold=self._high_confidence_threshold,
             clarification_threshold=self._clarification_confidence_threshold,
+            preserve_explicit_items=bool(explicit_segments),
         )
+
+    async def _repair_explicit_itemization(
+        self,
+        parsed: DraftParseResult,
+        *,
+        user_text: str,
+        context: DraftInputContext,
+        explicit_segments: tuple[str, ...],
+    ) -> DraftParseResult:
+        expected_count = len(explicit_segments)
+        if expected_count < 2 or len(parsed.draft_items) == expected_count:
+            return parsed
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                repaired = await self._provider.parse(
+                    system_prompt=build_itemization_repair_prompt(
+                        context,
+                        explicit_segments,
+                    ),
+                    user_text=user_text,
+                )
+        except TimeoutError as error:
+            raise AITimeoutError("AI itemization repair timed out") from error
+        if (
+            not isinstance(repaired, DraftParseResult)
+            or len(repaired.draft_items) != expected_count
+            or repaired.itemization_decision.value != "multiple"
+        ):
+            raise AIInvalidResponseError(
+                "AI itemization repair did not match explicit boundaries"
+            )
+        return repaired

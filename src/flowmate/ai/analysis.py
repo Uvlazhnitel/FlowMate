@@ -19,11 +19,28 @@ from flowmate.ai.schemas import (
 )
 
 SINGLE_ITEM_DIRECTIVE = re.compile(
-    r"\b(?:одна\s+задача|одним\s+пунктом|не\s+разделяй)\b",
+    r"(?:\b(?:одним\s+пунктом|не\s+разделяй)\b|"
+    r"(?<!ещё\s)(?<!еще\s)\bодна\s+задача\b)",  # noqa: RUF001
     re.IGNORECASE,
 )
 MULTIPLE_ITEMS_DIRECTIVE = re.compile(
-    r"\b(?:две\s+задачи|несколько\s+задач)\b",
+    r"\b(?:две\s+задачи|несколько\s+задач|разные\s+задачи|"
+    r"раздели\w*\s+(?:все\s+)?(?:на\s+)?(?:отдельные|разные)\s+задачи|"
+    r"(?:ещ[её]\s+одна|другая|следующая|отдельная)\s+задача)\b",
+    re.IGNORECASE,
+)
+EXPLICIT_TASK_BOUNDARY = re.compile(
+    r"(?:^|(?<=[\s.!?;\n]))\s*"
+    r"(?:и\s+)?(?P<boundary_date>сегодня\s+)?"
+    r"(?:"
+    r"(?:это\s+)?(?:ещ[её]\s+одна|другая|следующая|отдельная)"
+    r"(?:\s+задача|(?=\s*[:.\-–—]))|"  # noqa: RUF001
+    r"(?:первая|вторая|третья|четв[её]ртая|пятая|шестая|седьмая|"
+    r"восьмая|девятая|десятая)\s+задача|"
+    r"задача\s*(?:№|номер)?\s*\d+|"
+    r"\d+\s*[.)]\s*(?:задача\b)?"
+    r")"
+    r"\s*(?:[:.\-–—]\s*)?",  # noqa: RUF001
     re.IGNORECASE,
 )
 MULTIPLE_ITEM_BASES = {
@@ -99,6 +116,32 @@ def explicit_itemization_decision(value: str) -> ItemizationDecision | None:
     return None
 
 
+def explicit_task_segments(value: str) -> tuple[str, ...]:
+    """Return task blocks only when the user supplied explicit boundaries."""
+    if SINGLE_ITEM_DIRECTIVE.search(value):
+        return ()
+
+    matches = list(EXPLICIT_TASK_BOUNDARY.finditer(value))
+    if not matches:
+        return ()
+
+    segments: list[str] = []
+    prefix = value[: matches[0].start()].strip(" \t\r\n,.;:-–—")  # noqa: RUF001
+    if prefix:
+        segments.append(prefix)
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(value)
+        boundary_date = match.group("boundary_date") or ""
+        segment = value[match.end() : end].strip(
+            " \t\r\n,.;:-–—"  # noqa: RUF001
+        )
+        segment = f"{boundary_date}{segment}".strip()
+        if segment:
+            segments.append(segment)
+
+    return tuple(segments) if len(segments) >= 2 else ()
+
+
 def apply_itemization_policy(
     result: DraftParseResult,
     *,
@@ -109,6 +152,8 @@ def apply_itemization_policy(
         return result
 
     explicit = explicit_itemization_decision(source_text)
+    if explicit is None and explicit_task_segments(source_text):
+        explicit = ItemizationDecision.MULTIPLE
     keep_multiple = explicit is ItemizationDecision.MULTIPLE or (
         explicit is not ItemizationDecision.SINGLE
         and result.itemization_basis in MULTIPLE_ITEM_BASES
@@ -352,9 +397,17 @@ def build_analysis_result(
     context: DraftInputContext,
     high_threshold: float,
     clarification_threshold: float,
+    preserve_explicit_items: bool = False,
 ) -> DraftAnalysisResult:
     timezone = ZoneInfo(context.timezone)
-    items = deduplicate_items(result.draft_items, timezone=timezone)
+    items = (
+        [
+            materialize_external_conditions(normalize_due_date(item, timezone))
+            for item in result.draft_items
+        ]
+        if preserve_explicit_items
+        else deduplicate_items(result.draft_items, timezone=timezone)
+    )
     assessments = [
         DraftItemAssessment(
             item=item,

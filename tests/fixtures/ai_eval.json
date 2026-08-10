@@ -486,6 +486,113 @@
     "expected_description": "Условие: после того как я получу Rate card Sweta и Imamsab"
   },
   {
+    "id": "explicit_voice_boundaries_four_tasks",
+    "input": "В общем, нужно за ренска поменять VP3 на VP4. И сегодня еще одна задача. Надо количество дней в forecast для ЛИЧ, по-моему. Надо убедиться. Вот. Другая задача. Надо включиться в импортин и отсортировать важную задачу нового меню камеры. Желательно, чтобы импортин сегодня из трех людей. Вот. Ну, также надо посмотреть, что от меня хотели. Это еще одна задача. Посмотреть, что от меня хотели лиды в чате и посмотреть, что за задание.",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Поменять VP3 на VP4 за ренска",
+          "description": null,
+          "person_candidates": [],
+          "topic_candidates": ["VP3", "VP4"],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.94
+        },
+        {
+          "type": "task",
+          "title": "Проверить количество дней в forecast для ЛИЧ",
+          "description": "Нужно убедиться в количестве дней",
+          "person_candidates": [],
+          "topic_candidates": ["forecast", "ЛИЧ"],
+          "due_date_candidate": {
+            "original_phrase": "сегодня",
+            "normalized_value": "2026-07-22T23:59:59+03:00",
+            "status": "resolved",
+            "explanation": null,
+            "time_was_explicit": false
+          },
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.93
+        },
+        {
+          "type": "task",
+          "title": "Включиться в импортин и отсортировать важную задачу нового меню камеры",
+          "description": "Желательно, чтобы импортин сегодня был из трёх людей",
+          "person_candidates": [],
+          "topic_candidates": ["импортин", "новое меню камеры"],
+          "due_date_candidate": {
+            "original_phrase": "сегодня",
+            "normalized_value": "2026-07-22T23:59:59+03:00",
+            "status": "resolved",
+            "explanation": null,
+            "time_was_explicit": false
+          },
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.82
+        },
+        {
+          "type": "task",
+          "title": "Посмотреть, что хотели лиды в чате и что за задание",
+          "description": null,
+          "person_candidates": ["лиды"],
+          "topic_candidates": ["чат"],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.86
+        }
+      ],
+      "itemization_decision": "multiple",
+      "itemization_basis": "explicit_list",
+      "itemization_confidence": 0.99,
+      "consolidated_item": {
+        "type": "task",
+        "title": "Выполнить четыре перечисленные задачи",
+        "description": null,
+        "person_candidates": ["лиды"],
+        "topic_candidates": ["VP3", "VP4", "forecast", "ЛИЧ", "импортин", "новое меню камеры", "чат"],
+        "due_date_candidate": null,
+        "reminder_candidate": null,
+        "notes": [],
+        "missing_fields": [],
+        "ambiguities": [],
+        "dependencies": [],
+        "confidence": 0.7
+      },
+      "ambiguities": [],
+      "confidence": 0.82
+    },
+    "expected_types": ["task", "task", "task", "task"],
+    "expected_titles": [
+      "Поменять VP3 на VP4 за ренска",
+      "Проверить количество дней в forecast для ЛИЧ",
+      "Включиться в импортин и отсортировать важную задачу нового меню камеры",
+      "Посмотреть, что хотели лиды в чате и что за задание"
+    ],
+    "expected_item_count": 4,
+    "expected_terms": ["VP3", "VP4", "forecast", "ЛИЧ", "нового меню камеры", "трёх людей", "лиды в чате"],
+    "expected_due": null,
+    "expected_reminder": null
+  },
+  {
     "kind": "invalid_provider_output",
     "id": "provider_empty_items",
     "recorded_output": {
