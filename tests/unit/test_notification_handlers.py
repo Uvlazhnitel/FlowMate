@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.bot.handlers.preferences import reminders_settings_command
 from flowmate.bot.handlers.reminders import reminder_callback
-from flowmate.bot.handlers.work_items import action_session_message
+from flowmate.bot.handlers.work_items.sessions import action_session_message
 from flowmate.db.models import User as DatabaseUser
 from flowmate.db.models import (
     UserNotificationPreferences,
@@ -119,15 +119,15 @@ async def test_voice_custom_snooze_updates_reminder_without_note_flow() -> None:
     )
     with (
         patch(
-            "flowmate.bot.handlers.work_items.get_effective_notification_preferences",
+            "flowmate.bot.handlers.work_items.sessions.get_effective_notification_preferences",
             new=AsyncMock(return_value=MagicMock(zoneinfo=ZoneInfo("UTC"))),
         ),
         patch(
-            "flowmate.bot.handlers.work_items.snooze_work_item_reminder",
+            "flowmate.bot.handlers.work_items.sessions.snooze_work_item_reminder",
             new=AsyncMock(return_value=(MagicMock(), True)),
         ) as snooze,
         patch(
-            "flowmate.bot.handlers.work_items.finish_action_session",
+            "flowmate.bot.handlers.work_items.sessions.finish_action_session",
             new=AsyncMock(),
         ),
         patch.object(Message, "answer", new_callable=AsyncMock),

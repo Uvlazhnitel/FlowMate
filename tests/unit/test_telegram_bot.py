@@ -54,7 +54,7 @@ from flowmate.bot.handlers.voice import (
     split_transcription,
     voice_message,
 )
-from flowmate.bot.handlers.work_items import ManagementIntentOutcome
+from flowmate.bot.handlers.work_items.management import ManagementIntentOutcome
 from flowmate.bot.handlers.workspaces import (
     workspace_callback,
     workspace_keyboard,
