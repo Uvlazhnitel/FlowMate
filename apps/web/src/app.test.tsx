@@ -10,6 +10,14 @@ function requestPath(input: RequestInfo | URL): string {
 }
 
 function emptyOperationalResponse(path: string): Response {
+  if (path.endsWith("/api/v1/overview")) {
+    return jsonResponse({
+      timezone: "Europe/Riga",
+      today: { items: [], total: 0, has_more: false },
+      tomorrow: { items: [], total: 0, has_more: false },
+      inbox: { items: [], total: 0, has_more: false },
+    });
+  }
   if (path.includes("/today/overview")) {
     return jsonResponse({
       timezone: "Europe/Riga",
@@ -147,6 +155,7 @@ describe("protected application", () => {
   });
 
   it.each([
+    ["/overview", "Обзор"],
     ["/today", "Сегодня"],
     ["/tomorrow", "Завтра"],
     ["/topics", "Темы"],
@@ -165,7 +174,7 @@ describe("protected application", () => {
     expect(screen.getAllByText("FlowMate")).toHaveLength(2);
   });
 
-  it("shows Tomorrow immediately after Today in the desktop navigation", async () => {
+  it("shows Overview first in desktop and mobile navigation", async () => {
     stubEmptyApplication();
 
     renderApplication("/today");
@@ -178,19 +187,27 @@ describe("protected application", () => {
     const links = within(desktopNavigation!)
       .getAllByRole("link")
       .map((link) => link.textContent);
-    expect(links.slice(0, 3)).toEqual(["Сегодня", "Завтра", "Входящие"]);
+    expect(links.slice(0, 4)).toEqual(["Обзор", "Сегодня", "Завтра", "Входящие"]);
+    const mobileNavigation = screen
+      .getAllByRole("navigation", { name: "Основная навигация" })
+      .find((navigation) => navigation.classList.contains("mobile-nav"));
+    expect(mobileNavigation).toBeDefined();
+    expect(
+      within(mobileNavigation!)
+        .getAllByRole("link")
+        .slice(0, 4)
+        .map((link) => link.textContent),
+    ).toEqual(["Обзор", "Сегодня", "Входящие", "Повестка"]);
   });
 
   it.each(["/", "/dashboard", "/missing"])(
-    "uses Today as the canonical start screen for %s",
+    "uses Overview as the canonical start screen for %s",
     async (path) => {
       stubEmptyApplication();
 
       renderApplication(path);
 
-      expect(
-        await screen.findByRole("heading", { name: "Сегодня", level: 1 }),
-      ).toBeVisible();
+      expect(await screen.findByRole("heading", { name: "Обзор", level: 1 })).toBeVisible();
       expect(screen.queryByRole("link", { name: "Панель" })).not.toBeInTheDocument();
     },
   );
@@ -208,14 +225,9 @@ describe("protected application", () => {
 
     renderApplication("/dashboard?section=waiting#follow-up");
 
-    expect(await screen.findByRole("combobox", { name: "Раздел Сегодня" })).toHaveValue(
-      "waiting",
-    );
+    expect(await screen.findByRole("heading", { name: "Обзор", level: 1 })).toBeVisible();
     await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("section=waiting"),
-        expect.anything(),
-      ),
+      expect(fetchMock).toHaveBeenCalledWith("/api/v1/overview", expect.anything()),
     );
   });
 
@@ -264,7 +276,7 @@ describe("login and logout", () => {
     await user.type(input, "123456");
     await user.click(screen.getByRole("button", { name: "Продолжить" }));
 
-    expect(await screen.findByRole("heading", { name: "Сегодня", level: 1 })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Обзор", level: 1 })).toBeVisible();
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/api/v1/auth/session",

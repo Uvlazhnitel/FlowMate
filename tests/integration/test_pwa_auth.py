@@ -351,6 +351,7 @@ async def test_all_pwa_routes_reject_unauthenticated_requests(
     read_paths = [
         "/api/v1/auth/me",
         "/api/v1/dashboard",
+        "/api/v1/overview",
         "/api/v1/today/overview",
         "/api/v1/today?section=overdue",
         "/api/v1/topics",

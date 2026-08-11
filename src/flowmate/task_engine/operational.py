@@ -47,6 +47,7 @@ class PageResult:
     limit: int
     offset: int
     has_more: bool
+    total: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,6 +317,85 @@ async def list_tomorrow_items(
         offset,
         len(items) > limit,
     )
+
+
+async def list_overview_today_items(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    now: datetime,
+    preferences: EffectiveNotificationPreferences,
+    limit: int,
+) -> PageResult:
+    _, end = local_day_bounds(now, preferences)
+    category = _focus_category_sql(now, end)
+    effective = effective_date_sql()
+    conditions = (
+        WorkItem.user_id == user_id,
+        WorkItem.status.in_(OPEN_STATUSES),
+        category < 5,
+    )
+    total = int(
+        (await session.scalar(select(func.count(WorkItem.id)).where(*conditions))) or 0
+    )
+    items = list(
+        await session.scalars(
+            select(WorkItem)
+            .where(*conditions)
+            .order_by(
+                category,
+                _priority_rank_sql(),
+                effective.asc().nulls_last(),
+                WorkItem.id,
+            )
+            .limit(limit)
+        )
+    )
+    return PageResult(
+        list(await build_work_item_cards(session, user_id, items, now=now)),
+        limit,
+        0,
+        total > limit,
+        total,
+    )
+
+
+async def list_overview_tomorrow_items(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    now: datetime,
+    preferences: EffectiveNotificationPreferences,
+    limit: int,
+) -> PageResult:
+    start, end = local_day_bounds(now, preferences, days_ahead=1)
+    effective = effective_date_sql()
+    conditions = (
+        WorkItem.user_id == user_id,
+        WorkItem.status.in_(OPEN_STATUSES),
+        WorkItem.type.in_(
+            (
+                WorkItemType.TASK.value,
+                WorkItemType.FOLLOW_UP.value,
+                WorkItemType.WAITING.value,
+                WorkItemType.QUESTION.value,
+            )
+        ),
+        effective >= start,
+        effective < end,
+    )
+    total = int(
+        (await session.scalar(select(func.count(WorkItem.id)).where(*conditions))) or 0
+    )
+    page = await list_tomorrow_items(
+        session,
+        user_id,
+        now=now,
+        preferences=preferences,
+        limit=limit,
+        offset=0,
+    )
+    return PageResult(page.items, limit, 0, total > limit, total)
 
 
 async def _today_summary(

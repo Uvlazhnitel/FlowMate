@@ -13,6 +13,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { AgendaPage } from "./pages/AgendaPage";
 import { ContextDetailPage } from "./pages/ContextDetailPage";
 import { PeoplePage } from "./pages/PeoplePage";
+import { OverviewPage } from "./pages/OverviewPage";
 import { TodayPage } from "./pages/TodayPage";
 import { TimelinePage } from "./pages/TimelinePage";
 import { TomorrowPage } from "./pages/TomorrowPage";
@@ -24,6 +25,7 @@ function UserRoute({
 }: {
   page:
     | "today"
+    | "overview"
     | "tomorrow"
     | "topics"
     | "people"
@@ -40,6 +42,8 @@ function UserRoute({
     dateDisplayFormat: user.date_display_format,
     timeDisplayFormat: user.time_display_format,
   };
+  if (page === "overview")
+    return <OverviewPage dateTimePreferences={dateTimePreferences} />;
   if (page === "today")
     return (
       <TodayPage
@@ -81,7 +85,7 @@ function DashboardRedirect() {
   return (
     <Navigate
       to={{
-        pathname: "/today",
+        pathname: "/overview",
         search: location.search,
         hash: location.hash,
       }}
@@ -127,8 +131,9 @@ export function AppRoutes() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route element={<ProtectedApplication />}>
-        <Route index element={<Navigate to="/today" replace />} />
+        <Route index element={<Navigate to="/overview" replace />} />
         <Route path="dashboard" element={<DashboardRedirect />} />
+        <Route path="overview" element={<UserRoute page="overview" />} />
         <Route path="today" element={<UserRoute page="today" />} />
         <Route path="tomorrow" element={<UserRoute page="tomorrow" />} />
         <Route path="topics" element={<UserRoute page="topics" />} />
@@ -161,7 +166,7 @@ export function AppRoutes() {
           ))}
         <Route path="settings" element={<SettingsPage />} />
       </Route>
-      <Route path="*" element={<Navigate to="/today" replace />} />
+      <Route path="*" element={<Navigate to="/overview" replace />} />
     </Routes>
   );
 }

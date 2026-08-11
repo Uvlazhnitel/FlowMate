@@ -8,6 +8,7 @@ import {
   Clock3,
   Inbox,
   ListChecks,
+  LayoutDashboard,
   MoreHorizontal,
   Settings,
   Tags,
@@ -26,6 +27,7 @@ interface NavigationItem {
 }
 
 const navigationItems: NavigationItem[] = [
+  { to: "/overview", label: "Обзор", icon: LayoutDashboard },
   { to: "/today", label: "Сегодня", icon: CalendarDays },
   { to: "/tomorrow", label: "Завтра", icon: CalendarRange },
   { to: "/inbox", label: "Входящие", icon: Inbox },
@@ -37,7 +39,7 @@ const navigationItems: NavigationItem[] = [
   { to: "/settings", label: "Настройки", icon: Settings },
 ];
 
-const primaryMobilePaths = new Set(["/today", "/inbox", "/agenda", "/people"]);
+const primaryMobilePaths = new Set(["/overview", "/today", "/inbox", "/agenda"]);
 
 function Navigation({ mobile = false }: { mobile?: boolean }) {
   const visible = mobile

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { operationsKeys } from "../../api/operations";
 import {
@@ -40,6 +40,7 @@ export function InboxPage({
   const [params, setParams] = useSearchParams();
   const kind = params.get("kind") ?? "";
   const reason = params.get("reason") ?? "";
+  const focus = params.get("focus") ?? "";
   const page = Number(params.get("page") ?? 0);
   const [selected, setSelected] = useState<Record<string, InboxEntry>>({});
   const query = useQuery({
@@ -147,6 +148,17 @@ export function InboxPage({
     await queryClient.invalidateQueries({ queryKey: remainingKeys.all });
   }
 
+  const focusedEntry = query.data?.items.find((entry) => {
+    const id = entry.kind === "work_item" ? entry.item.id : entry.id;
+    return entry.kind === kind && id === focus;
+  });
+  useEffect(() => {
+    if (!focus || !focusedEntry) return;
+    const target = document.getElementById(`inbox-entry-${focusedEntry.kind}-${focus}`);
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  }, [focus, focusedEntry]);
+
   if (query.isPending) return <LoadingState label="Собираем входящие" />;
   if (query.isError)
     return (
@@ -181,6 +193,12 @@ export function InboxPage({
         pending={bulkMutation.isPending}
         onAction={(action) => bulkMutation.mutate(action)}
       />
+      {focus && !focusedEntry && (
+        <div className="inbox-focus-missing" role="status">
+          <span>Запись уже обработана, перемещена или больше не требует разбора.</span>
+          <Link to="/inbox">Показать актуальные входящие</Link>
+        </div>
+      )}
       {!query.data.items.length ? (
         <EmptyState
           title="Входящее разобрано"
@@ -192,8 +210,10 @@ export function InboxPage({
             const id = entry.kind === "work_item" ? entry.item.id : entry.id;
             return (
               <article
-                className={`inbox-card inbox-card--${entry.kind}`}
+                id={`inbox-entry-${entry.kind}-${id}`}
+                className={`inbox-card inbox-card--${entry.kind} ${focus === id && kind === entry.kind ? "inbox-card--focused" : ""}`}
                 key={`${entry.kind}-${id}`}
+                tabIndex={focus === id && kind === entry.kind ? -1 : undefined}
               >
                 <label className="select-control">
                   <input

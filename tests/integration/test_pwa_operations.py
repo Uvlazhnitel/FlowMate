@@ -153,6 +153,11 @@ async def test_pwa_workspace_switch_changes_operational_scope(
             assert [item["title"] for item in personal_overview.json()["focus"]] == [
                 "Personal only"
             ]
+            personal_home = await client.get("/api/v1/overview")
+            assert personal_home.status_code == 200
+            assert personal_home.json()["today"]["items"][0]["item"]["title"] == (
+                "Personal only"
+            )
             personal_tomorrow = await client.get("/api/v1/tomorrow")
             assert [item["title"] for item in personal_tomorrow.json()["items"]] == [
                 "Personal tomorrow"
@@ -174,6 +179,10 @@ async def test_pwa_workspace_switch_changes_operational_scope(
             assert [item["title"] for item in work_overview.json()["focus"]] == [
                 "Work only"
             ]
+            work_home = await client.get("/api/v1/overview")
+            assert work_home.json()["today"]["items"][0]["item"]["title"] == (
+                "Work only"
+            )
             work_tomorrow = await client.get("/api/v1/tomorrow")
             assert [item["title"] for item in work_tomorrow.json()["items"]] == [
                 "Work tomorrow"
@@ -195,6 +204,7 @@ async def test_operational_views_actions_and_user_isolation(
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             assert (await client.get("/api/v1/dashboard")).status_code == 401
+            assert (await client.get("/api/v1/overview")).status_code == 401
             assert (await client.get("/api/v1/today/overview")).status_code == 401
             assert (await client.get("/api/v1/tomorrow")).status_code == 401
             csrf = await authenticated_client(client, sender)
@@ -281,6 +291,7 @@ async def test_operational_views_actions_and_user_isolation(
             assert (
                 app.openapi()["paths"]["/api/v1/dashboard"]["get"]["deprecated"] is True
             )
+            assert "deprecated" not in app.openapi()["paths"]["/api/v1/overview"]["get"]
 
             today = await client.get("/api/v1/today?section=overdue")
             assert [item["id"] for item in today.json()["items"]] == [str(overdue_id)]

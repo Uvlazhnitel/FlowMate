@@ -74,6 +74,35 @@ export interface TodayOverviewResponse {
   };
 }
 
+export interface OverviewWorkItem {
+  item: WorkItemCardData;
+  needs_inbox: boolean;
+}
+
+export interface OverviewInboxItem {
+  id: string;
+  kind: "draft" | "work_item" | "note";
+  title: string;
+  excerpt: string;
+  status: string;
+  reasons: string[];
+  occurred_at: string;
+  item_count: number;
+}
+
+export interface OverviewColumn<T> {
+  items: T[];
+  total: number;
+  has_more: boolean;
+}
+
+export interface OverviewResponse {
+  timezone: string;
+  today: OverviewColumn<OverviewWorkItem>;
+  tomorrow: OverviewColumn<OverviewWorkItem>;
+  inbox: OverviewColumn<OverviewInboxItem>;
+}
+
 export interface TopicSummary {
   id: string;
   name: string;
@@ -188,6 +217,7 @@ export interface ActionResponse {
 
 export const operationsKeys = {
   all: ["operations"] as const,
+  overview: ["operations", "overview"] as const,
   todayOverview: ["operations", "today", "overview"] as const,
   tomorrow: ["operations", "tomorrow"] as const,
 };
@@ -202,6 +232,8 @@ function query(path: string, values: Record<string, string | number | undefined>
 
 export const getTodayOverview = () =>
   apiRequest<TodayOverviewResponse>("/api/v1/today/overview");
+
+export const getOverview = () => apiRequest<OverviewResponse>("/api/v1/overview");
 
 export const getToday = (section: string, offset = 0) =>
   apiRequest<PageResponse<WorkItemCardData>>(

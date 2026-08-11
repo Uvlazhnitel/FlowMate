@@ -77,6 +77,55 @@ afterEach(() => {
 });
 
 describe("Inbox notes and bulk actions", () => {
+  it("focuses an exact deep-linked Inbox entry", async () => {
+    const note = {
+      id: "3195ebcf-15f4-42ef-bf5f-947589cd06bd",
+      kind: "note",
+      reasons: ["unstructured_note"],
+      excerpt: "Точная заметка",
+      source: "manual",
+      created_at: "2026-07-22T07:00:00Z",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path = requestPath(input);
+        if (path.includes("/auth/me"))
+          return Promise.resolve(jsonResponse(authenticatedUser));
+        const options = optionsResponse(path);
+        if (options) return Promise.resolve(options);
+        return Promise.resolve(page(path.includes("/api/v1/inbox") ? [note] : []));
+      }),
+    );
+
+    renderApplication(`/inbox?kind=note&focus=${note.id}`);
+
+    await screen.findByText("Точная заметка");
+    const article = document.getElementById(`inbox-entry-note-${note.id}`);
+    expect(article).toHaveClass("inbox-card--focused");
+    await waitFor(() => expect(document.activeElement).toBe(article));
+  });
+
+  it("explains when a focused Inbox entry is already gone", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path = requestPath(input);
+        if (path.includes("/auth/me"))
+          return Promise.resolve(jsonResponse(authenticatedUser));
+        const options = optionsResponse(path);
+        return Promise.resolve(options ?? page([]));
+      }),
+    );
+
+    renderApplication("/inbox?kind=note&focus=3195ebcf-15f4-42ef-bf5f-947589cd06bd");
+
+    expect(await screen.findByText(/Запись уже обработана/)).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "Показать актуальные входящие" }),
+    ).toHaveAttribute("href", "/inbox");
+  });
+
   it("sends atomic bulk note deletion and displays a safe conflict", async () => {
     document.cookie = "flowmate_csrf=test-csrf; path=/";
     const notes = [

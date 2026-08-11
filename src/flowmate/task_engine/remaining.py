@@ -302,7 +302,7 @@ async def serialize_draft(
     }
 
 
-def _work_item_reasons(item: Any) -> list[str]:
+def work_item_inbox_reasons(item: Any) -> list[str]:
     reasons: list[str] = []
     if item.status == "inbox":
         reasons.append("inbox_status")
@@ -405,7 +405,7 @@ async def list_inbox(
         )
         cards = await build_work_item_cards(session, user_id, work_items, now=now)
         for card in cards:
-            work_reasons = _work_item_reasons(card)
+            work_reasons = work_item_inbox_reasons(card)
             if not work_reasons or (reason is not None and reason not in work_reasons):
                 continue
             payload = {
@@ -452,6 +452,7 @@ async def list_inbox(
         limit=limit,
         offset=offset,
         has_more=len(page) > limit,
+        total=len(entries),
     )
 
 

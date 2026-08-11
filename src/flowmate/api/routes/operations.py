@@ -48,6 +48,7 @@ from flowmate.task_engine.operational import (
     list_topics_summary,
     today_overview_snapshot,
 )
+from flowmate.task_engine.overview import overview_snapshot
 from flowmate.task_engine.queries import PersonScope
 from flowmate.task_engine.rescheduling import (
     ReschedulePreset,
@@ -193,6 +194,23 @@ async def today_overview(
     preferences = await _preferences(session, identity, settings)
     payload = await today_overview_snapshot(
         session, identity.user.id, now=_clock(), preferences=preferences
+    )
+    return {"timezone": preferences.timezone, **payload}
+
+
+@router.get("/overview")
+async def overview(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    identity: Annotated[PwaIdentity, Depends(require_pwa_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, object]:
+    preferences = await _preferences(session, identity, settings)
+    payload = await overview_snapshot(
+        session,
+        identity.user.id,
+        now=_clock(),
+        preferences=preferences,
+        low_confidence_threshold=settings.ai_high_confidence_threshold,
     )
     return {"timezone": preferences.timezone, **payload}
 
