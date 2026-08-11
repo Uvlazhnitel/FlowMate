@@ -790,3 +790,12 @@ user; original audio is never persisted. The optional AI boundary receives Note
 text only and returns validated Pydantic data. Application persistence stores
 the validated draft and its state; the provider has no database access or
 tools.
+
+User-facing operations own their delivery modules. Telegram work-item handlers
+live under `bot.handlers.work_items` as cards, selection, editing, dates,
+reminders, lifecycle, and management modules; navigation is split into menu,
+lists, and search. The remaining PWA API composes Inbox, Planning/Timeline, and
+Settings routers. The React Inbox page is a query/mutation coordinator whose
+draft, note, WorkItem, editor, and bulk-action components live in
+`apps/web/src/pages/inbox`; the legacy module paths remain compatibility
+facades.
