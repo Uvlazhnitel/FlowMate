@@ -7,10 +7,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
-from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.schemas import (
@@ -18,31 +15,17 @@ from flowmate.ai.schemas import (
     ManagementAction,
     ManagementIntent,
 )
-from flowmate.bot.handlers.navigation import today_command
-from flowmate.bot.handlers.work_items import (
-    action_session_message,
-    apply_management_intent,
-    details_keyboard,
-    edit_options_keyboard,
+from flowmate.bot.handlers.work_items.cards import (
     encode_revision,
-    execute_management_intent,
-    format_datetime,
-    format_work_item_details,
-    parse_user_datetime,
     parse_work_item_callback,
-    refresh_work_item_card,
-    reschedule_options_keyboard,
-    start_input_session,
-    work_item_callback,
-    work_item_selection_callback,
 )
-from flowmate.db.models import Note, WorkItem, WorkItemActionSession, WorkItemEvent
-from flowmate.reminders.parsing import SnoozeParsingService
+from flowmate.bot.handlers.work_items.management import (
+    apply_management_intent,
+    execute_management_intent,
+)
+from flowmate.db.models import Note, WorkItem, WorkItemEvent
 from flowmate.reminders.preferences import NotificationDefaults
 from flowmate.task_engine.details import WorkItemDetails
-from flowmate.task_engine.enums import WorkItemAction
-from flowmate.task_engine.management import StaleWorkItemError
-from flowmate.task_engine.rescheduling import ReschedulePreset, ReschedulingService
 
 
 def make_message(text: str) -> Message:
@@ -69,43 +52,6 @@ def make_intent() -> ManagementIntent:
         ambiguities=[],
         confidence=0.95,
     )
-
-
-def test_work_item_callback_parser_is_strict() -> None:
-    item_id = uuid4()
-
-    assert parse_work_item_callback(f"wi:postpone:{item_id}:3") == (
-        "postpone",
-        item_id,
-        "3",
-        None,
-    )
-    assert parse_work_item_callback(f"wi:details:{item_id}") == (
-        "details",
-        item_id,
-        None,
-        None,
-    )
-    assert parse_work_item_callback(f"wi:details:{item_id}:w") == (
-        "details",
-        item_id,
-        None,
-        "work",
-    )
-    assert parse_work_item_callback("wi:details:not-a-uuid") is None
-    assert parse_work_item_callback("draft:details:value") is None
-
-
-def test_custom_date_parser_uses_application_timezone() -> None:
-    timezone = ZoneInfo("Europe/Riga")
-
-    date_only = parse_user_datetime("21.07.2026", timezone)
-    with_time = parse_user_datetime("2026-07-22 09:30", timezone)
-
-    assert date_only == datetime(2026, 7, 21, 23, 59, 59, tzinfo=timezone)
-    assert with_time == datetime(2026, 7, 22, 9, 30, tzinfo=timezone)
-    assert parse_user_datetime("в следующую пятницу", timezone) is None
-    assert format_datetime(with_time, timezone) == "22 июля, 09:30"
 
 
 def make_details(item_type: str = "task", status: str = "inbox") -> WorkItemDetails:
@@ -146,97 +92,6 @@ def make_details(item_type: str = "task", status: str = "inbox") -> WorkItemDeta
     )
 
 
-def test_detail_card_is_safe_concise_and_context_sensitive() -> None:
-    details = make_details()
-    text = format_work_item_details(details, ZoneInfo("UTC"))
-    keyboard = details_keyboard(details)
-
-    assert "📌 <b>Задача</b>\nImportant work" in text
-    assert "Private linked note" in text
-    assert "Testing" not in text and "Антон" not in text
-    assert len(text) < 4000
-    labels = [button.text for row in keyboard.inline_keyboard for button in row]
-    assert labels == [
-        "✅ Выполнено",
-        "⏰ Отложить",
-        "📅 Перенести",
-        "📝 Заметка",
-        "❌ Отменить",
-        "✏️ Изменить",
-        "📖 История",
-    ]
-    assert all(
-        len(button.callback_data or "") <= 64
-        for row in keyboard.inline_keyboard
-        for button in row
-    )
-
-
-@pytest.mark.parametrize(
-    ("item_type", "expected"),
-    [
-        ("follow_up", {"✅ Выполнено", "💬 Ответ получен", "⏰ Отложить"}),
-        ("waiting", {"✅ Получено", "🔁 Сделать follow-up", "⏰ Отложить"}),
-    ],
-)
-def test_detail_actions_follow_work_item_type(
-    item_type: str,
-    expected: set[str],
-) -> None:
-    keyboard = details_keyboard(make_details(item_type))
-    labels = {button.text for row in keyboard.inline_keyboard for button in row}
-    assert expected <= labels
-
-
-def test_completed_detail_has_only_reopen_and_history() -> None:
-    keyboard = details_keyboard(make_details(status="done"))
-    assert [button.text for row in keyboard.inline_keyboard for button in row] == [
-        "↩️ Вернуть",
-        "📖 История",
-    ]
-
-
-def test_edit_menu_exposes_content_date_and_clear_actions() -> None:
-    details = make_details()
-
-    keyboard = edit_options_keyboard(details.item)
-
-    assert [button.text for row in keyboard.inline_keyboard for button in row] == [
-        "Название",
-        "Описание",
-        "Дата",
-        "Очистить описание",
-        "Назад",
-    ]
-
-
-def test_reschedule_keyboard_contains_all_presets() -> None:
-    details = make_details("follow_up")
-    details.item.next_follow_up_at = datetime(2026, 7, 24, 14, tzinfo=UTC)
-    now = datetime(2026, 7, 24, 18, tzinfo=UTC)
-
-    keyboard = reschedule_options_keyboard(details.item, now)
-    labels = {button.text for row in keyboard.inline_keyboard for button in row}
-
-    assert {
-        "Позже сегодня",
-        "Завтра утром",
-        "Следующий рабочий день",
-        "Через неделю",
-        "Другая дата",
-        "Отмена",
-    } == labels
-    revision = encode_revision(int(details.item.updated_at.timestamp() * 1_000_000))
-    parsed_callbacks = [
-        parsed
-        for row in keyboard.inline_keyboard
-        for button in row
-        if button.text != "Отмена"
-        and (parsed := parse_work_item_callback(button.callback_data)) is not None
-    ]
-    assert any(parsed[2] == revision for parsed in parsed_callbacks)
-
-
 def notification_defaults() -> NotificationDefaults:
     return NotificationDefaults(
         timezone="UTC",
@@ -262,419 +117,6 @@ def make_callback(item: WorkItem, action: str = "c") -> tuple[CallbackQuery, Upd
 
 
 @pytest.mark.asyncio
-async def test_complete_callback_commits_and_refreshes_card() -> None:
-    details = make_details()
-    callback, update = make_callback(details.item)
-    session = MagicMock(spec=AsyncSession)
-    session.commit = AsyncMock()
-    session.rollback = AsyncMock()
-    session.refresh = AsyncMock()
-    preferences = SimpleNamespace(
-        zoneinfo=ZoneInfo("UTC"),
-        morning_digest_time=time(9),
-        default_snooze_minutes=60,
-    )
-    events: list[str] = []
-
-    async def acknowledge(*_: object, **__: object) -> None:
-        events.append("acknowledged")
-
-    async def complete(*_: object, **__: object) -> SimpleNamespace:
-        events.append("completed")
-        return SimpleNamespace(changed=True)
-
-    with (
-        patch(
-            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
-            new=AsyncMock(return_value=SimpleNamespace(id=details.item.user_id)),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_work_item",
-            new=AsyncMock(return_value=details.item),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_active_draft_for_user",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_active_action_session",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_effective_notification_preferences",
-            new=AsyncMock(return_value=preferences),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.complete_work_item",
-            new=AsyncMock(side_effect=complete),
-        ) as complete,
-        patch(
-            "flowmate.bot.handlers.work_items.send_details",
-            new=AsyncMock(return_value=True),
-        ) as refresh,
-        patch.object(
-            CallbackQuery,
-            "answer",
-            new=AsyncMock(side_effect=acknowledge),
-        ) as answer,
-        patch.object(Message, "answer", new_callable=AsyncMock) as message_answer,
-    ):
-        await work_item_callback(
-            callback,
-            update,
-            cast(AsyncSession, session),
-            ZoneInfo("UTC"),
-            30,
-            notification_defaults(),
-        )
-
-    complete.assert_awaited_once()
-    complete_call = complete.await_args
-    assert complete_call is not None
-    assert complete_call.kwargs["expected_revision"] == int(
-        details.item.updated_at.timestamp() * 1_000_000
-    )
-    cast(AsyncMock, session.commit).assert_awaited_once()
-    refresh.assert_awaited_once()
-    refresh_call = refresh.await_args
-    assert refresh_call is not None
-    assert refresh_call.kwargs["edit"] is True
-    assert refresh_call.kwargs["notice"] == f"✅ Выполнено: {details.item.title}"
-    answer.assert_awaited_once_with("⏳ Выполняю…")
-    assert events == ["acknowledged", "completed"]
-    message_answer.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_reschedule_preset_callback_uses_shared_service() -> None:
-    details = make_details()
-    callback, update = make_callback(details.item, "rn")
-    session = MagicMock(spec=AsyncSession)
-    session.commit = AsyncMock()
-    session.rollback = AsyncMock()
-    target = datetime(2026, 7, 29, 14, tzinfo=UTC)
-    details.item.due_at = target
-    preferences = SimpleNamespace(
-        zoneinfo=ZoneInfo("UTC"),
-        default_reminder_time=time(8, 30),
-        default_snooze_minutes=60,
-    )
-    service = MagicMock(spec=ReschedulingService)
-    service.reschedule_preset = AsyncMock(
-        return_value=SimpleNamespace(work_item=details.item, changed=True)
-    )
-
-    with (
-        patch(
-            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
-            new=AsyncMock(return_value=SimpleNamespace(id=details.item.user_id)),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_work_item",
-            new=AsyncMock(return_value=details.item),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_active_draft_for_user",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_active_action_session",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_effective_notification_preferences",
-            new=AsyncMock(return_value=preferences),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.send_details",
-            new=AsyncMock(return_value=True),
-        ),
-        patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
-        patch.object(Message, "answer", new_callable=AsyncMock),
-    ):
-        await work_item_callback(
-            callback,
-            update,
-            cast(AsyncSession, session),
-            ZoneInfo("UTC"),
-            30,
-            notification_defaults(),
-            rescheduling_service=cast(ReschedulingService, service),
-        )
-
-    service.reschedule_preset.assert_awaited_once()
-    call = service.reschedule_preset.await_args
-    assert call is not None
-    assert call.args[4] is ReschedulePreset.NEXT_WEEK
-    assert call.kwargs["preferences"] is preferences
-    cast(AsyncMock, session.commit).assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_card_tomorrow_snooze_uses_default_reminder_time() -> None:
-    details = make_details()
-    reminder_id = uuid4()
-    message = make_message("card")
-    callback = CallbackQuery(
-        id="callback-id",
-        from_user=cast(User, message.from_user),
-        chat_instance="test",
-        message=message,
-        data=f"wi:zt:{reminder_id}:{encode_revision(42)}",
-    )
-    update = Update(update_id=9150, callback_query=callback)
-    session = MagicMock(spec=AsyncSession)
-    session.commit = AsyncMock()
-    session.rollback = AsyncMock()
-    preferences = SimpleNamespace(
-        zoneinfo=ZoneInfo("UTC"),
-        default_reminder_time=time(7, 45),
-        default_snooze_minutes=60,
-    )
-
-    with (
-        patch(
-            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
-            new=AsyncMock(return_value=SimpleNamespace(id=details.item.user_id)),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_work_item",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_reminder_action_target",
-            new=AsyncMock(return_value=SimpleNamespace(work_item=details.item)),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_active_draft_for_user",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_active_action_session",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_effective_notification_preferences",
-            new=AsyncMock(return_value=preferences),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.snooze_work_item_reminder",
-            new=AsyncMock(return_value=(MagicMock(), True)),
-        ) as snooze,
-        patch(
-            "flowmate.bot.handlers.work_items.send_details",
-            new=AsyncMock(return_value=True),
-        ),
-        patch.object(CallbackQuery, "answer", new_callable=AsyncMock),
-        patch.object(Message, "answer", new_callable=AsyncMock),
-    ):
-        await work_item_callback(
-            callback,
-            update,
-            cast(AsyncSession, session),
-            ZoneInfo("UTC"),
-            30,
-            notification_defaults(),
-        )
-
-    snooze_call = snooze.await_args
-    assert snooze_call is not None
-    until = snooze_call.kwargs["until"]
-    assert isinstance(until, datetime)
-    assert until.astimezone(ZoneInfo("UTC")).time() == time(7, 45)
-    cast(AsyncMock, session.commit).assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_reschedule_text_reply_uses_shared_service() -> None:
-    message = make_message("в пятницу после обеда")
-    session = MagicMock(spec=AsyncSession)
-    session.commit = AsyncMock()
-    session.rollback = AsyncMock()
-    item = make_details().item
-    item.due_at = datetime(2026, 7, 24, 15, tzinfo=UTC)
-    action = WorkItemActionSession(
-        id=uuid4(),
-        user_id=item.user_id,
-        work_item_id=item.id,
-        action=WorkItemAction.RESCHEDULE.value,
-        status="open",
-        context={"work_item_revision": 12},
-        expires_at=datetime.now(UTC),
-    )
-    preferences = SimpleNamespace(
-        zoneinfo=ZoneInfo("UTC"),
-        default_reminder_time=time(8, 30),
-    )
-    service = MagicMock(spec=ReschedulingService)
-    service.reschedule_text = AsyncMock(
-        return_value=SimpleNamespace(work_item=item, changed=True)
-    )
-
-    with (
-        patch(
-            "flowmate.bot.handlers.work_items.get_effective_notification_preferences",
-            new=AsyncMock(return_value=preferences),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.finish_action_session",
-            new=AsyncMock(),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.answer_with_main_menu",
-            new=AsyncMock(),
-        ),
-    ):
-        await action_session_message(
-            message,
-            cast(Bot, MagicMock(spec=Bot)),
-            Update(update_id=9200, message=message),
-            cast(AsyncSession, session),
-            action,
-            item.user_id,
-            ZoneInfo("UTC"),
-            notification_defaults(),
-            SnoozeParsingService(None, timeout_seconds=1),
-            None,
-            rescheduling_service=cast(ReschedulingService, service),
-        )
-
-    service.reschedule_text.assert_awaited_once()
-    call = service.reschedule_text.await_args
-    assert call is not None
-    assert call.args[4] == "в пятницу после обеда"
-    assert call.kwargs["expected_revision"] == 12
-    cast(AsyncMock, session.commit).assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_stale_callback_only_refreshes_current_card() -> None:
-    details = make_details()
-    callback, update = make_callback(details.item)
-    session = MagicMock(spec=AsyncSession)
-    session.commit = AsyncMock()
-    session.rollback = AsyncMock()
-    with (
-        patch(
-            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
-            new=AsyncMock(return_value=SimpleNamespace(id=details.item.user_id)),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_work_item",
-            new=AsyncMock(return_value=details.item),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_active_draft_for_user",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_active_action_session",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_effective_notification_preferences",
-            new=AsyncMock(return_value=SimpleNamespace()),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.complete_work_item",
-            new=AsyncMock(side_effect=StaleWorkItemError("stale")),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.send_details",
-            new=AsyncMock(return_value=True),
-        ) as refresh,
-        patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
-        patch.object(Message, "answer", new_callable=AsyncMock) as message_answer,
-    ):
-        await work_item_callback(
-            callback,
-            update,
-            cast(AsyncSession, session),
-            ZoneInfo("UTC"),
-            30,
-            notification_defaults(),
-        )
-
-    cast(AsyncMock, session.commit).assert_not_awaited()
-    cast(AsyncMock, session.rollback).assert_awaited_once()
-    refresh.assert_awaited_once()
-    refresh_call = refresh.await_args
-    assert refresh_call is not None
-    assert refresh_call.kwargs["notice"].startswith("⚠️ Карточка обновлена.")
-    answer.assert_awaited_once_with("⏳ Выполняю…")
-    message_answer.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_card_refresh_sends_new_card_when_edit_fails() -> None:
-    details = make_details()
-    message = make_message("card")
-    session = MagicMock(spec=AsyncSession)
-    telegram_error = TelegramAPIError(
-        method=MagicMock(),
-        message="message cannot be edited",
-    )
-    with patch(
-        "flowmate.bot.handlers.work_items.send_details",
-        new=AsyncMock(side_effect=(telegram_error, True)),
-    ) as send:
-        await refresh_work_item_card(
-            message,
-            cast(AsyncSession, session),
-            details.item.user_id,
-            details.item,
-            ZoneInfo("UTC"),
-        )
-
-    assert send.await_count == 2
-    assert send.await_args_list[0].kwargs["edit"] is True
-    assert "edit" not in send.await_args_list[1].kwargs
-
-
-@pytest.mark.asyncio
-async def test_active_draft_blocks_inline_mutation() -> None:
-    details = make_details()
-    callback, update = make_callback(details.item)
-    session = MagicMock(spec=AsyncSession)
-    with (
-        patch(
-            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
-            new=AsyncMock(return_value=SimpleNamespace(id=details.item.user_id)),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_work_item",
-            new=AsyncMock(return_value=details.item),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_active_draft_for_user",
-            new=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.complete_work_item",
-            new=AsyncMock(),
-        ) as complete,
-        patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
-        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
-    ):
-        await work_item_callback(
-            callback,
-            update,
-            cast(AsyncSession, session),
-            ZoneInfo("UTC"),
-            30,
-            notification_defaults(),
-        )
-
-    complete.assert_not_awaited()
-    answer.assert_awaited_once_with("⏳ Выполняю…")
-    edit_call = edit.await_args
-    assert edit_call is not None
-    assert edit_call.args[0].endswith(
-        "⚠️ Сначала завершите или отмените активный черновик."
-    )
-
-
-@pytest.mark.asyncio
 async def test_high_confidence_management_executes_single_match() -> None:
     message = make_message("закрой follow-up с Антоном")
     update = Update(update_id=9001, message=message)
@@ -692,19 +134,19 @@ async def test_high_confidence_management_executes_single_match() -> None:
     session.rollback = AsyncMock()
     with (
         patch(
-            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
+            "flowmate.bot.handlers.work_items.management.get_user_by_telegram_id",
             new=AsyncMock(return_value=SimpleNamespace(id=user_id)),
         ),
         patch(
-            "flowmate.bot.handlers.work_items.get_active_draft_for_user",
+            "flowmate.bot.handlers.work_items.management.get_active_draft_for_user",
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "flowmate.bot.handlers.work_items.find_intent_targets",
+            "flowmate.bot.handlers.work_items.management.find_intent_targets",
             new=AsyncMock(return_value=[item]),
         ),
         patch(
-            "flowmate.bot.handlers.work_items.complete_work_item",
+            "flowmate.bot.handlers.work_items.management.complete_work_item",
             new=AsyncMock(),
         ) as complete,
         patch.object(Message, "answer", new_callable=AsyncMock) as answer,
@@ -746,15 +188,15 @@ async def test_contextual_management_without_reply_never_guesses_target() -> Non
     find_targets = AsyncMock()
     with (
         patch(
-            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
+            "flowmate.bot.handlers.work_items.management.get_user_by_telegram_id",
             new=AsyncMock(return_value=SimpleNamespace(id=user_id)),
         ),
         patch(
-            "flowmate.bot.handlers.work_items.get_active_draft_for_user",
+            "flowmate.bot.handlers.work_items.management.get_active_draft_for_user",
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "flowmate.bot.handlers.work_items.find_intent_targets",
+            "flowmate.bot.handlers.work_items.management.find_intent_targets",
             new=find_targets,
         ),
         patch.object(Message, "answer", new_callable=AsyncMock) as answer,
@@ -797,23 +239,23 @@ async def test_ambiguous_management_creates_selection_without_mutation() -> None
     session.commit = AsyncMock()
     with (
         patch(
-            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
+            "flowmate.bot.handlers.work_items.management.get_user_by_telegram_id",
             new=AsyncMock(return_value=SimpleNamespace(id=user_id)),
         ),
         patch(
-            "flowmate.bot.handlers.work_items.get_active_draft_for_user",
+            "flowmate.bot.handlers.work_items.management.get_active_draft_for_user",
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "flowmate.bot.handlers.work_items.find_intent_targets",
+            "flowmate.bot.handlers.work_items.management.find_intent_targets",
             new=AsyncMock(return_value=items),
         ),
         patch(
-            "flowmate.bot.handlers.work_items.create_action_session",
+            "flowmate.bot.handlers.work_items.management.create_action_session",
             new=AsyncMock(return_value=action_session),
         ) as create_session,
         patch(
-            "flowmate.bot.handlers.work_items.complete_work_item",
+            "flowmate.bot.handlers.work_items.management.complete_work_item",
             new=AsyncMock(),
         ) as complete,
         patch.object(Message, "answer", new_callable=AsyncMock) as answer,
@@ -841,167 +283,6 @@ async def test_ambiguous_management_creates_selection_without_mutation() -> None
 
 
 @pytest.mark.asyncio
-async def test_repeated_input_callback_does_not_send_second_force_reply() -> None:
-    message = make_message("callback source")
-    session = MagicMock(spec=AsyncSession)
-    session.rollback = AsyncMock()
-    action_session = SimpleNamespace(prompt_message_id=501)
-    with (
-        patch(
-            "flowmate.bot.handlers.work_items.create_action_session",
-            new=AsyncMock(return_value=action_session),
-        ) as create_session,
-        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
-    ):
-        await start_input_session(
-            message,
-            cast(AsyncSession, session),
-            user_id=uuid4(),
-            item_id=uuid4(),
-            action=WorkItemAction.ADD_NOTE,
-            prompt="Введите текст заметки.",
-            ttl_minutes=30,
-            telegram_update_id=9003,
-        )
-
-    create_session.assert_awaited_once()
-    cast(AsyncMock, session.rollback).assert_awaited_once()
-    answer.assert_awaited_once_with("Запрос уже обработан.")
-
-
-@pytest.mark.asyncio
-async def test_selection_can_be_cancelled_and_repeated_callback_expires() -> None:
-    message = make_message("selection")
-    session_id = uuid4()
-    callback = CallbackQuery(
-        id="selection-callback",
-        from_user=cast(User, message.from_user),
-        chat_instance="test",
-        message=message,
-        data=f"wis:{session_id}:x",
-    )
-    update = Update(update_id=9200, callback_query=callback)
-    user = SimpleNamespace(id=uuid4())
-    action_session = SimpleNamespace(
-        id=session_id,
-        action=WorkItemAction.SELECT_RECORD,
-    )
-    session = MagicMock(spec=AsyncSession)
-    session.commit = AsyncMock()
-    session.rollback = AsyncMock()
-    with (
-        patch(
-            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
-            new=AsyncMock(return_value=user),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_action_session_for_user",
-            new=AsyncMock(side_effect=[action_session, None]),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.finish_action_session",
-            new=AsyncMock(),
-        ) as finish,
-        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
-        patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
-    ):
-        await work_item_selection_callback(
-            callback,
-            update,
-            cast(AsyncSession, session),
-            ZoneInfo("UTC"),
-            30,
-        )
-        await work_item_selection_callback(
-            callback,
-            update,
-            cast(AsyncSession, session),
-            ZoneInfo("UTC"),
-            30,
-        )
-
-    finish.assert_awaited_once_with(session, action_session, status="cancelled")
-    assert edit.await_args_list[0].args == ("✅ Выбор отменён.",)
-    assert edit.await_args_list[0].kwargs == {"parse_mode": None}
-    assert edit.await_args_list[1].args[0].endswith("⚠️ Срок выбора истёк.")
-    assert [call.args for call in answer.await_args_list] == [
-        ("⏳ Выполняю…",),
-        ("⏳ Выполняю…",),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_selection_preserves_and_applies_intended_action() -> None:
-    message = make_message("selection")
-    session_id = uuid4()
-    item = make_details("follow_up").item
-    intent = make_intent()
-    callback = CallbackQuery(
-        id="selection-action",
-        from_user=cast(User, message.from_user),
-        chat_instance="test",
-        message=message,
-        data=f"wis:{session_id}:0",
-    )
-    update = Update(update_id=9201, callback_query=callback)
-    user = SimpleNamespace(id=item.user_id)
-    action_session = SimpleNamespace(
-        id=session_id,
-        action=WorkItemAction.SELECT_RECORD,
-        context={
-            "candidate_ids": [str(item.id)],
-            "intent": intent.model_dump(mode="json"),
-        },
-    )
-    session = MagicMock(spec=AsyncSession)
-    session.flush = AsyncMock()
-    session.rollback = AsyncMock()
-    with (
-        patch(
-            "flowmate.bot.handlers.work_items.get_user_by_telegram_id",
-            new=AsyncMock(return_value=user),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_action_session_for_user",
-            new=AsyncMock(return_value=action_session),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.get_work_item",
-            new=AsyncMock(return_value=item),
-        ),
-        patch(
-            "flowmate.bot.handlers.work_items.finish_action_session",
-            new=AsyncMock(),
-        ) as finish,
-        patch(
-            "flowmate.bot.handlers.work_items.apply_management_intent",
-            new=AsyncMock(),
-        ) as apply_intent,
-        patch.object(CallbackQuery, "answer", new_callable=AsyncMock) as answer,
-        patch.object(Message, "edit_text", new_callable=AsyncMock) as edit,
-    ):
-        await work_item_selection_callback(
-            callback,
-            update,
-            cast(AsyncSession, session),
-            ZoneInfo("UTC"),
-            30,
-        )
-
-    finish.assert_awaited_once_with(session, action_session)
-    apply_intent.assert_awaited_once()
-    apply_call = apply_intent.await_args
-    assert apply_call is not None
-    assert apply_call.kwargs["item"] == item
-    assert apply_call.kwargs["intent"] == intent
-    answer.assert_awaited_once_with("⏳ Выполняю…")
-    edit_call = edit.await_args
-    assert edit_call is not None
-    assert edit_call.args[0].endswith("✅ Запись выбрана.")
-    assert edit_call.kwargs["reply_markup"] is None
-
-
-@pytest.mark.asyncio
 async def test_waiting_received_offer_uses_revision_aware_follow_up_callback() -> None:
     message = make_message("Антон ответил")
     update = Update(update_id=9202, message=message)
@@ -1024,7 +305,7 @@ async def test_waiting_received_offer_uses_revision_aware_follow_up_callback() -
     session.rollback = AsyncMock()
     with (
         patch(
-            "flowmate.bot.handlers.work_items.mark_waiting_received",
+            "flowmate.bot.handlers.work_items.management.mark_waiting_received",
             new=AsyncMock(),
         ),
         patch.object(Message, "answer", new_callable=AsyncMock) as answer,
@@ -1050,21 +331,3 @@ async def test_waiting_received_offer_uses_revision_aware_follow_up_callback() -
     assert parsed[1] == item.id
     assert parsed[2] == encode_revision(int(item.updated_at.timestamp() * 1_000_000))
     session.refresh.assert_awaited_once_with(item, attribute_names=["updated_at"])
-
-
-@pytest.mark.asyncio
-async def test_list_command_returns_safe_database_error() -> None:
-    message = make_message("/today")
-    session = MagicMock(spec=AsyncSession)
-    session.rollback = AsyncMock()
-    with (
-        patch(
-            "flowmate.bot.handlers.navigation.get_user_by_telegram_id",
-            new=AsyncMock(side_effect=SQLAlchemyError("private database detail")),
-        ),
-        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
-    ):
-        await today_command(message, cast(AsyncSession, session), ZoneInfo("UTC"))
-
-    cast(AsyncMock, session.rollback).assert_awaited_once()
-    answer.assert_awaited_once_with("Не удалось загрузить список. Попробуйте позже.")

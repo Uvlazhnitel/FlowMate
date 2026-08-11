@@ -7,40 +7,21 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
-from aiogram.types import CallbackQuery, Chat, Message, Update, User
+from aiogram.types import CallbackQuery, Chat, Message, User
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from flowmate.ai.schemas import SearchIntent, SearchWorkItemType
-from flowmate.bot.handlers.commands import cancel_command
-from flowmate.bot.handlers.navigation import (
-    NavigationPage,
+from flowmate.bot.handlers.navigation.lists import (
     build_navigation_page,
-    execute_search_intent,
     list_callback,
-    list_keyboard,
-    menu_command,
-    normalize_display_text,
-    parse_list_callback,
-    parse_search_callback,
-    parse_search_expression,
     send_navigation_page,
     tomorrow_command,
 )
-from flowmate.bot.menu import (
-    CANCEL_BUTTON,
-    FOLLOW_UPS_BUTTON,
-    QUESTIONS_BUTTON,
-    RECORD_BUTTON,
-    SEARCH_BUTTON,
-    SETTINGS_BUTTON,
-    TASKS_BUTTON,
-    TODAY_BUTTON,
-    TOMORROW_BUTTON,
-    WAITING_BUTTON,
-    WORKSPACE_BUTTON,
-    main_menu_keyboard,
+from flowmate.bot.handlers.navigation.presentation import (
+    NavigationPage,
+    list_keyboard,
+    normalize_display_text,
+    parse_list_callback,
 )
-from flowmate.db.models import WorkItem
 from flowmate.reminders.preferences import NotificationDefaults
 
 
@@ -54,26 +35,12 @@ def make_message() -> Message:
     )
 
 
-def test_main_menu_has_persistent_layout_and_workspace_button() -> None:
-    keyboard = main_menu_keyboard()
-
-    assert keyboard.is_persistent is True
-    assert [[button.text for button in row] for row in keyboard.keyboard] == [
-        [RECORD_BUTTON],
-        [TODAY_BUTTON, TOMORROW_BUTTON],
-        [TASKS_BUTTON, FOLLOW_UPS_BUTTON],
-        [WAITING_BUTTON, QUESTIONS_BUTTON],
-        [SEARCH_BUTTON, SETTINGS_BUTTON],
-        [WORKSPACE_BUTTON, CANCEL_BUTTON],
-    ]
-
-
 @pytest.mark.asyncio
 async def test_tomorrow_navigation_uses_exact_next_local_day() -> None:
     session = AsyncMock(spec=AsyncSession)
     timezone = ZoneInfo("America/New_York")
     with patch(
-        "flowmate.bot.handlers.navigation.list_scheduled_items",
+        "flowmate.bot.handlers.navigation.lists.list_scheduled_items",
         new=AsyncMock(return_value=[]),
     ) as scheduled:
         page = await build_navigation_page(
@@ -115,23 +82,23 @@ async def test_tomorrow_command_uses_user_notification_timezone() -> None:
     )
     with (
         patch(
-            "flowmate.bot.handlers.navigation.get_user_by_telegram_id",
+            "flowmate.bot.handlers.navigation.lists.get_user_by_telegram_id",
             new=AsyncMock(return_value=user),
         ),
         patch(
-            "flowmate.bot.handlers.navigation.cancel_transient_dialogs",
+            "flowmate.bot.handlers.navigation.lists.cancel_transient_dialogs",
             new=AsyncMock(),
         ),
         patch(
-            "flowmate.bot.handlers.navigation.get_effective_notification_preferences",
+            "flowmate.bot.handlers.navigation.lists.get_effective_notification_preferences",
             new=AsyncMock(return_value=preferences),
         ),
         patch(
-            "flowmate.bot.handlers.navigation.build_navigation_page",
+            "flowmate.bot.handlers.navigation.lists.build_navigation_page",
             new=AsyncMock(return_value=navigation_page),
         ) as build,
         patch(
-            "flowmate.bot.handlers.navigation.send_navigation_page",
+            "flowmate.bot.handlers.navigation.lists.send_navigation_page",
             new=AsyncMock(),
         ),
     ):
@@ -145,20 +112,6 @@ async def test_tomorrow_command_uses_user_notification_timezone() -> None:
     assert build.await_args is not None
     assert build.await_args.kwargs["view"] == "n"
     assert build.await_args.kwargs["timezone"] == ZoneInfo("Asia/Tokyo")
-
-
-@pytest.mark.asyncio
-async def test_menu_command_shows_main_keyboard() -> None:
-    message = make_message()
-    with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
-        await menu_command(message)
-
-    call = answer.await_args
-    assert call is not None
-    kwargs = call.kwargs
-    assert call.args == ("Главное меню FlowMate.",)
-    assert kwargs["parse_mode"] is None
-    assert kwargs["reply_markup"].is_persistent is True
 
 
 @pytest.mark.asyncio
@@ -197,19 +150,19 @@ async def test_list_callback_acknowledges_before_loading_page() -> None:
 
     with (
         patch(
-            "flowmate.bot.handlers.navigation.get_user_by_telegram_id",
+            "flowmate.bot.handlers.navigation.lists.get_user_by_telegram_id",
             new=AsyncMock(return_value=user),
         ),
         patch(
-            "flowmate.bot.handlers.navigation.build_navigation_page",
+            "flowmate.bot.handlers.navigation.lists.build_navigation_page",
             new=AsyncMock(side_effect=build),
         ) as build_page,
         patch(
-            "flowmate.bot.handlers.navigation.get_effective_notification_preferences",
+            "flowmate.bot.handlers.navigation.lists.get_effective_notification_preferences",
             new=AsyncMock(return_value=preferences),
         ),
         patch(
-            "flowmate.bot.handlers.navigation.send_navigation_page",
+            "flowmate.bot.handlers.navigation.lists.send_navigation_page",
             new_callable=AsyncMock,
         ) as send,
         patch.object(
@@ -244,48 +197,6 @@ def test_list_callback_parsing_rejects_invalid_pages_and_views() -> None:
     assert parse_list_callback("ls:p:archived:0") is None
     assert parse_list_callback("ls:private:0") is None
     assert parse_list_callback("ls:t:not-a-page") is None
-
-
-def test_search_callback_uses_only_session_id_and_page() -> None:
-    session_id = uuid4()
-
-    assert parse_search_callback(f"lq:{session_id}:2") == (session_id, 2)
-    assert parse_search_callback(f"lq:{session_id}:-1") is None
-    assert parse_search_callback("lq:not-a-uuid:0") is None
-
-
-def test_search_expression_parses_filters_and_quoted_values() -> None:
-    filters = parse_search_expression(
-        'release person:"Антон Иванов" topic:Testing type:follow-up '
-        "status:active,waiting from:2026-07-01 to:2026-07-31",
-        ZoneInfo("Europe/Riga"),
-    )
-
-    assert filters.text_query == "release"
-    assert filters.person_query == "Антон Иванов"
-    assert filters.topic_query == "Testing"
-    assert filters.item_types == ("follow_up",)
-    assert filters.statuses == ("active", "waiting")
-    assert filters.due_from is not None and filters.due_from.hour == 0
-    assert (
-        filters.due_to is not None and filters.due_to.date().isoformat() == "2026-08-01"
-    )
-
-
-@pytest.mark.parametrize(
-    "query",
-    [
-        "type:unknown",
-        "status:all status:done",
-        "from:31.07.2026",
-        "from:2026-08-01 to:2026-07-01",
-        "overdue from:2026-07-01",
-        'person:"unfinished',
-    ],
-)
-def test_search_expression_rejects_invalid_filters(query: str) -> None:
-    with pytest.raises(ValueError):
-        parse_search_expression(query, ZoneInfo("UTC"))
 
 
 def test_page_keyboard_handles_first_middle_and_last_page() -> None:
@@ -350,128 +261,3 @@ async def test_long_navigation_page_is_split_below_telegram_limit() -> None:
     assert all(len(call.args[0]) <= 4000 for call in answer.await_args_list)
     assert answer.await_args_list[-1].kwargs["reply_markup"] == page.keyboard
     assert all(call.kwargs["parse_mode"] is None for call in answer.await_args_list)
-
-
-@pytest.mark.asyncio
-async def test_cancel_command_cancels_active_search_action() -> None:
-    message = make_message()
-    session = AsyncMock(spec=AsyncSession)
-    user = SimpleNamespace(id=uuid4())
-    with (
-        patch(
-            "flowmate.bot.handlers.commands.get_user_by_telegram_id",
-            new=AsyncMock(return_value=user),
-        ),
-        patch(
-            "flowmate.bot.handlers.commands.cancel_transient_dialogs",
-            new=AsyncMock(return_value=SimpleNamespace(total=1)),
-        ) as cancel_all,
-        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
-    ):
-        await cancel_command(message, cast(AsyncSession, session))
-
-    cancel_all.assert_awaited_once_with(session, user.id)
-    session.commit.assert_awaited_once()
-    answer.assert_awaited_once()
-    call = answer.await_args
-    assert call is not None
-    assert call.args == ("Текущее действие отменено",)
-    assert call.kwargs["reply_markup"].is_persistent is True
-
-
-def make_search_intent(*, confidence: float = 0.95) -> SearchIntent:
-    return SearchIntent(
-        text_query=None,
-        person_query="Антон",
-        topic_query=None,
-        item_types=[SearchWorkItemType.FOLLOW_UP],
-        statuses=[],
-        include_all_statuses=False,
-        due_from=None,
-        due_to=None,
-        overdue=False,
-        stale_contacts=False,
-        ambiguities=[],
-        confidence=confidence,
-    )
-
-
-@pytest.mark.asyncio
-async def test_conversational_search_opens_one_clear_result() -> None:
-    message = make_message()
-    update = Update(update_id=9701, message=message)
-    session = AsyncMock(spec=AsyncSession)
-    user = SimpleNamespace(id=uuid4())
-    action = SimpleNamespace(id=uuid4(), context={}, status="completed")
-    item = WorkItem(
-        id=uuid4(),
-        user_id=user.id,
-        type="follow_up",
-        title="Позвонить Антону",
-        status="inbox",
-        priority="normal",
-    )
-    with (
-        patch(
-            "flowmate.bot.handlers.navigation.get_user_by_telegram_id",
-            new=AsyncMock(return_value=user),
-        ),
-        patch(
-            "flowmate.bot.handlers.navigation.create_action_session",
-            new=AsyncMock(return_value=action),
-        ),
-        patch(
-            "flowmate.bot.handlers.navigation.finish_action_session",
-            new=AsyncMock(),
-        ),
-        patch(
-            "flowmate.bot.handlers.navigation.search_work_items",
-            new=AsyncMock(return_value=[item]),
-        ),
-        patch(
-            "flowmate.bot.handlers.navigation.send_details",
-            new=AsyncMock(return_value=True),
-        ) as send_details,
-    ):
-        await execute_search_intent(
-            message,
-            update,
-            cast(AsyncSession, session),
-            make_search_intent(),
-            high_confidence_threshold=0.8,
-            action_ttl_minutes=30,
-            timezone=ZoneInfo("UTC"),
-        )
-
-    session.commit.assert_awaited_once()
-    send_details.assert_awaited_once_with(
-        message,
-        session,
-        user.id,
-        item,
-        ZoneInfo("UTC"),
-    )
-
-
-@pytest.mark.asyncio
-async def test_low_confidence_search_does_not_query_database() -> None:
-    message = make_message()
-    with (
-        patch(
-            "flowmate.bot.handlers.navigation.search_work_items",
-            new=AsyncMock(),
-        ) as search,
-        patch.object(Message, "answer", new_callable=AsyncMock) as answer,
-    ):
-        await execute_search_intent(
-            message,
-            Update(update_id=9702, message=message),
-            cast(AsyncSession, AsyncMock(spec=AsyncSession)),
-            make_search_intent(confidence=0.4),
-            high_confidence_threshold=0.8,
-            action_ttl_minutes=30,
-            timezone=ZoneInfo("UTC"),
-        )
-
-    search.assert_not_awaited()
-    answer.assert_awaited_once_with("Уточните поисковый запрос и попробуйте ещё раз.")

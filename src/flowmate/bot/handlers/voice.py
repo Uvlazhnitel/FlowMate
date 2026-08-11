@@ -23,7 +23,7 @@ from flowmate.bot.handlers.drafts import (
     DRAFT_RETRY_MESSAGE,
     analyze_note_content,
 )
-from flowmate.bot.handlers.navigation import execute_search_intent
+from flowmate.bot.handlers.navigation.search import execute_search_intent
 from flowmate.bot.handlers.notes import (
     NOTE_ALREADY_SAVED_MESSAGE,
     NOTE_SAVE_FAILED_MESSAGE,
@@ -33,7 +33,7 @@ from flowmate.bot.handlers.notes import (
     save_note_for_message,
     selected_capture_workspace,
 )
-from flowmate.bot.handlers.work_items import (
+from flowmate.bot.handlers.work_items.management import (
     ManagementIntentOutcome,
     execute_management_intent,
 )

@@ -15,22 +15,23 @@ from flowmate.bot.handlers.drafts import (
     draft_callback,
     show_draft,
 )
-from flowmate.bot.handlers.navigation import (
+from flowmate.bot.handlers.navigation.lists import (
     followups_command,
     list_callback,
-    menu_callback,
-    menu_command,
     people_command,
     questions_command,
-    record_prompt,
-    search_callback,
-    search_command,
     tasks_command,
     today_command,
     tomorrow_command,
     topics_command,
     waiting_command,
 )
+from flowmate.bot.handlers.navigation.menu import (
+    menu_callback,
+    menu_command,
+    record_prompt,
+)
+from flowmate.bot.handlers.navigation.search import search_callback, search_command
 from flowmate.bot.handlers.notes import notes_command, text_note
 from flowmate.bot.handlers.preferences import (
     quiet_command,
@@ -39,11 +40,9 @@ from flowmate.bot.handlers.preferences import (
 )
 from flowmate.bot.handlers.reminders import digest_callback, reminder_callback
 from flowmate.bot.handlers.voice import voice_message
-from flowmate.bot.handlers.work_items import (
-    action_session_message,
-    work_item_callback,
-    work_item_selection_callback,
-)
+from flowmate.bot.handlers.work_items.callbacks import work_item_callback
+from flowmate.bot.handlers.work_items.selection import work_item_selection_callback
+from flowmate.bot.handlers.work_items.sessions import action_session_message
 from flowmate.bot.handlers.workspaces import (
     workspace_callback,
     workspace_command,

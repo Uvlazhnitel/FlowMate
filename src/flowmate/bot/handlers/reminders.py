@@ -16,11 +16,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.bot.callback_feedback import CallbackFeedback
-from flowmate.bot.handlers.work_items import (
-    send_details,
-    send_item_list,
-    start_input_session,
-)
+from flowmate.bot.handlers.work_items.cards import send_details, send_item_list
+from flowmate.bot.handlers.work_items.editing import start_input_session
 from flowmate.db.drafts import get_active_draft_for_user
 from flowmate.db.models import Reminder
 from flowmate.db.users import get_user_by_telegram_id

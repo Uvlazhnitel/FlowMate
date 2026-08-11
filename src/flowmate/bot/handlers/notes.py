@@ -23,8 +23,8 @@ from flowmate.bot.handlers.drafts import (
     DRAFT_RETRY_MESSAGE,
     analyze_note_content,
 )
-from flowmate.bot.handlers.navigation import execute_search_intent
-from flowmate.bot.handlers.work_items import (
+from flowmate.bot.handlers.navigation.search import execute_search_intent
+from flowmate.bot.handlers.work_items.management import (
     ManagementIntentOutcome,
     execute_management_intent,
 )
