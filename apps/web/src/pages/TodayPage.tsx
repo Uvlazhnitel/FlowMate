@@ -249,12 +249,13 @@ function TodayOverview({
       {focus.length > 0 && (
         <section className="operational-section">
           <SectionHeading title="Главное сейчас" count={focus.length} />
-          <div className="work-list">
+          <div className="work-list work-list--compact-grid">
             {focus.map((item) => (
               <WorkItemCard
                 key={item.id}
                 item={item}
                 dateTimePreferences={dateTimePreferences}
+                compact
                 defaultSnoozeMinutes={defaultSnoozeMinutes}
               />
             ))}
@@ -264,12 +265,13 @@ function TodayOverview({
       {laterItems.length > 0 && (
         <section className="operational-section">
           <SectionHeading title="Позже сегодня" count={laterItems.length} />
-          <div className="work-list">
+          <div className="work-list work-list--compact-grid">
             {laterItems.map((item) => (
               <WorkItemCard
                 key={item.id}
                 item={item}
                 dateTimePreferences={dateTimePreferences}
+                compact
                 defaultSnoozeMinutes={defaultSnoozeMinutes}
               />
             ))}
@@ -322,12 +324,13 @@ function TodaySection({
   return (
     <section className="operational-section today-selected-section">
       <SectionHeading title={label} count={items.length} />
-      <div className="work-list">
+      <div className="work-list work-list--compact-grid">
         {items.map((item) => (
           <WorkItemCard
             key={item.id}
             item={item}
             dateTimePreferences={dateTimePreferences}
+            compact
             defaultSnoozeMinutes={defaultSnoozeMinutes}
           />
         ))}

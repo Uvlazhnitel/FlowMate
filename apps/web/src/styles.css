@@ -1256,6 +1256,10 @@ h2 {
   display: grid;
   gap: 12px;
 }
+.work-list--compact-grid {
+  max-width: 1080px;
+  align-items: start;
+}
 .work-card {
   position: relative;
   isolation: isolate;
@@ -1383,6 +1387,7 @@ h2 {
 .work-card__actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 7px;
   margin-top: 17px;
 }
@@ -1408,6 +1413,53 @@ h2 {
 .card-action--danger {
   margin-left: auto;
   color: #9a351f;
+}
+.card-more {
+  position: relative;
+}
+.card-more summary {
+  list-style: none;
+  cursor: pointer;
+}
+.card-more summary::-webkit-details-marker {
+  display: none;
+}
+.card-more summary[aria-disabled="true"] {
+  cursor: wait;
+  opacity: 0.56;
+}
+.card-more__menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 8;
+  width: min(250px, calc(100vw - 48px));
+  padding: 7px;
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper-strong);
+  box-shadow: var(--shadow);
+}
+.card-more__menu .card-action {
+  width: 100%;
+  min-height: 40px;
+  justify-content: flex-start;
+  border-color: transparent;
+}
+.card-more__menu .card-action:hover:not(:disabled) {
+  background: rgba(23, 63, 58, 0.07);
+}
+.card-more__menu .card-action--danger {
+  margin: 3px 0 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 9px 9px;
+}
+.card-more summary:focus-visible,
+.card-more__menu .card-action:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--coral) 52%, transparent);
+  outline-offset: 2px;
 }
 .inline-error {
   margin: 12px 0 0;
@@ -1622,6 +1674,13 @@ h2 {
 .reschedule-dialog input:disabled {
   cursor: wait;
   opacity: 0.58;
+}
+
+@media (min-width: 1180px) {
+  .work-list--compact-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
 }
 .reschedule-status {
   margin: 12px 0 0;

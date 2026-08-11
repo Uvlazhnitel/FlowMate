@@ -259,6 +259,10 @@ describe("reschedule dialog", () => {
     const user = userEvent.setup();
     renderCard(true);
 
+    expect(screen.getByText(item.title).closest(".work-card")).not.toHaveClass(
+      "work-card--compact",
+    );
+    expect(screen.getByRole("button", { name: "Результат" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Отложить" }));
     await user.click(screen.getByRole("button", { name: "Следующий рабочий день" }));
 

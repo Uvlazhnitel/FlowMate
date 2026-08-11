@@ -5,6 +5,7 @@ import {
   Clock3,
   FilePlus2,
   ListPlus,
+  MoreHorizontal,
   RotateCcw,
   Trash2,
   X,
@@ -40,6 +41,11 @@ const typeLabels: Record<string, string> = {
 const UNDO_WINDOW_MS = 8_000;
 const COMPLETION_ANIMATION_MS = 650;
 const PLANNER_TYPES = new Set(["task", "follow_up", "waiting"]);
+const priorityLabels: Record<string, string> = {
+  urgent: "Срочно",
+  high: "Высокий",
+  low: "Низкий",
+};
 
 type DialogMode = "note" | "result" | "decision" | null;
 
@@ -59,11 +65,13 @@ export function WorkItemCard({
   item,
   dateTimePreferences,
   agenda = false,
+  compact = false,
   defaultSnoozeMinutes = 60,
 }: {
   item: WorkItemCardData;
   dateTimePreferences: DateTimePreferences;
   agenda?: boolean;
+  compact?: boolean;
   defaultSnoozeMinutes?: number;
 }) {
   const queryClient = useQueryClient();
@@ -73,10 +81,12 @@ export function WorkItemCard({
   const [content, setContent] = useState("");
   const [hidden, setHidden] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [undoItem, setUndoItem] = useState<WorkItemCardData | null>(null);
   const [undoError, setUndoError] = useState(false);
   const completionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const moreMenu = useRef<HTMLDetailsElement | null>(null);
 
   useEffect(
     () => () => {
@@ -158,15 +168,23 @@ export function WorkItemCard({
     },
   });
 
+  function closeMoreMenu() {
+    if (moreMenu.current) moreMenu.current.open = false;
+    setMoreOpen(false);
+  }
+
   function act(action: WorkItemAction, extra: Partial<ActionPayload> = {}) {
+    closeMoreMenu();
     mutation.mutate({ action, expected_revision: item.revision, ...extra });
   }
 
   function confirmAction(action: "cancel" | "convert_to_task", message: string) {
+    closeMoreMenu();
     if (window.confirm(message)) act(action);
   }
 
   function openReschedule() {
+    closeMoreMenu();
     mutation.reset();
     setRescheduleStatus(null);
     setRescheduleOpen(true);
@@ -242,10 +260,98 @@ export function WorkItemCard({
       ? "Получено"
       : "Готово";
   const interactionsDisabled = mutation.isPending || completing;
+  const priorityLabel = priorityLabels[item.priority];
+
+  function secondaryActions(inMenu: boolean) {
+    return (
+      <>
+        <button
+          className="card-action"
+          type="button"
+          role={inMenu ? "menuitem" : undefined}
+          disabled={interactionsDisabled}
+          onClick={() => {
+            closeMoreMenu();
+            setDialog(agenda ? "result" : "note");
+          }}
+        >
+          <FilePlus2 size={15} aria-hidden /> {agenda ? "Результат" : "Заметка"}
+        </button>
+        {PLANNER_TYPES.has(item.type) && item.planner_status === "not_required" && (
+          <button
+            className="card-action"
+            type="button"
+            role={inMenu ? "menuitem" : undefined}
+            disabled={interactionsDisabled}
+            onClick={() => act("planner_needs_transfer")}
+          >
+            <ListPlus size={15} aria-hidden /> Добавить в Planner
+          </button>
+        )}
+        {item.reminder && (
+          <button
+            className="card-action"
+            type="button"
+            role={inMenu ? "menuitem" : undefined}
+            disabled={interactionsDisabled}
+            onClick={() =>
+              act("snooze", {
+                duration_minutes: defaultSnoozeMinutes,
+                reminder_id: item.reminder?.id,
+                reminder_revision: item.reminder?.revision,
+              })
+            }
+          >
+            Отложить напоминание
+          </button>
+        )}
+        {agenda && (
+          <>
+            <button
+              className="card-action"
+              type="button"
+              role={inMenu ? "menuitem" : undefined}
+              disabled={interactionsDisabled}
+              onClick={() => {
+                closeMoreMenu();
+                setDialog("decision");
+              }}
+            >
+              Решение
+            </button>
+            <button
+              className="card-action"
+              type="button"
+              role={inMenu ? "menuitem" : undefined}
+              disabled={interactionsDisabled}
+              onClick={() =>
+                confirmAction("convert_to_task", "Преобразовать запись в задачу?")
+              }
+            >
+              В задачу
+            </button>
+          </>
+        )}
+        <button
+          className="card-action card-action--danger"
+          type="button"
+          role={inMenu ? "menuitem" : undefined}
+          aria-label="Отменить запись"
+          disabled={interactionsDisabled}
+          onClick={() =>
+            confirmAction("cancel", "Отменить запись? Она останется в истории.")
+          }
+        >
+          <Trash2 size={15} aria-hidden />
+          {inMenu && <span>Отменить запись</span>}
+        </button>
+      </>
+    );
+  }
 
   return (
     <article
-      className={`work-card ${item.overdue ? "work-card--overdue" : ""} ${completing ? "work-card--completing" : ""}`}
+      className={`work-card ${compact ? "work-card--compact" : ""} ${item.overdue ? "work-card--overdue" : ""} ${completing ? "work-card--completing" : ""}`}
       aria-busy={interactionsDisabled}
     >
       {completing && (
@@ -258,7 +364,9 @@ export function WorkItemCard({
       )}
       <div className="work-card__topline">
         <StatusBadge item={item} />
-        <span className={`priority priority--${item.priority}`}>{item.priority}</span>
+        {priorityLabel && (
+          <span className={`priority priority--${item.priority}`}>{priorityLabel}</span>
+        )}
       </div>
       <h3>{item.title}</h3>
       {item.description && <p className="work-card__description">{item.description}</p>}
@@ -289,73 +397,31 @@ export function WorkItemCard({
         >
           <Clock3 size={15} aria-hidden /> {agenda ? "Отложить" : "Перенести"}
         </button>
-        <button
-          className="card-action"
-          type="button"
-          disabled={interactionsDisabled}
-          onClick={() => setDialog(agenda ? "result" : "note")}
-        >
-          <FilePlus2 size={15} aria-hidden /> {agenda ? "Результат" : "Заметка"}
-        </button>
-        {PLANNER_TYPES.has(item.type) && item.planner_status === "not_required" && (
-          <button
-            className="card-action"
-            type="button"
-            disabled={interactionsDisabled}
-            onClick={() => act("planner_needs_transfer")}
-          >
-            <ListPlus size={15} aria-hidden /> Добавить в Planner
-          </button>
-        )}
-        {item.reminder && (
-          <button
-            className="card-action"
-            type="button"
-            disabled={interactionsDisabled}
-            onClick={() =>
-              act("snooze", {
-                duration_minutes: defaultSnoozeMinutes,
-                reminder_id: item.reminder?.id,
-                reminder_revision: item.reminder?.revision,
-              })
-            }
-          >
-            Отложить напоминание
-          </button>
-        )}
-        {agenda && (
-          <>
-            <button
+        {compact ? (
+          <details className="card-more" ref={moreMenu} open={moreOpen}>
+            <summary
               className="card-action"
-              type="button"
-              disabled={interactionsDisabled}
-              onClick={() => setDialog("decision")}
+              role="button"
+              aria-label="Ещё действия"
+              aria-expanded={moreOpen}
+              aria-disabled={interactionsDisabled}
+              onClick={(event) => {
+                event.preventDefault();
+                if (interactionsDisabled) return;
+                const nextOpen = !moreOpen;
+                if (moreMenu.current) moreMenu.current.open = nextOpen;
+                setMoreOpen(nextOpen);
+              }}
             >
-              Решение
-            </button>
-            <button
-              className="card-action"
-              type="button"
-              disabled={interactionsDisabled}
-              onClick={() =>
-                confirmAction("convert_to_task", "Преобразовать запись в задачу?")
-              }
-            >
-              В задачу
-            </button>
-          </>
+              <MoreHorizontal size={16} aria-hidden /> Ещё
+            </summary>
+            <div className="card-more__menu" role="menu" hidden={!moreOpen}>
+              {secondaryActions(true)}
+            </div>
+          </details>
+        ) : (
+          secondaryActions(false)
         )}
-        <button
-          className="card-action card-action--danger"
-          type="button"
-          aria-label="Отменить запись"
-          disabled={interactionsDisabled}
-          onClick={() =>
-            confirmAction("cancel", "Отменить запись? Она останется в истории.")
-          }
-        >
-          <Trash2 size={15} aria-hidden />
-        </button>
       </div>
       {rescheduleStatus && (
         <p className="reschedule-status" role="status">

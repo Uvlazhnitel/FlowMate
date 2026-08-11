@@ -135,7 +135,10 @@ describe("operational screens", () => {
     const user = userEvent.setup();
     renderApplication("/today?section=overdue");
 
-    await user.click(await screen.findByRole("button", { name: "Отменить запись" }));
+    const card = (await screen.findByText("Подготовить запуск")).closest(".work-card");
+    const compactCard = within(card as HTMLElement);
+    await user.click(compactCard.getByRole("button", { name: "Ещё действия" }));
+    await user.click(compactCard.getByRole("menuitem", { name: "Отменить запись" }));
 
     expect(confirm).toHaveBeenCalledWith("Отменить запись? Она останется в истории.");
     expect(
@@ -168,11 +171,15 @@ describe("operational screens", () => {
     const user = userEvent.setup();
     renderApplication("/today?section=overdue");
 
-    const addButton = await screen.findByRole("button", {
+    const card = (await screen.findByText("Подготовить запуск")).closest(".work-card");
+    const compactCard = within(card as HTMLElement);
+    const moreButton = compactCard.getByRole("button", { name: "Ещё действия" });
+    await user.click(moreButton);
+    const addButton = compactCard.getByRole("menuitem", {
       name: "Добавить в Planner",
     });
     await user.click(addButton);
-    expect(addButton).toBeDisabled();
+    expect(moreButton).toHaveAttribute("aria-disabled", "true");
     expect(actionPayload).toMatchObject({
       action: "planner_needs_transfer",
       expected_revision: 1,
@@ -185,11 +192,72 @@ describe("operational screens", () => {
         work_item: { ...workItem, planner_status: plannerStatus, revision: 2 },
       }),
     );
+    await waitFor(() => expect(moreButton).toHaveAttribute("aria-disabled", "false"));
+    await user.click(moreButton);
+    expect(
+      compactCard.queryByRole("menuitem", { name: "Добавить в Planner" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps note and reminder payloads in the compact actions menu", async () => {
+    const reminderItem: WorkItemCardData = {
+      ...workItem,
+      description:
+        "Длинное описание остаётся полностью доступным и не обрезается в компактной карточке.",
+      reminder: {
+        id: "a61200a7-f193-4a48-9411-86f76462fd96",
+        effective_at: "2026-07-21T08:30:00Z",
+        revision: 4,
+      },
+    };
+    const actionPayloads: Record<string, unknown>[] = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/actions")) {
+        actionPayloads.push(JSON.parse(requestBody(init)) as Record<string, unknown>);
+        return Promise.resolve(
+          jsonResponse({
+            changed: true,
+            work_item: { ...reminderItem, revision: 2 },
+          }),
+        );
+      }
+      if (path.includes("/today/overview")) return Promise.resolve(overview());
+      if (path.includes("section=overdue")) return Promise.resolve(page([reminderItem]));
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApplication("/today?section=overdue");
+
+    const card = (await screen.findByText("Подготовить запуск")).closest(".work-card");
+    const compactCard = within(card as HTMLElement);
+    await user.click(compactCard.getByRole("button", { name: "Ещё действия" }));
+    await user.click(compactCard.getByRole("menuitem", { name: "Заметка" }));
+    await user.type(screen.getByRole("textbox", { name: "Текст" }), "Контекст запуска");
+    await user.click(screen.getByRole("button", { name: "Сохранить" }));
     await waitFor(() =>
-      expect(
-        screen.queryByRole("button", { name: "Добавить в Planner" }),
-      ).not.toBeInTheDocument(),
+      expect(actionPayloads[0]).toMatchObject({
+        action: "add_note",
+        content: "Контекст запуска",
+        expected_revision: 1,
+      }),
     );
+
+    await user.click(compactCard.getByRole("button", { name: "Ещё действия" }));
+    await user.click(compactCard.getByRole("menuitem", { name: "Отложить напоминание" }));
+    await waitFor(() =>
+      expect(actionPayloads[1]).toMatchObject({
+        action: "snooze",
+        duration_minutes: 60,
+        reminder_id: reminderItem.reminder?.id,
+        reminder_revision: 4,
+        expected_revision: 1,
+      }),
+    );
+    expect(compactCard.getByText(reminderItem.description as string)).toBeVisible();
   });
 
   it("refreshes operational data after the Undo window expires", async () => {
@@ -395,6 +463,9 @@ describe("operational screens", () => {
     renderApplication(`/topics/${workItem.topic_id}`);
 
     expect(await screen.findByText("Подготовить запуск")).toBeVisible();
+    expect(screen.getByText("Подготовить запуск").closest(".work-card")).not.toHaveClass(
+      "work-card--compact",
+    );
     await user.click(screen.getByRole("button", { name: "Показать ещё" }));
     expect(await screen.findByText("Второй шаг")).toBeVisible();
 

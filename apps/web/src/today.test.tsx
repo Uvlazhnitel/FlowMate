@@ -113,6 +113,27 @@ describe("Today home", () => {
     expect(summary.getByRole("link", { name: /На сегодня/ })).toBeVisible();
     expect(screen.getAllByText("Главная задача")).toHaveLength(1);
     expect(screen.getByText("Задача на вечер")).toBeVisible();
+    const focusCard = screen.getByText("Главная задача").closest(".work-card");
+    const laterCard = screen.getByText("Задача на вечер").closest(".work-card");
+    expect(focusCard).toHaveClass("work-card--compact");
+    expect(focusCard?.closest(".work-list")).toHaveClass("work-list--compact-grid");
+    expect(laterCard).toHaveClass("work-card--compact");
+    expect(within(focusCard as HTMLElement).getByText("Срочно")).toBeVisible();
+    expect(within(laterCard as HTMLElement).queryByText("normal")).toBeNull();
+    expect(
+      within(focusCard as HTMLElement).getByRole("button", { name: "Готово" }),
+    ).toBeVisible();
+    expect(
+      within(focusCard as HTMLElement).getByRole("button", { name: "Перенести" }),
+    ).toBeVisible();
+    expect(
+      within(focusCard as HTMLElement).getByRole("button", {
+        name: "Ещё действия",
+      }),
+    ).toBeVisible();
+    expect(
+      within(focusCard as HTMLElement).queryByRole("menuitem", { name: "Заметка" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: "Показать все задачи на сегодня" }),
     ).toBeVisible();

@@ -90,12 +90,13 @@ function TomorrowList({
   return (
     <section className="operational-section tomorrow-list">
       <SectionHeading title="Все записи" count={items.length} />
-      <div className="work-list">
+      <div className="work-list work-list--compact-grid">
         {items.map((item) => (
           <WorkItemCard
             key={item.id}
             item={item}
             dateTimePreferences={dateTimePreferences}
+            compact
             defaultSnoozeMinutes={defaultSnoozeMinutes}
           />
         ))}

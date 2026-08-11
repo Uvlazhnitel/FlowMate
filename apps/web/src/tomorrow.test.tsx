@@ -68,6 +68,10 @@ describe("Tomorrow page", () => {
 
     expect(await screen.findByRole("heading", { name: "Завтра" })).toBeVisible();
     expect(await screen.findByText("Подготовить завтрашний отчёт")).toBeVisible();
+    const card = screen.getByText("Подготовить завтрашний отчёт").closest(".work-card");
+    expect(card).toHaveClass("work-card--compact");
+    expect(card?.closest(".work-list")).toHaveClass("work-list--compact-grid");
+    expect(screen.getByText("Высокий")).toBeVisible();
     expect(screen.getByRole("link", { name: "Вернуться к сегодня" })).toHaveAttribute(
       "href",
       "/today",
