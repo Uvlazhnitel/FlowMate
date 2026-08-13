@@ -10,9 +10,12 @@ from flowmate.ai.analysis import (
     apply_itemization_policy,
     build_analysis_result,
     explicit_task_segments,
+    multiple_itemization_is_accepted,
+    propagate_shared_leading_due_date,
 )
 from flowmate.ai.errors import AIInvalidResponseError, AITimeoutError
 from flowmate.ai.prompt import (
+    build_consolidation_repair_prompt,
     build_itemization_repair_prompt,
     build_refinement_prompt,
     build_system_prompt,
@@ -241,6 +244,7 @@ class DraftParsingService:
         source: DraftSource,
         context: DraftInputContext | None = None,
         active_workspace: str | None = None,
+        reference_datetime: datetime | None = None,
     ) -> DraftAnalysisResult:
         normalized = user_text.strip()
         if not normalized:
@@ -249,6 +253,7 @@ class DraftParsingService:
         parse_context = context or self._build_context(
             source,
             active_workspace=active_workspace,
+            reference_datetime=reference_datetime,
         )
         segments = explicit_task_segments(normalized)
         return await self._parse_with_prompt(
@@ -339,18 +344,14 @@ class DraftParsingService:
             return parsed.search
         if parsed.draft is None:
             raise AIInvalidResponseError("draft payload is missing")
-        parsed_draft = await self._repair_explicit_itemization(
+        draft = await self._normalize_itemization(
             parsed.draft,
             user_text=normalized,
             context=context,
             explicit_segments=segments,
         )
-        draft = apply_itemization_policy(
-            parsed_draft,
-            source_text=normalized,
-            split_threshold=self._split_confidence_threshold,
-        )
         draft = apply_item_type_policy(draft, source_text=normalized)
+        draft = propagate_shared_leading_due_date(draft, source_text=normalized)
         return build_analysis_result(
             draft,
             context=context,
@@ -364,9 +365,14 @@ class DraftParsingService:
         source: DraftSource,
         *,
         active_workspace: str | None = None,
+        reference_datetime: datetime | None = None,
     ) -> DraftInputContext:
         return DraftInputContext(
-            current_datetime=self._clock(self._timezone),
+            current_datetime=(
+                reference_datetime.astimezone(self._timezone)
+                if reference_datetime is not None
+                else self._clock(self._timezone)
+            ),
             timezone=self._timezone.key,
             active_workspace=active_workspace or self._active_workspace,
             channel="telegram",
@@ -392,18 +398,14 @@ class DraftParsingService:
 
         if not isinstance(parsed, DraftParseResult):
             raise AIInvalidResponseError("AI provider returned an invalid draft")
-        parsed = await self._repair_explicit_itemization(
+        parsed = await self._normalize_itemization(
             parsed,
             user_text=user_text,
             context=context,
             explicit_segments=explicit_segments,
         )
-        parsed = apply_itemization_policy(
-            parsed,
-            source_text=user_text,
-            split_threshold=self._split_confidence_threshold,
-        )
         parsed = apply_item_type_policy(parsed, source_text=user_text)
+        parsed = propagate_shared_leading_due_date(parsed, source_text=user_text)
         return build_analysis_result(
             parsed,
             context=context,
@@ -411,6 +413,68 @@ class DraftParsingService:
             clarification_threshold=self._clarification_confidence_threshold,
             preserve_explicit_items=bool(explicit_segments),
         )
+
+    async def _normalize_itemization(
+        self,
+        parsed: DraftParseResult,
+        *,
+        user_text: str,
+        context: DraftInputContext,
+        explicit_segments: tuple[str, ...],
+    ) -> DraftParseResult:
+        parsed = await self._repair_explicit_itemization(
+            parsed,
+            user_text=user_text,
+            context=context,
+            explicit_segments=explicit_segments,
+        )
+        if (
+            parsed.consolidated_item is None
+            and not multiple_itemization_is_accepted(
+                parsed,
+                source_text=user_text,
+                split_threshold=self._split_confidence_threshold,
+            )
+            and len(parsed.draft_items) > 1
+        ):
+            parsed = await self._repair_missing_consolidation(
+                user_text=user_text,
+                context=context,
+            )
+        return apply_itemization_policy(
+            parsed,
+            source_text=user_text,
+            split_threshold=self._split_confidence_threshold,
+        )
+
+    async def _repair_missing_consolidation(
+        self,
+        *,
+        user_text: str,
+        context: DraftInputContext,
+    ) -> DraftParseResult:
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                repaired = await self._provider.parse(
+                    system_prompt=build_consolidation_repair_prompt(context),
+                    user_text=user_text,
+                )
+        except TimeoutError as error:
+            raise AITimeoutError(
+                "AI consolidation repair timed out",
+                safe_code="ai_consolidation_timeout",
+            ) from error
+        if (
+            not isinstance(repaired, DraftParseResult)
+            or len(repaired.draft_items) != 1
+            or repaired.itemization_decision.value != "single"
+            or repaired.consolidated_item is not None
+        ):
+            raise AIInvalidResponseError(
+                "AI consolidation repair did not return one item",
+                safe_code="ai_consolidation_invalid",
+            )
+        return repaired
 
     async def _repair_explicit_itemization(
         self,
@@ -440,6 +504,7 @@ class DraftParsingService:
             or repaired.itemization_decision.value != "multiple"
         ):
             raise AIInvalidResponseError(
-                "AI itemization repair did not match explicit boundaries"
+                "AI itemization repair did not match explicit boundaries",
+                safe_code="ai_itemization_invalid",
             )
         return repaired

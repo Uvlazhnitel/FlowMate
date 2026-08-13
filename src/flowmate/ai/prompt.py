@@ -66,14 +66,21 @@ or genuinely independent outcomes. For example,
 "{INDEPENDENT_OUTCOMES_EXAMPLE}" is two tasks. When uncertain, return one item.
 
 Set itemization_decision, itemization_basis, and itemization_confidence for this
-choice. A multiple result must also include consolidated_item containing a safe
-single-item interpretation of the complete message. A single result must set
-consolidated_item=null. Prefixes "одна задача", "одним пунктом", and "не
+choice. A multiple result should include consolidated_item when the split is
+uncertain or below 0.90 confidence; confident independent or explicit items may
+set it to null. A single result must set consolidated_item=null. Prefixes "одна
+задача", "одним пунктом", and "не
 разделяй" force one item. Prefixes "две задачи" and "несколько задач" request
 multiple items. Phrases such as "ещё одна задача", "другая задача", "следующая
 задача", and numbered tasks are explicit boundaries. Phrases such as "это
 разные задачи" and "раздели на отдельные задачи" request rebuilding the whole
 draft as multiple items. Do not include control or boundary words in titles.
+
+Words such as "затем", "потом", and "после этого" indicate ordering, not an
+automatic split. Return multiple items when the clauses have independently
+completable outcomes; keep one item when they are steps toward one deliverable.
+When a leading date scopes a multi-item sequence, apply it to every item that
+does not state its own date.
 
 Extract Russian and English names, roles, topic candidates, supporting notes,
 and dependencies.
@@ -123,6 +130,16 @@ def build_itemization_repair_prompt(
 The previous structured result did not match the explicit segment count. This
 is the only repair attempt. Return exactly {len(explicit_segments)} items in the
 original order. Do not merge segments and do not invent additional items.
+"""
+
+
+def build_consolidation_repair_prompt(context: DraftInputContext) -> str:
+    return f"""{build_system_prompt(context)}
+
+The previous structured result proposed a low-confidence split but omitted its
+single-item fallback. This is the only consolidation repair attempt. Return a
+single result with exactly one draft item covering the complete message. Set
+itemization_decision=single and consolidated_item=null. Do not invent details.
 """
 
 
@@ -202,12 +219,17 @@ for one deliverable together. Split only explicit lists, separate sentences
 with separate results, or genuinely independent outcomes. When uncertain,
 return one item. "{SINGLE_GOAL_EXAMPLE}" is one task;
 "{INDEPENDENT_OUTCOMES_EXAMPLE}" is two. Return itemization decision, basis,
-confidence, and a consolidated fallback for every multiple result. Respect
+confidence, and a consolidated fallback for an uncertain or below-0.90 multiple
+result. A confident independent or explicit multiple may use null. Respect
 "одна задача"/"одним пунктом"/"не разделяй" and
 "две задачи"/"несколько задач" prefixes. Treat "ещё одна задача", "другая
 задача", "следующая задача", and numbered tasks as explicit boundaries. Treat
 "это разные задачи" and "раздели на отдельные задачи" as a request to rebuild
 the complete draft, not only one current item.
+Treat "затем", "потом", and "после этого" as ordering rather than automatic
+boundaries: split independent outcomes, but keep steps for one deliverable
+together. A leading date on a multi-item sequence applies to every item without
+its own date.
 Classify an explicit planned contact, repeated contact, call, or response/status
 check as follow_up. A deliverable prepared for another person remains task, and
 "напомнить мне сделать..." is not follow_up merely because it requests a

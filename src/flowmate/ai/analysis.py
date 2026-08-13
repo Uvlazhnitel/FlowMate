@@ -48,6 +48,10 @@ MULTIPLE_ITEM_BASES = {
     ItemizationBasis.SEPARATE_SENTENCES,
     ItemizationBasis.INDEPENDENT_OUTCOMES,
 }
+SEQUENCE_CONNECTOR = re.compile(
+    r"\b(?:затем|потом|после\s+этого)\b",
+    re.IGNORECASE,
+)
 EXPLICIT_FOLLOW_UP = re.compile(
     r"(?:"
     r"\bfollow[\s-]?up\b|"
@@ -152,18 +156,16 @@ def apply_itemization_policy(
         return result
 
     explicit = explicit_itemization_decision(source_text)
-    if explicit is None and explicit_task_segments(source_text):
-        explicit = ItemizationDecision.MULTIPLE
-    keep_multiple = explicit is ItemizationDecision.MULTIPLE or (
-        explicit is not ItemizationDecision.SINGLE
-        and result.itemization_basis in MULTIPLE_ITEM_BASES
-        and result.itemization_confidence >= split_threshold
+    keep_multiple = multiple_itemization_is_accepted(
+        result,
+        source_text=source_text,
+        split_threshold=split_threshold,
     )
     if keep_multiple:
         return result
 
     fallback = result.consolidated_item
-    if fallback is None:  # Protected by DraftParseResult validation.
+    if fallback is None:
         raise ValueError("multiple itemization has no consolidated fallback")
     return result.model_copy(
         update={
@@ -177,6 +179,59 @@ def apply_itemization_policy(
             ),
             "consolidated_item": None,
         }
+    )
+
+
+def multiple_itemization_is_accepted(
+    result: DraftParseResult,
+    *,
+    source_text: str,
+    split_threshold: float,
+) -> bool:
+    if result.itemization_decision is ItemizationDecision.SINGLE:
+        return False
+    explicit = explicit_itemization_decision(source_text)
+    if explicit is None and explicit_task_segments(source_text):
+        explicit = ItemizationDecision.MULTIPLE
+    return explicit is ItemizationDecision.MULTIPLE or (
+        explicit is not ItemizationDecision.SINGLE
+        and result.itemization_basis in MULTIPLE_ITEM_BASES
+        and result.itemization_confidence >= split_threshold
+    )
+
+
+def propagate_shared_leading_due_date(
+    result: DraftParseResult,
+    *,
+    source_text: str,
+) -> DraftParseResult:
+    """Apply a leading due phrase to each undated item in a sequence."""
+    if len(result.draft_items) < 2 or not SEQUENCE_CONNECTOR.search(source_text):
+        return result
+    first_due = result.draft_items[0].due_date_candidate
+    if (
+        first_due is None
+        or first_due.status is not TemporalStatus.RESOLVED
+        or not _starts_with_temporal_phrase(source_text, first_due.original_phrase)
+    ):
+        return result
+
+    items = [
+        item.model_copy(update={"due_date_candidate": first_due})
+        if item.due_date_candidate is None
+        else item
+        for item in result.draft_items
+    ]
+    return result.model_copy(update={"draft_items": items})
+
+
+def _starts_with_temporal_phrase(source_text: str, phrase: str) -> bool:
+    source = " ".join(source_text.split()).casefold()
+    candidate = " ".join(phrase.split()).casefold()
+    if not candidate or not source.startswith(candidate):
+        return False
+    return (
+        len(source) == len(candidate) or source[len(candidate)] in " ,.;:-–—"  # noqa: RUF001
     )
 
 

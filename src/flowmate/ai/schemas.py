@@ -212,10 +212,8 @@ class DraftParseResult(StrictDraftModel):
         if self.itemization_decision is ItemizationDecision.SINGLE:
             if item_count != 1 or self.consolidated_item is not None:
                 raise ValueError("single itemization requires exactly one item")
-        elif item_count < 2 or self.consolidated_item is None:
-            raise ValueError(
-                "multiple itemization requires items and a consolidated fallback"
-            )
+        elif item_count < 2:
+            raise ValueError("multiple itemization requires at least two items")
         for item_number, item in enumerate(self.draft_items, start=1):
             for dependency in item.dependencies:
                 target = dependency.target_item_number

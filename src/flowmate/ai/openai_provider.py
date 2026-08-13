@@ -79,13 +79,19 @@ class OpenAIAIProvider:
                 timeout=float(self._timeout_seconds),
             )
         except ValidationError as error:
-            raise AIInvalidResponseError("AI response failed validation") from error
+            raise AIInvalidResponseError(
+                "AI response failed validation",
+                safe_code="ai_response_validation",
+            ) from error
         except OpenAIError as error:
             raise AIProviderError("AI provider request failed") from error
 
         parsed = response.output_parsed
         if not isinstance(parsed, response_type):
-            raise AIInvalidResponseError("AI provider returned no structured result")
+            raise AIInvalidResponseError(
+                "AI provider returned no structured result",
+                safe_code="ai_response_missing",
+            )
         return parsed
 
     async def close(self) -> None:

@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from flowmate.ai.errors import safe_ai_error_code
 from flowmate.ai.schemas import (
     DraftAnalysisResult,
     DraftItemType,
@@ -96,14 +97,14 @@ class AIRecoveryProcessor:
                     await fail_ai_job(
                         session,
                         claim,
-                        error_code=type(error).__name__.lower()[:64],
+                        error_code=safe_ai_error_code(error),
                         max_attempts=self._max_attempts,
                         retry_delay=timedelta(minutes=1),
                     )
                 logger.warning(
                     "ai_recovery_failed job_id=%s category=%s",
                     claim.id,
-                    type(error).__name__,
+                    safe_ai_error_code(error),
                 )
 
     async def _process_claim(self, claim: ClaimedAIJob) -> None:
@@ -166,6 +167,7 @@ class AIRecoveryProcessor:
             note.content,
             source=source,
             active_workspace=draft.workspace,
+            reference_datetime=note.created_at,
         )
         await replace_draft_analysis(
             session,

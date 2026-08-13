@@ -8,6 +8,7 @@ from flowmate.ai.analysis import (
     build_analysis_result,
     explicit_itemization_decision,
     explicit_task_segments,
+    propagate_shared_leading_due_date,
 )
 from flowmate.ai.schemas import (
     DependencyCandidate,
@@ -237,6 +238,103 @@ def test_high_confidence_independent_outcomes_remain_multiple() -> None:
 
     assert normalized.itemization_decision is ItemizationDecision.MULTIPLE
     assert len(normalized.draft_items) == 2
+
+
+def test_confident_multiple_does_not_require_consolidated_fallback() -> None:
+    result = make_parse_result(
+        [
+            make_draft_item(title="Добавить людей в OrgChart"),
+            make_draft_item(title="Сделать CDP refresher"),
+            make_draft_item(title="Добавить людей в forecast"),
+        ],
+        itemization_basis=ItemizationBasis.INDEPENDENT_OUTCOMES,
+        itemization_confidence=0.90,
+        consolidated_item=None,
+    )
+
+    normalized = apply_itemization_policy(
+        result,
+        source_text="Добавить людей, затем обновить CDP, затем forecast",
+        split_threshold=0.90,
+    )
+
+    assert normalized.itemization_decision is ItemizationDecision.MULTIPLE
+    assert len(normalized.draft_items) == 3
+    assert normalized.consolidated_item is None
+
+
+def test_leading_due_date_is_shared_by_sequence_items_without_own_date() -> None:
+    tomorrow = make_temporal_candidate(
+        original_phrase="Завтра",
+        normalized_value=datetime.fromisoformat("2026-08-14T00:00:00+03:00"),
+        time_was_explicit=False,
+    )
+    later = make_temporal_candidate(
+        original_phrase="в субботу",
+        normalized_value=datetime.fromisoformat("2026-08-15T00:00:00+03:00"),
+        time_was_explicit=False,
+    )
+    result = make_parse_result(
+        [
+            make_draft_item(title="Первое", due_date_candidate=tomorrow),
+            make_draft_item(title="Второе"),
+            make_draft_item(title="Третье", due_date_candidate=later),
+        ]
+    )
+
+    normalized = propagate_shared_leading_due_date(
+        result,
+        source_text="Завтра сделать первое, затем второе, потом третье в субботу",
+    )
+
+    assert normalized.draft_items[1].due_date_candidate == tomorrow
+    assert normalized.draft_items[2].due_date_candidate == later
+
+
+def test_shared_due_date_requires_resolved_leading_phrase_and_sequence() -> None:
+    ambiguous = make_temporal_candidate(
+        original_phrase="после обеда",
+        normalized_value=None,
+        status=TemporalStatus.AMBIGUOUS,
+        explanation="Неясное время",
+        time_was_explicit=False,
+    )
+    result = make_parse_result(
+        [
+            make_draft_item(title="Первое", due_date_candidate=ambiguous),
+            make_draft_item(title="Второе"),
+        ]
+    )
+
+    assert (
+        propagate_shared_leading_due_date(
+            result,
+            source_text="После обеда сделать первое, затем второе",
+        )
+        .draft_items[1]
+        .due_date_candidate
+        is None
+    )
+    resolved = make_temporal_candidate(
+        original_phrase="завтра",
+        normalized_value=datetime.fromisoformat("2026-08-14T00:00:00+03:00"),
+        time_was_explicit=False,
+    )
+    without_leading_date = make_parse_result(
+        [
+            make_draft_item(title="Первое", due_date_candidate=resolved),
+            make_draft_item(title="Второе"),
+        ]
+    )
+    assert (
+        propagate_shared_leading_due_date(
+            without_leading_date,
+            source_text="Сделать первое завтра, затем второе",
+        )
+        .draft_items[1]
+        .due_date_candidate
+        is None
+    )
 
 
 def test_explicit_single_directive_overrides_confident_split() -> None:

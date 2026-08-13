@@ -213,13 +213,23 @@ def test_itemization_metadata_must_match_returned_items() -> None:
             )
         )
 
-    with pytest.raises(ValidationError, match="consolidated fallback"):
+    without_fallback = DraftParseResult.model_validate(
+        result_payload(
+            draft_items=[
+                item_payload(title="First"),
+                item_payload(title="Second"),
+            ],
+            itemization_decision=ItemizationDecision.MULTIPLE,
+            itemization_basis=ItemizationBasis.INDEPENDENT_OUTCOMES,
+            consolidated_item=None,
+        )
+    )
+    assert without_fallback.consolidated_item is None
+
+    with pytest.raises(ValidationError, match="at least two items"):
         DraftParseResult.model_validate(
             result_payload(
-                draft_items=[
-                    item_payload(title="First"),
-                    item_payload(title="Second"),
-                ],
+                draft_items=[item_payload(title="Only item")],
                 itemization_decision=ItemizationDecision.MULTIPLE,
                 itemization_basis=ItemizationBasis.INDEPENDENT_OUTCOMES,
                 consolidated_item=None,

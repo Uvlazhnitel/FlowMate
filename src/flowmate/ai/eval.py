@@ -9,6 +9,7 @@ from flowmate.ai.analysis import (
     apply_item_type_policy,
     apply_itemization_policy,
     build_analysis_result,
+    propagate_shared_leading_due_date,
 )
 from flowmate.ai.prompt import build_system_prompt, build_text_routing_prompt
 from flowmate.ai.prompt_versions import PROMPT_VERSIONS
@@ -60,6 +61,10 @@ def run_evaluation() -> tuple[int, int]:
             split_threshold=0.90,
         )
         parsed = apply_item_type_policy(parsed, source_text=case["input"])
+        parsed = propagate_shared_leading_due_date(
+            parsed,
+            source_text=case["input"],
+        )
         actual_types = [item.type.value for item in parsed.draft_items]
         if actual_types != case["expected_types"]:
             failures.append(f"{case['id']}: types")
@@ -93,6 +98,16 @@ def run_evaluation() -> tuple[int, int]:
             failures.append(f"{case['id']}: due")
         if actual_reminder != case["expected_reminder"]:
             failures.append(f"{case['id']}: reminder")
+        if "expected_dues" in case:
+            actual_dues = [
+                item.due_date_candidate.normalized_value.isoformat()
+                if item.due_date_candidate is not None
+                and item.due_date_candidate.normalized_value is not None
+                else None
+                for item in parsed.draft_items
+            ]
+            if actual_dues != case["expected_dues"]:
+                failures.append(f"{case['id']}: shared dues")
         if "expected_readiness" in case or "expected_description" in case:
             evaluation_context = DraftInputContext(
                 current_datetime=datetime(

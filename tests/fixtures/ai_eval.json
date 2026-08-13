@@ -593,6 +593,100 @@
     "expected_reminder": null
   },
   {
+    "id": "sequential_tasks_without_consolidated_fallback",
+    "input": "Завтра добавить сотрудников в OrgChart, затем сделать CDP refresher, затем добавить сотрудников в forecast",
+    "recorded_output": {
+      "overall_intent": "task",
+      "draft_items": [
+        {
+          "type": "task",
+          "title": "Добавить сотрудников в OrgChart",
+          "description": null,
+          "person_candidates": [],
+          "topic_candidates": ["OrgChart"],
+          "due_date_candidate": {
+            "original_phrase": "Завтра",
+            "normalized_value": "2026-08-14T23:59:59+03:00",
+            "status": "resolved",
+            "explanation": null,
+            "time_was_explicit": false
+          },
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [],
+          "confidence": 0.94
+        },
+        {
+          "type": "task",
+          "title": "Сделать CDP refresher",
+          "description": null,
+          "person_candidates": [],
+          "topic_candidates": ["CDP"],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [
+            {
+              "relation": "after",
+              "original_phrase": "затем",
+              "target_item_number": 1,
+              "condition": null
+            }
+          ],
+          "confidence": 0.93
+        },
+        {
+          "type": "task",
+          "title": "Добавить сотрудников в forecast",
+          "description": null,
+          "person_candidates": [],
+          "topic_candidates": ["forecast"],
+          "due_date_candidate": null,
+          "reminder_candidate": null,
+          "notes": [],
+          "missing_fields": [],
+          "ambiguities": [],
+          "dependencies": [
+            {
+              "relation": "after",
+              "original_phrase": "затем",
+              "target_item_number": 2,
+              "condition": null
+            }
+          ],
+          "confidence": 0.92
+        }
+      ],
+      "itemization_decision": "multiple",
+      "itemization_basis": "independent_outcomes",
+      "itemization_confidence": 0.9,
+      "consolidated_item": null,
+      "ambiguities": [],
+      "confidence": 0.92,
+      "workspace_candidate": "work",
+      "workspace_confidence": 0.99
+    },
+    "expected_types": ["task", "task", "task"],
+    "expected_titles": [
+      "Добавить сотрудников в OrgChart",
+      "Сделать CDP refresher",
+      "Добавить сотрудников в forecast"
+    ],
+    "expected_item_count": 3,
+    "expected_terms": ["OrgChart", "CDP refresher", "forecast"],
+    "expected_due": "2026-08-14T23:59:59+03:00",
+    "expected_dues": [
+      "2026-08-14T23:59:59+03:00",
+      "2026-08-14T23:59:59+03:00",
+      "2026-08-14T23:59:59+03:00"
+    ],
+    "expected_reminder": null
+  },
+  {
     "kind": "invalid_provider_output",
     "id": "provider_empty_items",
     "recorded_output": {

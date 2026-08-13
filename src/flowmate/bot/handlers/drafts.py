@@ -15,7 +15,7 @@ from aiogram.types import (
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from flowmate.ai.errors import AIError
+from flowmate.ai.errors import AIError, safe_ai_error_code
 from flowmate.ai.prompt_versions import REFINEMENT_PROMPT_VERSION
 from flowmate.ai.schemas import (
     DraftAnalysisResult,
@@ -523,7 +523,7 @@ async def analyze_note_content(
         logger.warning(
             "telegram_draft_failed user_id=%s category=%s",
             telegram_user_id,
-            type(error).__name__,
+            safe_ai_error_code(error),
         )
         await message.answer(failure_message)
         return
@@ -652,7 +652,7 @@ async def refine_draft(
         logger.warning(
             "telegram_draft_refinement_failed user_id=%s category=%s",
             telegram_user_id,
-            type(error).__name__,
+            safe_ai_error_code(error),
         )
         await message.answer(DRAFT_FAILED_MESSAGE)
         return

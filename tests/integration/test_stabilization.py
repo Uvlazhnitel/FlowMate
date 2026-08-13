@@ -7,6 +7,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from flowmate.ai.schemas import DraftSource
 from flowmate.ai.service import DraftParsingService
 from flowmate.db.drafts import create_parsing_draft
 from flowmate.db.models import AIProcessingJob, AuditEvent, Note, WorkItem
@@ -181,7 +182,12 @@ async def test_recovered_ready_capture_is_converted_once(
         )
         == 1
     )
-    cast(AsyncMock, parsing_service.parse).assert_awaited_once()
+    cast(AsyncMock, parsing_service.parse).assert_awaited_once_with(
+        note.content,
+        source=DraftSource.TEXT,
+        active_workspace=draft.workspace,
+        reference_datetime=note.created_at,
+    )
 
 
 @pytest.mark.integration

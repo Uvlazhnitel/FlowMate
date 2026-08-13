@@ -9,7 +9,7 @@ from aiogram.types import Message, Update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from flowmate.ai.errors import AIError
+from flowmate.ai.errors import AIError, safe_ai_error_code
 from flowmate.ai.schemas import (
     DraftAnalysisResult,
     DraftSource,
@@ -173,7 +173,7 @@ async def voice_message(
             logger.warning(
                 "telegram_voice_routing_failed user_id=%s category=%s",
                 telegram_user.id,
-                type(error).__name__,
+                safe_ai_error_code(error),
             )
     if isinstance(routed, ManagementIntent):
         for chunk in split_transcription(transcription):

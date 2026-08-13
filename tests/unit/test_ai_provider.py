@@ -21,10 +21,13 @@ from flowmate.ai.factory import create_ai_provider
 from flowmate.ai.openai_provider import OpenAIAIProvider
 from flowmate.ai.prompt import build_system_prompt
 from flowmate.ai.schemas import (
+    DependencyCandidate,
+    DependencyRelation,
     DraftAnalysisResult,
     DraftItemType,
     DraftParseResult,
     DraftSource,
+    ItemizationBasis,
     ManagementAction,
     ManagementIntent,
     SearchIntent,
@@ -35,7 +38,12 @@ from flowmate.ai.schemas import (
 )
 from flowmate.ai.service import DraftParsingService
 from flowmate.core.config import Settings
-from tests.ai_factories import make_context, make_draft_item, make_parse_result
+from tests.ai_factories import (
+    make_context,
+    make_draft_item,
+    make_parse_result,
+    make_temporal_candidate,
+)
 
 
 def make_result() -> DraftParseResult:
@@ -133,8 +141,9 @@ async def test_openai_provider_maps_validation_and_sdk_errors() -> None:
     client, parse, _ = make_client(None)
     provider = OpenAIAIProvider(client, model="model", timeout_seconds=10)
     parse.side_effect = validation.value
-    with pytest.raises(AIInvalidResponseError):
+    with pytest.raises(AIInvalidResponseError) as invalid:
         await provider.parse(system_prompt="prompt", user_text="note")
+    assert invalid.value.safe_code == "ai_response_validation"
 
     parse.side_effect = OpenAIError("private provider detail")
     with pytest.raises(AIProviderError, match="provider request failed"):
@@ -275,6 +284,196 @@ async def test_service_passes_workspace_source_and_time_context() -> None:
     assert "Reference timezone: Europe/Riga" in provider.system_prompt
     assert result.context.source is DraftSource.VOICE
     assert result.context.active_workspace == "client-alpha"
+
+
+@pytest.mark.asyncio
+async def test_service_uses_capture_reference_datetime_when_supplied() -> None:
+    provider = CapturingProvider()
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("Europe/Riga"),
+        active_workspace="work",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=fixed_clock,
+    )
+    captured_at = datetime.fromisoformat("2026-08-13T13:26:37+00:00")
+
+    result = await service.parse(
+        "Завтра сделать задачу",
+        source=DraftSource.TEXT,
+        reference_datetime=captured_at,
+    )
+
+    assert "2026-08-13T16:26:37+03:00" in provider.system_prompt
+    assert result.context.current_datetime == captured_at.astimezone(
+        ZoneInfo("Europe/Riga")
+    )
+
+
+@pytest.mark.asyncio
+async def test_service_accepts_production_sequence_without_consolidated_item() -> None:
+    tomorrow = make_temporal_candidate(
+        original_phrase="Завтра",
+        normalized_value=datetime.fromisoformat("2026-08-14T00:00:00+03:00"),
+        time_was_explicit=False,
+    )
+    parsed = make_parse_result(
+        [
+            make_draft_item(
+                title="Добавить людей в OrgChart",
+                due_date_candidate=tomorrow,
+                confidence=0.94,
+            ),
+            make_draft_item(
+                title="Сделать CDP refresher",
+                dependencies=[
+                    DependencyCandidate(
+                        relation=DependencyRelation.AFTER,
+                        original_phrase="затем",
+                        target_item_number=1,
+                        condition=None,
+                    )
+                ],
+                confidence=0.93,
+            ),
+            make_draft_item(
+                title="Добавить людей в forecast",
+                dependencies=[
+                    DependencyCandidate(
+                        relation=DependencyRelation.AFTER,
+                        original_phrase="затем",
+                        target_item_number=2,
+                        condition=None,
+                    )
+                ],
+                confidence=0.92,
+            ),
+        ],
+        itemization_basis=ItemizationBasis.INDEPENDENT_OUTCOMES,
+        itemization_confidence=0.90,
+        consolidated_item=None,
+        confidence=0.92,
+    )
+    provider = RoutingProvider(TelegramTextParseResult(mode="new_draft", draft=parsed))
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("Europe/Riga"),
+        active_workspace="work",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=fixed_clock,
+    )
+
+    result = await service.parse_text(
+        "Завтра добавить людей в OrgChart, затем сделать CDP refresher, "
+        "затем добавить людей в форкаст"
+    )
+
+    assert isinstance(result, DraftAnalysisResult)
+    assert [item.item.title for item in result.items] == [
+        "Добавить людей в OrgChart",
+        "Сделать CDP refresher",
+        "Добавить людей в forecast",
+    ]
+    assert [
+        item.item.due_date_candidate.normalized_value
+        if item.item.due_date_candidate is not None
+        else None
+        for item in result.items
+    ] == [datetime.fromisoformat("2026-08-14T23:59:59+03:00")] * 3
+
+
+@pytest.mark.asyncio
+async def test_service_keeps_then_steps_for_one_deliverable_together() -> None:
+    provider = RoutingProvider(
+        TelegramTextParseResult(
+            mode="new_draft",
+            draft=make_parse_result(
+                [make_draft_item(title="Подготовить и отправить отчёт")]
+            ),
+        )
+    )
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("UTC"),
+        active_workspace="work",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=fixed_clock,
+    )
+
+    result = await service.parse_text(
+        "Подготовить данные, затем отправить тот же отчёт"
+    )
+
+    assert isinstance(result, DraftAnalysisResult)
+    assert len(result.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_service_repairs_missing_low_confidence_consolidation_once() -> None:
+    split = make_parse_result(
+        [make_draft_item(title="Шаг один"), make_draft_item(title="Шаг два")],
+        itemization_basis=ItemizationBasis.UNCERTAIN,
+        itemization_confidence=0.70,
+        consolidated_item=None,
+    )
+    repaired = make_parse_result([make_draft_item(title="Выполнить общий результат")])
+    provider = SequentialProvider([split, repaired])
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("UTC"),
+        active_workspace="work",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=fixed_clock,
+    )
+
+    result = await service.parse(
+        "Подготовить данные и отправить отчёт",
+        source=DraftSource.TEXT,
+    )
+
+    assert [item.item.title for item in result.items] == ["Выполнить общий результат"]
+    assert len(provider.prompts) == 2
+    assert "only consolidation repair attempt" in provider.prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_invalid_consolidation_repair() -> None:
+    split = make_parse_result(
+        [make_draft_item(title="Шаг один"), make_draft_item(title="Шаг два")],
+        itemization_basis=ItemizationBasis.UNCERTAIN,
+        itemization_confidence=0.70,
+        consolidated_item=None,
+    )
+    invalid_repair = make_parse_result(
+        [make_draft_item(title="Первое"), make_draft_item(title="Второе")]
+    )
+    provider = SequentialProvider([split, invalid_repair])
+    service = DraftParsingService(
+        provider,
+        timezone=ZoneInfo("UTC"),
+        active_workspace="work",
+        timeout_seconds=10,
+        high_confidence_threshold=0.8,
+        clarification_confidence_threshold=0.5,
+        clock=fixed_clock,
+    )
+
+    with pytest.raises(AIInvalidResponseError) as error:
+        await service.parse(
+            "Подготовить данные и отправить отчёт",
+            source=DraftSource.TEXT,
+        )
+
+    assert error.value.safe_code == "ai_consolidation_invalid"
+    assert not provider.results
 
 
 @pytest.mark.asyncio

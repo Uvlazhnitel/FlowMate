@@ -9,7 +9,7 @@ from aiogram.types import Message, Update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from flowmate.ai.errors import AIError
+from flowmate.ai.errors import AIError, safe_ai_error_code
 from flowmate.ai.schemas import (
     DraftAnalysisResult,
     DraftSource,
@@ -300,7 +300,7 @@ async def text_note(
             logger.warning(
                 "telegram_text_routing_failed user_id=%s category=%s",
                 message.from_user.id if message.from_user else 0,
-                type(error).__name__,
+                safe_ai_error_code(error),
             )
     if isinstance(routed, ManagementIntent):
         timezone = app_timezone or ZoneInfo("UTC")
