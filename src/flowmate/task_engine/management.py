@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy import delete, select
@@ -392,6 +393,98 @@ async def reschedule_work_item(
         allow_final_replacement=previous != new_date,
     )
     await sync_planner_status(session, item, reason="rescheduled")
+    return MutationResult(item, event, True)
+
+
+async def move_work_item_to_bucket(
+    session: AsyncSession,
+    user_id: UUID,
+    work_item_id: UUID,
+    telegram_update_id: int | None,
+    target: Literal["inbox", "today", "tomorrow"],
+    scheduled_at: datetime | None,
+    *,
+    reminder_policy: ReminderPolicy | None = None,
+    expected_revision: int | None = None,
+    now: datetime | None = None,
+) -> MutationResult:
+    duplicate = await existing_mutation(session, user_id, telegram_update_id)
+    if duplicate is not None:
+        return duplicate
+    item = await lock_work_item(
+        session, user_id, work_item_id, expected_revision=expected_revision
+    )
+    supported_types = {
+        WorkItemType.TASK.value,
+        WorkItemType.FOLLOW_UP.value,
+        WorkItemType.WAITING.value,
+        WorkItemType.QUESTION.value,
+    }
+    if item.type not in supported_types:
+        raise InvalidWorkItemTransitionError(
+            "work item type cannot be moved between overview buckets"
+        )
+    if item.status not in OPEN_STATUSES:
+        raise InvalidWorkItemTransitionError(
+            "only open work items can be moved between overview buckets"
+        )
+    validate_aware_datetime(scheduled_at, "scheduled_at")
+    if target != "inbox" and scheduled_at is None:
+        raise ValueError("scheduled_at is required for a dated bucket")
+
+    moved_at = now or management_now()
+    previous_status = item.status
+    previous_schedule = item.next_follow_up_at or item.due_at
+    field = (
+        "next_follow_up_at" if item.type == WorkItemType.FOLLOW_UP.value else "due_at"
+    )
+    if target == "inbox":
+        item.due_at = None
+        item.next_follow_up_at = None
+        item.status = WorkItemStatus.INBOX.value
+        item.inbox_triaged_at = None
+    else:
+        if field == "next_follow_up_at":
+            item.next_follow_up_at = scheduled_at
+            item.due_at = None
+        else:
+            item.due_at = scheduled_at
+            item.next_follow_up_at = None
+        if item.status == WorkItemStatus.INBOX.value:
+            item.status = (
+                WorkItemStatus.WAITING.value
+                if item.type == WorkItemType.WAITING.value
+                else WorkItemStatus.PLANNED.value
+            )
+        item.inbox_triaged_at = moved_at
+
+    event = await append_management_event(
+        session,
+        item,
+        WorkItemEventType.BUCKET_MOVED,
+        telegram_update_id,
+        {
+            "target": target,
+            "field": field,
+            "previous": previous_schedule.isoformat()
+            if previous_schedule is not None
+            else None,
+            "new": scheduled_at.isoformat() if scheduled_at is not None else None,
+            "from_status": previous_status,
+            "to_status": item.status,
+        },
+    )
+    if target == "inbox":
+        await cancel_work_item_reminders(session, item, now=moved_at)
+    else:
+        await sync_work_item_reminders(
+            session,
+            item,
+            policy=reminder_policy,
+            now=moved_at,
+            allow_final_replacement=previous_schedule != scheduled_at,
+        )
+    await sync_planner_status(session, item, reason="bucket_moved")
     return MutationResult(item, event, True)
 
 

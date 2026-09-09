@@ -74,6 +74,126 @@ async def authenticated_client(
 
 
 @pytest.mark.integration
+async def test_overview_bucket_action_moves_task_and_is_idempotent(
+    database_engine: AsyncEngine,
+) -> None:
+    sender = CapturingLoginCodeSender()
+    app = create_app(
+        settings=auth_settings(app_timezone="UTC"),
+        engine=database_engine,
+        login_code_sender=sender,
+    )
+    async with started_app(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            csrf = await authenticated_client(client, sender)
+            async with AsyncSession(database_engine) as session:
+                user = await session.scalar(
+                    select(User).where(User.telegram_user_id == TELEGRAM_USER_ID)
+                )
+                assert user is not None
+                item = await create_work_item(
+                    session,
+                    user.id,
+                    item_type="task",
+                    title="Move from inbox",
+                )
+                foreign = await create_telegram_user(session, TELEGRAM_USER_ID + 900)
+                foreign_item = await create_work_item(
+                    session,
+                    foreign.id,
+                    item_type="task",
+                    title="Private task",
+                )
+                item_id = item.id
+                foreign_id = foreign_item.id
+                await session.commit()
+
+            overview = await client.get("/api/v1/overview")
+            assert overview.status_code == 200
+            inbox_entry = next(
+                entry
+                for entry in overview.json()["inbox"]["items"]
+                if entry["kind"] == "work_item" and entry["id"] == str(item_id)
+            )
+            assert inbox_entry["item"]["id"] == str(item_id)
+            assert isinstance(inbox_entry["item"]["revision"], int)
+            action_id = str(uuid4())
+            payload = {
+                "action": "move_bucket",
+                "target": "tomorrow",
+                "client_action_id": action_id,
+                "expected_revision": inbox_entry["item"]["revision"],
+            }
+            moved = await client.post(
+                f"/api/v1/work-items/{item_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json=payload,
+            )
+            assert moved.status_code == 200, moved.text
+            moved_item = moved.json()["work_item"]
+            assert moved_item["status"] == "planned"
+            assert moved_item["inbox_triaged_at"] is not None
+            assert datetime.fromisoformat(moved_item["effective_at"]).time() == time(9)
+
+            duplicate = await client.post(
+                f"/api/v1/work-items/{item_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json=payload,
+            )
+            assert duplicate.status_code == 200
+            assert duplicate.json()["changed"] is False
+
+            refreshed = await client.get("/api/v1/overview")
+            assert all(
+                entry["id"] != str(item_id)
+                for entry in refreshed.json()["inbox"]["items"]
+            )
+            assert any(
+                entry["item"]["id"] == str(item_id)
+                for entry in refreshed.json()["tomorrow"]["items"]
+            )
+
+            stale = await client.post(
+                f"/api/v1/work-items/{item_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "move_bucket",
+                    "target": "today",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": inbox_entry["item"]["revision"],
+                },
+            )
+            assert stale.status_code == 409
+            private = await client.post(
+                f"/api/v1/work-items/{foreign_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "move_bucket",
+                    "target": "tomorrow",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": 0,
+                },
+            )
+            assert private.status_code == 404
+
+            returned = await client.post(
+                f"/api/v1/work-items/{item_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "move_bucket",
+                    "target": "inbox",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": moved_item["revision"],
+                },
+            )
+            assert returned.status_code == 200, returned.text
+            assert returned.json()["work_item"]["effective_at"] is None
+            assert returned.json()["work_item"]["status"] == "inbox"
+
+
+@pytest.mark.integration
 async def test_pwa_workspace_switch_changes_operational_scope(
     database_engine: AsyncEngine,
 ) -> None:

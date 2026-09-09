@@ -112,6 +112,11 @@ class TextWorkItemAction(WorkItemActionBase):
     ]
 
 
+class MoveBucketWorkItemAction(WorkItemActionBase):
+    action: Literal["move_bucket"]
+    target: Literal["inbox", "today", "tomorrow"]
+
+
 class SnoozeWorkItemAction(WorkItemActionBase):
     action: Literal["snooze"]
     duration_minutes: int | None = Field(default=None, ge=1, le=10_080)
@@ -140,6 +145,7 @@ WorkItemActionRequest = Annotated[
     | DateWorkItemAction
     | PresetWorkItemAction
     | TextWorkItemAction
+    | MoveBucketWorkItemAction
     | SnoozeWorkItemAction
     | EditWorkItemAction,
     Field(discriminator="action"),
@@ -491,6 +497,19 @@ async def work_item_action(
                 work_item_id,
                 None,
                 payload.phrase,
+                preferences=preferences,
+                reminder_policy=ReminderPolicy(
+                    deadline_lead_minutes=settings.deadline_reminder_lead_minutes
+                ),
+                expected_revision=payload.expected_revision,
+            )
+        elif payload.action == "move_bucket":
+            preferences = await _preferences(session, identity, settings)
+            result = await rescheduling_service.move_to_bucket(
+                session,
+                user_id,
+                work_item_id,
+                payload.target,
                 preferences=preferences,
                 reminder_policy=ReminderPolicy(
                     deadline_lead_minutes=settings.deadline_reminder_lead_minutes

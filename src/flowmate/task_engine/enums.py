@@ -61,6 +61,7 @@ class WorkItemEventType(StrEnum):
     REMINDER_SNOOZED = "reminder_snoozed"
     ARCHIVED = "archived"
     PLANNER_STATUS_CHANGED = "planner_status_changed"
+    BUCKET_MOVED = "bucket_moved"
 
 
 class WorkItemAction(StrEnum):

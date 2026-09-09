@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.db.models import (
+    Reminder,
     WorkItemEvent,
     WorkItemRelation,
 )
@@ -21,6 +22,7 @@ from flowmate.task_engine.management import (
     complete_work_item,
     create_follow_up_from_waiting,
     mark_waiting_received,
+    move_work_item_to_bucket,
     reopen_work_item,
     reschedule_work_item,
     sync_planner_status,
@@ -29,6 +31,7 @@ from flowmate.task_engine.management import (
 from flowmate.task_engine.queries import (
     find_matching_work_items,
 )
+from flowmate.task_engine.remaining import work_item_inbox_reasons
 from flowmate.task_engine.service import (
     create_person,
     create_topic,
@@ -90,6 +93,103 @@ async def test_state_transitions_reschedule_and_idempotency(
     assert item.status == "cancelled"
     with pytest.raises(InvalidWorkItemTransitionError):
         await reopen_work_item(database_session, user.id, item.id, 830_005)
+
+
+@pytest.mark.integration
+async def test_overview_bucket_move_is_atomic_idempotent_and_clears_inbox(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, 630_020)
+    other = await create_telegram_user(database_session, 630_021)
+    item = await create_work_item(
+        database_session,
+        user.id,
+        item_type="task",
+        title="Move through overview",
+    )
+    target = datetime(2026, 8, 12, 9, 30, tzinfo=UTC)
+
+    moved = await move_work_item_to_bucket(
+        database_session,
+        user.id,
+        item.id,
+        830_200,
+        "tomorrow",
+        target,
+    )
+
+    assert moved.changed is True
+    assert item.status == "planned"
+    assert item.due_at == target
+    assert item.inbox_triaged_at is not None
+    assert work_item_inbox_reasons(item) == []
+    assert moved.event.event_type == "bucket_moved"
+    assert moved.event.payload["target"] == "tomorrow"
+    reminder = await database_session.scalar(
+        select(Reminder).where(Reminder.work_item_id == item.id)
+    )
+    assert reminder is not None
+    assert reminder.status == "pending"
+
+    duplicate = await move_work_item_to_bucket(
+        database_session,
+        user.id,
+        item.id,
+        830_200,
+        "tomorrow",
+        target,
+    )
+    assert duplicate.changed is False
+
+    await move_work_item_to_bucket(
+        database_session,
+        user.id,
+        item.id,
+        830_201,
+        "inbox",
+        None,
+    )
+    assert item.status == "inbox"
+    assert item.due_at is None
+    assert item.inbox_triaged_at is None
+    assert reminder.status == "cancelled"
+
+    with pytest.raises(ValueError, match="work item not found"):
+        await move_work_item_to_bucket(
+            database_session,
+            other.id,
+            item.id,
+            830_202,
+            "today",
+            target,
+        )
+
+    unsupported = await create_work_item(
+        database_session,
+        user.id,
+        item_type="decision",
+        title="Decision stays out of dated buckets",
+    )
+    with pytest.raises(InvalidWorkItemTransitionError, match="type cannot be moved"):
+        await move_work_item_to_bucket(
+            database_session,
+            user.id,
+            unsupported.id,
+            830_203,
+            "tomorrow",
+            target,
+        )
+
+    await complete_work_item(database_session, user.id, item.id, 830_204)
+    with pytest.raises(InvalidWorkItemTransitionError, match="only open work items"):
+        await move_work_item_to_bucket(
+            database_session,
+            user.id,
+            item.id,
+            830_205,
+            "tomorrow",
+            target,
+        )
 
 
 @pytest.mark.integration

@@ -1119,6 +1119,20 @@ h2 {
   border-radius: 20px;
   background: rgba(255, 250, 240, 0.82);
   box-shadow: 0 16px 42px rgba(36, 50, 46, 0.07);
+  transition:
+    border-color 0.16s,
+    box-shadow 0.16s,
+    background 0.16s;
+}
+.overview-column--drop-enabled {
+  border-color: rgba(39, 93, 85, 0.42);
+}
+.overview-column--drop-active {
+  border-color: var(--forest-light);
+  background: rgba(223, 232, 222, 0.72);
+  box-shadow:
+    0 16px 42px rgba(36, 50, 46, 0.1),
+    inset 0 0 0 2px var(--forest-light);
 }
 .overview-column--today {
   grid-column: 1 / -1;
@@ -1165,6 +1179,32 @@ h2 {
   min-width: 0;
   padding: 15px 17px;
   border-bottom: 1px solid var(--line);
+}
+.overview-task-row[draggable="true"],
+.overview-inbox-row[draggable="true"] {
+  cursor: grab;
+}
+.overview-task-row[draggable="true"]:active,
+.overview-inbox-row[draggable="true"]:active {
+  cursor: grabbing;
+}
+.overview-row--dragging {
+  opacity: 0.42;
+}
+.overview-move-feedback {
+  margin: 0 0 14px;
+  padding: 10px 13px;
+  border: 1px solid rgba(39, 93, 85, 0.22);
+  border-radius: 12px;
+  background: #dfe8de;
+  color: var(--forest);
+  font-size: 12px;
+  font-weight: 750;
+}
+.overview-move-feedback--error {
+  border-color: rgba(180, 70, 39, 0.24);
+  background: #f6dfd5;
+  color: #71301f;
 }
 .overview-task-row h3,
 .overview-inbox-row h3 {

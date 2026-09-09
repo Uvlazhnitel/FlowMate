@@ -25,6 +25,7 @@ const eventLabels: Record<string, string> = {
   person_changed: "Изменены люди",
   waiting_received: "Ожидание получено",
   planner_status_changed: "Изменён статус Planner",
+  bucket_moved: "Перемещено между колонками",
   archived: "Архивировано",
 };
 

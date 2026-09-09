@@ -43,6 +43,7 @@ def _inbox_preview(entry: dict[str, Any]) -> dict[str, object]:
         return {
             "id": card.id,
             "kind": kind,
+            "item": card,
             "title": card.title,
             "excerpt": card.description or "",
             "status": card.status,

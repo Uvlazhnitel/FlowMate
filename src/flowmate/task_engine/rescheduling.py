@@ -1,6 +1,7 @@
 # ruff: noqa: RUF001
 from datetime import UTC, datetime, time, timedelta
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,7 @@ from flowmate.task_engine.management import (
     MutationResult,
     StaleWorkItemError,
     existing_mutation,
+    move_work_item_to_bucket,
     reschedule_work_item,
     work_item_revision,
 )
@@ -112,6 +114,76 @@ class ReschedulingService:
 
         return resolve_local_datetime(target_date, target_time, timezone).astimezone(
             UTC
+        )
+
+    def resolve_bucket_target(
+        self,
+        item: WorkItem,
+        target: Literal["today", "tomorrow"],
+        *,
+        preferences: EffectiveNotificationPreferences,
+        now: datetime,
+    ) -> datetime:
+        timezone = preferences.zoneinfo
+        local_now = now.astimezone(timezone)
+        current = effective_schedule(item)
+        target_time = (
+            current.astimezone(timezone).time().replace(tzinfo=None)
+            if current is not None
+            else preferences.default_reminder_time
+        )
+        target_date = local_now.date() + timedelta(
+            days=1 if target == "tomorrow" else 0
+        )
+        candidate = resolve_local_datetime(target_date, target_time, timezone)
+        if target == "today" and candidate <= local_now:
+            minute = (local_now.minute // 15 + 1) * 15
+            start_of_hour = local_now.replace(second=0, microsecond=0, minute=0)
+            candidate = start_of_hour + timedelta(minutes=minute)
+            if candidate.date() != local_now.date():
+                raise LaterTodayUnavailableError
+        return candidate.astimezone(UTC)
+
+    async def move_to_bucket(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        work_item_id: UUID,
+        target: Literal["inbox", "today", "tomorrow"],
+        *,
+        preferences: EffectiveNotificationPreferences,
+        reminder_policy: ReminderPolicy | None = None,
+        expected_revision: int | None = None,
+        now: datetime | None = None,
+    ) -> MutationResult:
+        duplicate = await existing_mutation(session, user_id, None)
+        if duplicate is not None:
+            return duplicate
+        current = now or datetime.now(UTC)
+        scheduled_at = None
+        if target != "inbox":
+            item = await self._load_current(
+                session,
+                user_id,
+                work_item_id,
+                expected_revision=expected_revision,
+            )
+            scheduled_at = self.resolve_bucket_target(
+                item,
+                target,
+                preferences=preferences,
+                now=current,
+            )
+        return await move_work_item_to_bucket(
+            session,
+            user_id,
+            work_item_id,
+            None,
+            target,
+            scheduled_at,
+            reminder_policy=reminder_policy,
+            expected_revision=expected_revision,
+            now=current,
         )
 
     async def resolve_text(

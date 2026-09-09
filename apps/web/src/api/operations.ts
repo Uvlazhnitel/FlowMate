@@ -26,6 +26,7 @@ export interface WorkItemCardData {
   description: string | null;
   priority: string;
   planner_status: PlannerStatus;
+  inbox_triaged_at?: string | null;
   topic_id: string | null;
   topic_name: string | null;
   people: PersonRef[];
@@ -79,9 +80,8 @@ export interface OverviewWorkItem {
   needs_inbox: boolean;
 }
 
-export interface OverviewInboxItem {
+interface OverviewInboxItemBase {
   id: string;
-  kind: "draft" | "work_item" | "note";
   title: string;
   excerpt: string;
   status: string;
@@ -89,6 +89,11 @@ export interface OverviewInboxItem {
   occurred_at: string;
   item_count: number;
 }
+
+export type OverviewInboxItem = OverviewInboxItemBase &
+  (
+    { kind: "work_item"; item: WorkItemCardData } | { kind: "draft" | "note"; item?: never }
+  );
 
 export interface OverviewColumn<T> {
   items: T[];
@@ -153,6 +158,7 @@ export type WorkItemAction =
   | "reschedule"
   | "reschedule_preset"
   | "reschedule_text"
+  | "move_bucket"
   | "snooze"
   | "add_note"
   | "waiting_received"
@@ -206,6 +212,7 @@ export interface ActionPayload {
   topic_id?: string | null;
   person_ids?: string[];
   date_changed?: boolean;
+  target?: "inbox" | "today" | "tomorrow";
 }
 
 export interface ActionResponse {

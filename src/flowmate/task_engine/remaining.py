@@ -57,6 +57,7 @@ TimelineEventType = Literal[
     "person_changed",
     "waiting_received",
     "planner_status_changed",
+    "bucket_moved",
     "archived",
 ]
 
@@ -303,6 +304,8 @@ async def serialize_draft(
 
 
 def work_item_inbox_reasons(item: Any) -> list[str]:
+    if item.inbox_triaged_at is not None:
+        return []
     reasons: list[str] = []
     if item.status == "inbox":
         reasons.append("inbox_status")

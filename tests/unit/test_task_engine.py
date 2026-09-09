@@ -71,6 +71,7 @@ def test_task_engine_enum_contracts() -> None:
         "person_replied",
         "reminder_snoozed",
         "planner_status_changed",
+        "bucket_moved",
         "archived",
     }
     assert {value.value for value in NoteTargetType} == {

@@ -1,4 +1,4 @@
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -37,6 +37,17 @@ const task: WorkItemCardData = {
   overdue: true,
   revision: 17,
   reminder: null,
+};
+
+const inboxTask: WorkItemCardData = {
+  ...task,
+  id: "d317bc8f-341c-4ba0-ab8c-081cf0297650",
+  status: "inbox",
+  title: "Разобрать входящую задачу",
+  due_at: null,
+  effective_at: null,
+  overdue: false,
+  revision: 23,
 };
 
 function overviewResponse(): OverviewResponse {
@@ -210,5 +221,147 @@ describe("Overview home", () => {
     expect(screen.getByText("На завтра ничего не запланировано.")).toBeVisible();
     expect(screen.getByText("Входящие разобраны.")).toBeVisible();
     expect(screen.getAllByRole("link", { name: /Открыть раздел/ })).toHaveLength(3);
+  });
+
+  it("drags work items between columns and sends the bucket action", async () => {
+    const response = overviewResponse();
+    response.inbox.items.unshift({
+      id: inboxTask.id,
+      kind: "work_item",
+      item: inboxTask,
+      title: inboxTask.title,
+      excerpt: "",
+      status: "inbox",
+      reasons: ["inbox_status"],
+      occurred_at: inboxTask.updated_at,
+      item_count: 1,
+    });
+    response.inbox.total += 1;
+    let resolveAction: ((value: Response) => void) | undefined;
+    let actionInit: RequestInit | undefined;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/actions")) {
+        actionInit = init;
+        return new Promise<Response>((resolve) => {
+          resolveAction = resolve;
+        });
+      }
+      return Promise.resolve(jsonResponse(response));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderApplication("/overview");
+    const inboxLink = await screen.findByRole("link", { name: /Разобрать входящую/ });
+    const columns = document.querySelectorAll(".overview-column");
+    const tomorrow = columns[1] as HTMLElement;
+    const transfer = {
+      effectAllowed: "none",
+      dropEffect: "none",
+      setData: vi.fn(),
+    };
+
+    fireEvent.dragStart(inboxLink, { dataTransfer: transfer });
+    expect(tomorrow).toHaveClass("overview-column--drop-enabled");
+    fireEvent.dragOver(tomorrow, { dataTransfer: transfer });
+    expect(tomorrow).toHaveClass("overview-column--drop-active");
+    fireEvent.drop(tomorrow, { dataTransfer: transfer });
+
+    await waitFor(() => {
+      expect(
+        within(tomorrow).getByRole("heading", { name: inboxTask.title }),
+      ).toBeVisible();
+      expect(requestBody(actionInit)).toMatchObject({
+        action: "move_bucket",
+        target: "tomorrow",
+        expected_revision: 23,
+      });
+    });
+    resolveAction?.(
+      jsonResponse({
+        changed: true,
+        work_item: { ...inboxTask, status: "planned", revision: 24 },
+      }),
+    );
+    expect(await screen.findByText("Задача перемещена в «Завтра».")).toBeVisible();
+  });
+
+  it("does not drag drafts or call the API for the source column", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) =>
+      Promise.resolve(
+        requestPath(input).includes("/auth/me")
+          ? jsonResponse(authenticatedUser)
+          : jsonResponse(overviewResponse()),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderApplication("/overview");
+    const draft = await screen.findByRole("link", { name: /Черновик запуска/ });
+    expect(draft).toHaveAttribute("draggable", "false");
+    const todayTask = screen.getByRole("heading", { name: task.title }).closest("article");
+    const today = document.querySelectorAll(".overview-column")[0] as HTMLElement;
+    const transfer = {
+      effectAllowed: "none",
+      dropEffect: "none",
+      setData: vi.fn(),
+    };
+    fireEvent.dragStart(todayTask!, { dataTransfer: transfer });
+    fireEvent.dragOver(today, { dataTransfer: transfer });
+    fireEvent.drop(today, { dataTransfer: transfer });
+    expect(
+      fetchMock.mock.calls.some(([input]) => requestPath(input).includes("/actions")),
+    ).toBe(false);
+  });
+
+  it("rolls an optimistic move back after a stale revision", async () => {
+    const response = overviewResponse();
+    response.inbox.items.unshift({
+      id: inboxTask.id,
+      kind: "work_item",
+      item: inboxTask,
+      title: inboxTask.title,
+      excerpt: "",
+      status: "inbox",
+      reasons: ["inbox_status"],
+      occurred_at: inboxTask.updated_at,
+      item_count: 1,
+    });
+    response.inbox.total += 1;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          requestPath(input).includes("/auth/me")
+            ? jsonResponse(authenticatedUser)
+            : requestPath(input).includes("/actions")
+              ? jsonResponse(
+                  { error: { code: "conflict", message: "Work item changed" } },
+                  409,
+                )
+              : jsonResponse(response),
+        ),
+      ),
+    );
+    renderApplication("/overview");
+    const inboxLink = await screen.findByRole("link", { name: /Разобрать входящую/ });
+    const tomorrow = document.querySelectorAll(".overview-column")[1] as HTMLElement;
+    const transfer = {
+      effectAllowed: "none",
+      dropEffect: "none",
+      setData: vi.fn(),
+    };
+
+    fireEvent.dragStart(inboxLink, { dataTransfer: transfer });
+    fireEvent.dragOver(tomorrow, { dataTransfer: transfer });
+    fireEvent.drop(tomorrow, { dataTransfer: transfer });
+
+    expect(
+      await screen.findByText("Задача уже изменилась. Обзор обновлён — повторите перенос."),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: /Разобрать входящую/ })).toBeVisible();
+    expect(
+      within(tomorrow).queryByRole("heading", { name: inboxTask.title }),
+    ).not.toBeInTheDocument();
   });
 });

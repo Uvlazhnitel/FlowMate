@@ -176,6 +176,62 @@ def test_later_today_rounds_up_when_candidate_has_seconds() -> None:
     assert result == datetime(2026, 7, 30, 13, 15, tzinfo=UTC)
 
 
+def test_bucket_target_preserves_existing_local_time() -> None:
+    service = ReschedulingService(SnoozeParsingService(None, timeout_seconds=5))
+    timezone = ZoneInfo("Europe/Riga")
+
+    result = service.resolve_bucket_target(
+        work_item(due_at=datetime(2026, 3, 28, 13, 45, tzinfo=UTC)),
+        "tomorrow",
+        preferences=preferences("Europe/Riga"),
+        now=datetime(2026, 3, 28, 9, tzinfo=UTC),
+    )
+
+    assert result.astimezone(timezone).date().isoformat() == "2026-03-29"
+    assert result.astimezone(timezone).time() == time(15, 45)
+
+
+def test_bucket_target_uses_default_time_without_existing_date() -> None:
+    service = ReschedulingService(SnoozeParsingService(None, timeout_seconds=5))
+
+    result = service.resolve_bucket_target(
+        work_item(),
+        "tomorrow",
+        preferences=preferences(default_reminder_time=time(7, 45)),
+        now=datetime(2026, 7, 30, 10, tzinfo=UTC),
+    )
+
+    assert result == datetime(2026, 7, 31, 7, 45, tzinfo=UTC)
+
+
+def test_bucket_target_uses_next_quarter_hour_when_today_time_has_passed() -> None:
+    service = ReschedulingService(SnoozeParsingService(None, timeout_seconds=5))
+
+    result = service.resolve_bucket_target(
+        work_item(due_at=datetime(2026, 7, 29, 8, tzinfo=UTC)),
+        "today",
+        preferences=preferences(),
+        now=datetime(2026, 7, 30, 10, 7, 42, tzinfo=UTC),
+    )
+
+    assert result == datetime(2026, 7, 30, 10, 15, tzinfo=UTC)
+
+
+def test_bucket_target_rejects_today_after_last_quarter_hour() -> None:
+    service = ReschedulingService(SnoozeParsingService(None, timeout_seconds=5))
+
+    with pytest.raises(
+        LaterTodayUnavailableError,
+        match=LATER_TODAY_UNAVAILABLE_MESSAGE,
+    ):
+        service.resolve_bucket_target(
+            work_item(),
+            "today",
+            preferences=preferences(),
+            now=datetime(2026, 7, 30, 23, 46, tzinfo=UTC),
+        )
+
+
 @pytest.mark.asyncio
 async def test_natural_sentence_with_tomorrow_preserves_current_task_time() -> None:
     service = ReschedulingService(SnoozeParsingService(None, timeout_seconds=5))

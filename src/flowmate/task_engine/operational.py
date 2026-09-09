@@ -66,6 +66,7 @@ class WorkItemCard:
     description: str | None
     priority: str
     planner_status: str
+    inbox_triaged_at: datetime | None
     topic_id: UUID | None
     topic_name: str | None
     people: tuple[tuple[UUID, str], ...]
@@ -229,6 +230,7 @@ async def build_work_item_cards(
                 description=item.description,
                 priority=item.priority,
                 planner_status=item.planner_status,
+                inbox_triaged_at=item.inbox_triaged_at,
                 topic_id=item.topic_id,
                 topic_name=topic_names.get(item.topic_id) if item.topic_id else None,
                 people=tuple(people[item.id]),

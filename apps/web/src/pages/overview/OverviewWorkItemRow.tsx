@@ -1,6 +1,6 @@
 import { Check, Clock3, RotateCcw } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 
 import {
   operationsKeys,
@@ -34,9 +34,17 @@ const UNDO_WINDOW_MS = 8_000;
 export function OverviewWorkItemRow({
   entry,
   dateTimePreferences,
+  moveDisabled = false,
+  dragging = false,
+  onDragStart,
+  onDragEnd,
 }: {
   entry: OverviewWorkItem;
   dateTimePreferences: DateTimePreferences;
+  moveDisabled?: boolean;
+  dragging?: boolean;
+  onDragStart?: (event: DragEvent<HTMLElement>) => void;
+  onDragEnd?: () => void;
 }) {
   const { item } = entry;
   const queryClient = useQueryClient();
@@ -149,7 +157,19 @@ export function OverviewWorkItemRow({
       : null;
 
   return (
-    <article className="overview-task-row" aria-busy={mutation.isPending}>
+    <article
+      className={`overview-task-row ${dragging ? "overview-row--dragging" : ""}`}
+      aria-busy={mutation.isPending || moveDisabled}
+      draggable={Boolean(onDragStart) && !moveDisabled}
+      onDragStart={(event) => {
+        if ((event.target as Element).closest("button, input, select, textarea")) {
+          event.preventDefault();
+          return;
+        }
+        onDragStart?.(event);
+      }}
+      onDragEnd={onDragEnd}
+    >
       <div className="overview-row__badges">
         <span
           className={
