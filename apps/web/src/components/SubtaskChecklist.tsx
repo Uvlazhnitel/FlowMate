@@ -10,6 +10,7 @@ import {
   type WorkItemCardData,
 } from "../api/operations";
 import { ApiError } from "../api/client";
+import { InlineTitleEditor } from "./InlineTitleEditor";
 
 const OPEN_STATUSES = new Set(["inbox", "planned", "active", "waiting", "snoozed"]);
 
@@ -127,8 +128,20 @@ export function SubtaskChecklist({
     },
   });
 
+  const titleMutation = useMutation({
+    mutationFn: ({ subtask, title }: { subtask: SubtaskData; title: string }) =>
+      runWorkItemAction(subtask.id, {
+        action: "edit_title",
+        title,
+        client_action_id: crypto.randomUUID(),
+        expected_revision: subtask.revision,
+      }),
+    onSuccess: () => void refresh(),
+    onError: () => void refresh(),
+  });
+
   const done = subtasks.filter((subtask) => subtask.status === "done").length;
-  const error = createMutation.error ?? toggleMutation.error;
+  const error = createMutation.error ?? toggleMutation.error ?? titleMutation.error;
   const canAdd = OPEN_STATUSES.has(item.status);
 
   function submit() {
@@ -166,7 +179,16 @@ export function SubtaskChecklist({
                     <Check size={13} aria-hidden />
                   )}
                 </button>
-                <span>{subtask.title}</span>
+                <InlineTitleEditor
+                  value={subtask.title}
+                  pending={toggleMutation.isPending || titleMutation.isPending}
+                  onSave={(value) => titleMutation.mutate({ subtask, title: value })}
+                  onEmpty={() => {
+                    if (window.confirm("Удалить этот подпункт?")) {
+                      titleMutation.mutate({ subtask, title: "" });
+                    }
+                  }}
+                />
               </li>
             );
           })}

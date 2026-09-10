@@ -1796,6 +1796,36 @@ h2 {
   margin: 13px 0 7px;
   font-size: 17px;
 }
+
+.inline-title {
+  display: inline;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: text;
+}
+
+.inline-title:hover,
+.inline-title:focus-visible {
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
+}
+
+.inline-title__input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--forest-light);
+  border-radius: 0.35rem;
+  background: var(--paper-strong);
+  color: var(--ink);
+  font: inherit;
+}
 .work-card--completing h3::after {
   content: "";
   position: absolute;
@@ -1885,7 +1915,8 @@ h2 {
   font-size: 0.87rem;
 }
 
-.subtask span {
+.subtask span,
+.subtask .inline-title {
   overflow-wrap: anywhere;
 }
 

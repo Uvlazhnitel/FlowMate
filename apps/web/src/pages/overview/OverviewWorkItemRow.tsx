@@ -17,6 +17,7 @@ import { formatDateTime, type DateTimePreferences } from "../../lib/dates";
 import { RescheduleDialog } from "../../components/RescheduleDialog";
 import { SubtaskChecklist } from "../../components/SubtaskChecklist";
 import { WorkspaceBadge } from "../../components/WorkspaceBadge";
+import { InlineTitleEditor } from "../../components/InlineTitleEditor";
 
 const typeLabels: Record<string, string> = {
   task: "Задача",
@@ -127,6 +128,16 @@ export function OverviewWorkItemRow({
     }
   }
 
+  function editTitle(title: string) {
+    act("edit_title", { title });
+  }
+
+  function clearTitle() {
+    if (window.confirm("Пустой заголовок архивирует эту запись. Продолжить?")) {
+      act("edit_title", { title: "" });
+    }
+  }
+
   async function undo() {
     if (!undoItem) return;
     if (undoTimer.current !== null) {
@@ -224,7 +235,14 @@ export function OverviewWorkItemRow({
           </span>
         )}
       </div>
-      <h3 title={item.title}>{item.title}</h3>
+      <h3 title={item.title}>
+        <InlineTitleEditor
+          value={item.title}
+          pending={mutation.isPending || moveDisabled}
+          onSave={editTitle}
+          onEmpty={clearTitle}
+        />
+      </h3>
       <p className="overview-row__meta">
         {formatDateTime(item.effective_at, dateTimePreferences)}
       </p>

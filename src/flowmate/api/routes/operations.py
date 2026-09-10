@@ -33,6 +33,7 @@ from flowmate.task_engine.management import (
     convert_work_item_to_task,
     create_subtask,
     edit_work_item,
+    edit_work_item_title,
     mark_waiting_received,
     move_work_item_workspace,
     reopen_work_item,
@@ -152,6 +153,11 @@ class EditWorkItemAction(WorkItemActionBase):
     local_time: time | None = None
 
 
+class EditTitleWorkItemAction(WorkItemActionBase):
+    action: Literal["edit_title"]
+    title: str = Field(max_length=10_000)
+
+
 class CreateSubtaskRequest(WorkItemActionBase):
     title: Annotated[
         str,
@@ -168,7 +174,8 @@ WorkItemActionRequest = Annotated[
     | MoveBucketWorkItemAction
     | MoveWorkspaceWorkItemAction
     | SnoozeWorkItemAction
-    | EditWorkItemAction,
+    | EditWorkItemAction
+    | EditTitleWorkItemAction,
     Field(discriminator="action"),
 ]
 
@@ -730,6 +737,14 @@ async def _work_item_action_in_workspace(
                 person_ids=tuple(payload.person_ids),
                 update_schedule=payload.date_changed,
                 scheduled_at=scheduled_at,
+                expected_revision=payload.expected_revision,
+            )
+        elif payload.action == "edit_title":
+            result = await edit_work_item_title(
+                session,
+                user_id,
+                work_item_id,
+                payload.title,
                 expected_revision=payload.expected_revision,
             )
         elif payload.action == "add_decision":

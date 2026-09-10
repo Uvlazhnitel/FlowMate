@@ -31,6 +31,7 @@ import {
 import { RescheduleDialog } from "./RescheduleDialog";
 import { SubtaskChecklist } from "./SubtaskChecklist";
 import { WorkspaceBadge } from "./WorkspaceBadge";
+import { InlineTitleEditor } from "./InlineTitleEditor";
 
 const typeLabels: Record<string, string> = {
   task: "Задача",
@@ -150,6 +151,9 @@ export function WorkItemCard({
         );
         setRescheduleOpen(false);
       }
+      if (variables.action === "edit_title" && response.work_item?.status === "archived") {
+        setHidden(true);
+      }
       if (
         ["complete", "waiting_received", "agenda_discussed", "question_answered"].includes(
           variables.action,
@@ -175,6 +179,7 @@ export function WorkItemCard({
         void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
         void queryClient.invalidateQueries({ queryKey: remainingKeys.all });
       }
+      if (variables.action === "edit_title") void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
     },
   });
 
@@ -204,6 +209,16 @@ export function WorkItemCard({
     ) {
       act("move_workspace", { target });
     }
+  }
+
+  function editTitle(title: string) {
+    act("edit_title", { title });
+  }
+
+  function clearTitle() {
+    closeMoreMenu();
+    const message = "Пустой заголовок архивирует эту запись. Продолжить?";
+    if (window.confirm(message)) act("edit_title", { title: "" });
   }
 
   function openReschedule() {
@@ -421,7 +436,14 @@ export function WorkItemCard({
           <span className={`priority priority--${item.priority}`}>{priorityLabel}</span>
         )}
       </div>
-      <h3>{item.title}</h3>
+      <h3>
+        <InlineTitleEditor
+          value={item.title}
+          pending={interactionsDisabled}
+          onSave={editTitle}
+          onEmpty={clearTitle}
+        />
+      </h3>
       {item.description && <p className="work-card__description">{item.description}</p>}
       <div className="work-card__meta">
         <span>

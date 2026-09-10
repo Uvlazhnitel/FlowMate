@@ -1100,6 +1100,49 @@ async def update_work_item_content(
     return MutationResult(item, event, True)
 
 
+async def edit_work_item_title(
+    session: AsyncSession,
+    user_id: UUID,
+    work_item_id: UUID,
+    title: str,
+    *,
+    expected_revision: int,
+) -> MutationResult:
+    """Rename a work item, or safely remove an empty subtask."""
+    duplicate = await existing_mutation(session, user_id, None)
+    if duplicate is not None:
+        return duplicate
+    item = await lock_work_item(
+        session, user_id, work_item_id, expected_revision=expected_revision
+    )
+    if item.status == WorkItemStatus.ARCHIVED.value:
+        raise InvalidWorkItemTransitionError("archived work items cannot be changed")
+    normalized = " ".join(title.split())
+    if not normalized:
+        relation = await session.scalar(
+            select(WorkItemRelation).where(
+                WorkItemRelation.user_id == user_id,
+                WorkItemRelation.target_work_item_id == item.id,
+                WorkItemRelation.relation_type == WorkItemRelationType.SUBTASK.value,
+            )
+        )
+        result = await archive_work_item(
+            session, user_id, item.id, None, expected_revision=expected_revision
+        )
+        if relation is not None:
+            await session.delete(relation)
+        return result
+    if item.title == normalized:
+        return MutationResult(item, await append_management_event(
+            session, item, WorkItemEventType.UPDATED, None, {"fields": ["title"]}
+        ), False)
+    item.title = normalize_required_text(normalized, "title")
+    event = await append_management_event(
+        session, item, WorkItemEventType.UPDATED, None, {"fields": ["title"]}
+    )
+    return MutationResult(item, event, True)
+
+
 async def add_work_item_note(
     session: AsyncSession,
     user_id: UUID,

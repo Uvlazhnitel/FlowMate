@@ -189,6 +189,7 @@ export type WorkItemAction =
   | "add_decision"
   | "archive"
   | "edit"
+  | "edit_title"
   | "planner_transferred"
   | "planner_not_required"
   | "planner_update_required"
