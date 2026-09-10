@@ -48,6 +48,17 @@ SEMANTIC_TYPES = (
 )
 
 
+def _text_search_condition(value: str) -> Any:
+    escaped = (
+        value.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
+    pattern = f"%{escaped}%"
+    return or_(
+        WorkItem.title.ilike(pattern, escape="\\"),
+        WorkItem.description.ilike(pattern, escape="\\"),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class PageResult:
     items: list[Any]
@@ -449,16 +460,19 @@ async def list_overview_today_items(
     preferences: EffectiveNotificationPreferences,
     limit: int,
     workspace_scope: WorkspaceReadScope = "all",
+    search_query: str | None = None,
 ) -> PageResult:
     _, end = local_day_bounds(now, preferences)
     category = _focus_category_sql(now, end)
     effective = effective_date_sql()
-    conditions = (
+    conditions: tuple[Any, ...] = (
         WorkItem.user_id == user_id,
         top_level_work_item_filter(),
         WorkItem.status.in_(OPEN_STATUSES),
         category < 5,
     )
+    if search_query:
+        conditions = (*conditions, _text_search_condition(search_query))
     counts = await _work_item_workspace_counts(session, *conditions)
     key_rows = await session.execute(
         _all_workspaces(select(WorkItem.id, WorkItem.workspace).where(*conditions))
@@ -501,10 +515,11 @@ async def list_overview_tomorrow_items(
     preferences: EffectiveNotificationPreferences,
     limit: int,
     workspace_scope: WorkspaceReadScope = "all",
+    search_query: str | None = None,
 ) -> PageResult:
     start, end = local_day_bounds(now, preferences, days_ahead=1)
     effective = effective_date_sql()
-    conditions = (
+    conditions: tuple[Any, ...] = (
         WorkItem.user_id == user_id,
         top_level_work_item_filter(),
         WorkItem.status.in_(OPEN_STATUSES),
@@ -519,6 +534,8 @@ async def list_overview_tomorrow_items(
         effective >= start,
         effective < end,
     )
+    if search_query:
+        conditions = (*conditions, _text_search_condition(search_query))
     counts = await _work_item_workspace_counts(session, *conditions)
     key_rows = await session.execute(
         _all_workspaces(select(WorkItem.id, WorkItem.workspace).where(*conditions))

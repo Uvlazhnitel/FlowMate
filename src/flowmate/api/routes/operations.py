@@ -3,12 +3,17 @@ from typing import Annotated, Literal, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from flowmate.ai.errors import AIError
+from flowmate.ai.provider import AIProvider
+from flowmate.ai.service import DraftParsingService
 from flowmate.api.dependencies import get_rescheduling_service, get_session
 from flowmate.auth.dependencies import PwaIdentity, require_csrf, require_pwa_session
+from flowmate.captures import CaptureConflictError, TextCaptureService
 from flowmate.core.config import Settings, get_settings
 from flowmate.db.models import WorkItem
 from flowmate.reminders.actions import snooze_work_item_reminder
@@ -56,6 +61,7 @@ from flowmate.task_engine.overview import overview_snapshot
 from flowmate.task_engine.queries import PersonScope
 from flowmate.task_engine.rescheduling import (
     ReschedulePreset,
+    ReschedulingError,
     ReschedulingService,
 )
 from flowmate.workspaces import (
@@ -71,6 +77,18 @@ TopicSection = Literal["active", "people", "notes", "decisions", "history"]
 PersonSection = Literal[
     "follow_ups", "waiting", "questions", "topics", "notes", "history"
 ]
+
+
+class TextCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000),
+    ]
+    workspace: Literal["work", "personal"]
+    target_bucket: Literal["auto", "today", "tomorrow", "inbox"]
+    client_capture_id: UUID
 
 
 class WorkItemActionBase(BaseModel):
@@ -247,6 +265,7 @@ async def overview(
     identity: Annotated[PwaIdentity, Depends(require_pwa_session)],
     settings: Annotated[Settings, Depends(get_settings)],
     workspace: str | None = None,
+    q: Annotated[str | None, Query(max_length=200)] = None,
 ) -> dict[str, object]:
     preferences = await _preferences(session, identity, settings)
     payload = await overview_snapshot(
@@ -256,8 +275,93 @@ async def overview(
         preferences=preferences,
         low_confidence_threshold=settings.ai_high_confidence_threshold,
         workspace_scope=normalize_workspace_read_scope(workspace),
+        search_query=q.strip() if q and q.strip() else None,
     )
     return {"timezone": preferences.timezone, **payload}
+
+
+@router.post("/captures/text", status_code=status.HTTP_201_CREATED)
+async def capture_text(
+    payload: TextCaptureRequest,
+    request: Request,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    identity: Annotated[PwaIdentity, Depends(require_csrf)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    rescheduling_service: Annotated[
+        ReschedulingService, Depends(get_rescheduling_service)
+    ],
+) -> dict[str, object]:
+    provider = getattr(request.app.state, "ai_provider", None)
+    if not isinstance(provider, AIProvider):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI parsing is unavailable",
+        )
+    user_id = identity.user.id
+    preferences = await _preferences(session, identity, settings)
+    service = TextCaptureService(
+        DraftParsingService(
+            provider,
+            timezone=preferences.zoneinfo,
+            active_workspace=payload.workspace,
+            timeout_seconds=settings.ai_timeout_seconds,
+            high_confidence_threshold=settings.ai_high_confidence_threshold,
+            clarification_confidence_threshold=(
+                settings.ai_clarification_confidence_threshold
+            ),
+            split_confidence_threshold=settings.ai_split_confidence_threshold,
+        ),
+        rescheduling_service,
+        draft_ttl_hours=settings.draft_ttl_hours,
+        high_confidence_threshold=settings.ai_high_confidence_threshold,
+        reminder_policy=ReminderPolicy(
+            deadline_lead_minutes=settings.deadline_reminder_lead_minutes
+        ),
+        clock=_clock,
+    )
+    try:
+        result = await service.capture(
+            session,
+            user_id=user_id,
+            text=payload.text,
+            workspace=payload.workspace,
+            target_bucket=payload.target_bucket,
+            client_capture_id=payload.client_capture_id,
+            preferences=preferences,
+        )
+    except IntegrityError:
+        await session.rollback()
+        try:
+            result = await service.capture(
+                session,
+                user_id=user_id,
+                text=payload.text,
+                workspace=payload.workspace,
+                target_bucket=payload.target_bucket,
+                client_capture_id=payload.client_capture_id,
+                preferences=preferences,
+            )
+        except CaptureConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+    except CaptureConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ReschedulingError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except AIError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Не удалось разобрать задачу. Попробуйте ещё раз.",  # noqa: RUF001
+        ) from error
+    if result.duplicate:
+        response.status_code = status.HTTP_200_OK
+    return {
+        "client_capture_id": result.client_capture_id,
+        "duplicate": result.duplicate,
+        "disposition": result.disposition,
+        "draft_id": result.draft_id,
+        "work_item_ids": result.work_item_ids,
+    }
 
 
 @router.get("/today")

@@ -354,6 +354,29 @@ def work_item_inbox_reasons(item: Any) -> list[str]:
     return reasons
 
 
+def _inbox_search_text(payload: dict[str, object]) -> str:
+    parts = [
+        str(payload.get(field) or "")
+        for field in ("title", "excerpt", "source_excerpt")
+    ]
+    item = payload.get("item")
+    if item is not None:
+        parts.extend(
+            (str(getattr(item, "title", "")), str(getattr(item, "description", "")))
+        )
+    draft_items = payload.get("items")
+    if isinstance(draft_items, list):
+        for draft_item in draft_items:
+            if isinstance(draft_item, dict):
+                parts.extend(
+                    (
+                        str(draft_item.get("title") or ""),
+                        str(draft_item.get("description") or ""),
+                    )
+                )
+    return " ".join(parts).casefold()
+
+
 async def list_inbox(
     session: AsyncSession,
     user_id: UUID,
@@ -365,6 +388,7 @@ async def list_inbox(
     limit: int,
     offset: int,
     workspace_scope: WorkspaceReadScope = "all",
+    search_query: str | None = None,
 ) -> PageResult:
     validate_pagination(limit, offset)
     if limit > 1000:
@@ -446,6 +470,8 @@ async def list_inbox(
         cards = await build_work_item_cards(session, user_id, work_items, now=now)
         for card in cards:
             work_reasons = work_item_inbox_reasons(card)
+            if not work_reasons:
+                continue
             if reason is not None and reason not in work_reasons:
                 continue
             payload = {
@@ -489,6 +515,9 @@ async def list_inbox(
                     )
                 )
 
+    if search_query:
+        needle = search_query.strip().casefold()
+        entries = [entry for entry in entries if needle in _inbox_search_text(entry[2])]
     entries.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
     by_workspace = {
         "work": sum(entry[2]["workspace"] == "work" for entry in entries),

@@ -10,7 +10,7 @@ from flowmate.db.users import create_telegram_user
 from flowmate.reminders.preferences import NotificationDefaults, effective_preferences
 from flowmate.task_engine.overview import OVERVIEW_LIMIT, overview_snapshot
 from flowmate.task_engine.service import create_topic, create_work_item
-from flowmate.workspaces import activate_workspace
+from flowmate.workspaces import activate_workspace, workspace_context
 from tests.ai_factories import make_analysis_result, make_draft_item, make_parse_result
 
 
@@ -134,6 +134,9 @@ async def test_overview_snapshot_is_bounded_ordered_and_workspace_safe(
     assert isinstance(today, dict)
     assert today["total"] == 9
     assert today["has_more"] is True
+    assert today["completed_items"] == []
+    assert today["completed_total"] == 0
+    assert today["completed_has_more"] is False
     assert [entry["item"].title for entry in today["items"]] == expected_today_titles
     overlap = next(entry for entry in today["items"] if entry["item"].id == urgent.id)
     assert overlap["needs_inbox"] is True
@@ -172,3 +175,134 @@ async def test_overview_snapshot_is_bounded_ordered_and_workspace_safe(
     assert isinstance(personal_inbox, dict)
     assert personal_inbox["total"] == 3
     assert "Other workspace note" not in str(personal_inbox)
+
+
+@pytest.mark.integration
+async def test_overview_completed_today_search_and_workspace_scope(
+    database_session: AsyncSession,
+) -> None:
+    user = await create_telegram_user(database_session, 9_991_011)
+    foreign = await create_telegram_user(database_session, 9_991_012)
+    now = datetime(2026, 8, 11, 12, tzinfo=UTC)
+    preferences = effective_preferences(
+        None,
+        NotificationDefaults(
+            timezone="UTC",
+            morning_digest_time=time(8),
+            evening_digest_time=time(18),
+            quiet_hours_start=time(22),
+            quiet_hours_end=time(7),
+            snooze_minutes=60,
+        ),
+    )
+
+    with workspace_context(database_session, user_id=user.id, workspace="personal"):
+        for index in range(9):
+            item = await create_work_item(
+                database_session,
+                user.id,
+                item_type="task",
+                title=f"Needle completed {index}",
+                status="done",
+                due_at=now - timedelta(hours=index + 1),
+            )
+            item.completed_at = now - timedelta(minutes=index)
+        old = await create_work_item(
+            database_session,
+            user.id,
+            item_type="task",
+            title="Needle old completion",
+            status="done",
+            due_at=now - timedelta(days=1),
+        )
+        old.completed_at = now - timedelta(days=1)
+        inbox_done = await create_work_item(
+            database_session,
+            user.id,
+            item_type="task",
+            title="Needle inbox completion",
+            status="done",
+        )
+        inbox_done.completed_at = now
+        await create_work_item(
+            database_session,
+            user.id,
+            item_type="task",
+            title="Needle active inbox",
+            status="inbox",
+        )
+
+    with workspace_context(database_session, user_id=user.id, workspace="work"):
+        tomorrow_done = await create_work_item(
+            database_session,
+            user.id,
+            item_type="task",
+            title="Needle work tomorrow",
+            status="done",
+            due_at=now + timedelta(days=1),
+        )
+        tomorrow_done.completed_at = now
+        await create_work_item(
+            database_session,
+            user.id,
+            item_type="task",
+            title="Unrelated active",
+            status="active",
+            due_at=now,
+        )
+
+    foreign_done = await create_work_item(
+        database_session,
+        foreign.id,
+        item_type="task",
+        title="Needle foreign",
+        status="done",
+        due_at=now,
+    )
+    foreign_done.completed_at = now
+    await database_session.flush()
+
+    overview = await overview_snapshot(
+        database_session,
+        user.id,
+        now=now,
+        preferences=preferences,
+        low_confidence_threshold=0.8,
+        search_query="needle",
+    )
+    today = overview["today"]
+    tomorrow = overview["tomorrow"]
+    inbox = overview["inbox"]
+    assert isinstance(today, dict)
+    assert isinstance(tomorrow, dict)
+    assert isinstance(inbox, dict)
+    assert today["items"] == []
+    assert today["completed_total"] == 9
+    assert len(today["completed_items"]) == OVERVIEW_LIMIT
+    assert today["completed_has_more"] is True
+    assert tomorrow["completed_total"] == 1
+    assert inbox["completed_total"] == 1
+    assert any(entry["title"] == "Needle active inbox" for entry in inbox["items"])
+    assert "Needle old completion" not in str(overview)
+    assert "Needle foreign" not in str(overview)
+    assert overview["workspace_counts"] == {
+        "all": 12,
+        "work": 1,
+        "personal": 11,
+    }
+
+    work_only = await overview_snapshot(
+        database_session,
+        user.id,
+        now=now,
+        preferences=preferences,
+        low_confidence_threshold=0.8,
+        workspace_scope="work",
+        search_query="needle",
+    )
+    scoped_tomorrow = work_only["tomorrow"]
+    assert isinstance(scoped_tomorrow, dict)
+    assert scoped_tomorrow["completed_total"] == 1
+    scoped_today = work_only["today"]
+    assert isinstance(scoped_today, dict)
+    assert scoped_today["completed_total"] == 0

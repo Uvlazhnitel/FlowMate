@@ -116,6 +116,9 @@ export interface OverviewColumn<T> {
   items: T[];
   total: number;
   has_more: boolean;
+  completed_items: WorkItemCardData[];
+  completed_total: number;
+  completed_has_more: boolean;
 }
 
 export interface OverviewResponse {
@@ -249,7 +252,8 @@ export interface SubtaskResponse extends ActionResponse {
 
 export const operationsKeys = {
   all: ["operations"] as const,
-  overview: (workspace: WorkspaceScope) => ["operations", "overview", workspace] as const,
+  overview: (workspace: WorkspaceScope, search = "") =>
+    ["operations", "overview", workspace, search] as const,
   todayOverview: (workspace: WorkspaceScope) =>
     ["operations", "today", "overview", workspace] as const,
   tomorrow: (workspace: WorkspaceScope) => ["operations", "tomorrow", workspace] as const,
@@ -270,10 +274,36 @@ export const getTodayOverview = (workspace: WorkspaceScope = "all") =>
       : query("/api/v1/today/overview", { workspace }),
   );
 
-export const getOverview = (workspace: WorkspaceScope = "all") =>
+export const getOverview = (workspace: WorkspaceScope = "all", search = "") =>
   apiRequest<OverviewResponse>(
-    workspace === "all" ? "/api/v1/overview" : query("/api/v1/overview", { workspace }),
+    workspace === "all" && !search
+      ? "/api/v1/overview"
+      : query("/api/v1/overview", {
+          workspace: workspace === "all" ? undefined : workspace,
+          q: search || undefined,
+        }),
   );
+
+export interface TextCapturePayload {
+  text: string;
+  workspace: "work" | "personal";
+  target_bucket: "auto" | "today" | "tomorrow" | "inbox";
+  client_capture_id: string;
+}
+
+export interface TextCaptureResponse {
+  client_capture_id: string;
+  duplicate: boolean;
+  disposition: "created" | "inbox";
+  draft_id: string;
+  work_item_ids: string[];
+}
+
+export const captureText = (payload: TextCapturePayload) =>
+  apiRequest<TextCaptureResponse>("/api/v1/captures/text", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 
 export const getToday = (section: string, offset = 0, workspace: WorkspaceScope = "all") =>
   apiRequest<PageResponse<WorkItemCardData>>(

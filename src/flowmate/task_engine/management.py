@@ -1133,9 +1133,13 @@ async def edit_work_item_title(
             await session.delete(relation)
         return result
     if item.title == normalized:
-        return MutationResult(item, await append_management_event(
-            session, item, WorkItemEventType.UPDATED, None, {"fields": ["title"]}
-        ), False)
+        return MutationResult(
+            item,
+            await append_management_event(
+                session, item, WorkItemEventType.UPDATED, None, {"fields": ["title"]}
+            ),
+            False,
+        )
     item.title = normalize_required_text(normalized, "title")
     event = await append_management_event(
         session, item, WorkItemEventType.UPDATED, None, {"fields": ["title"]}

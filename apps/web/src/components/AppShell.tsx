@@ -126,12 +126,13 @@ export function AppShell({ user }: { user: AuthenticatedUser }) {
   const name = user.display_name?.trim() || "Владелец";
   const initials = name.slice(0, 2).toUpperCase();
   const location = useLocation();
+  const overviewMode = location.pathname === "/overview";
   const workspaceScope = workspaceScopePaths.has(location.pathname)
     ? normalizeWorkspaceScope(new URLSearchParams(location.search).get("workspace"))
     : undefined;
   return (
     <Tooltip.Provider>
-      <div className="app-shell">
+      <div className={`app-shell ${overviewMode ? "app-shell--overview" : ""}`}>
         <aside className="sidebar">
           <div className="brand">
             <span className="brand__mark">F</span>

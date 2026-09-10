@@ -179,7 +179,8 @@ export function WorkItemCard({
         void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
         void queryClient.invalidateQueries({ queryKey: remainingKeys.all });
       }
-      if (variables.action === "edit_title") void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
+      if (variables.action === "edit_title")
+        void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
     },
   });
 

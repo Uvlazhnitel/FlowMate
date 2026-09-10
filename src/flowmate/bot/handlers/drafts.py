@@ -1,6 +1,6 @@
 # ruff: noqa: RUF001
 import logging
-from datetime import datetime, time
+from datetime import datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -17,14 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.ai.errors import AIError, safe_ai_error_code
 from flowmate.ai.prompt_versions import REFINEMENT_PROMPT_VERSION
-from flowmate.ai.schemas import (
-    DraftAnalysisResult,
-    DraftItemAssessment,
-    DraftItemType,
-    DraftReadiness,
-    DraftSource,
-    TemporalStatus,
-)
+from flowmate.ai.schemas import DraftAnalysisResult, DraftSource, TemporalStatus
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.callback_data import encode_revision
 from flowmate.bot.callback_feedback import CallbackFeedback
@@ -50,13 +43,16 @@ from flowmate.db.drafts import (
 )
 from flowmate.db.models import DraftSession
 from flowmate.db.users import get_user_by_telegram_id
+from flowmate.drafts.capture import (
+    apply_default_reminder_time as apply_default_reminder_time,
+)
+from flowmate.drafts.capture import fast_capture_is_ready as fast_capture_is_ready
 from flowmate.drafts.questions import ClarificationQuestion, next_clarification_question
 from flowmate.reminders.preferences import (
     EffectiveNotificationPreferences,
     NotificationDefaults,
     get_effective_notification_preferences,
 )
-from flowmate.reminders.timezone import resolve_local_datetime
 from flowmate.stabilization.jobs import enqueue_ai_job
 from flowmate.task_engine.conversion import (
     DraftConversionError,
@@ -84,58 +80,6 @@ DRAFT_REPLY_REQUIRED_MESSAGE = "Ответьте через Reply на посл�
 DRAFT_CHANGE_QUESTION = "Что нужно изменить?"
 
 logger = logging.getLogger(__name__)
-
-
-def apply_default_reminder_time(
-    analysis: DraftAnalysisResult,
-    *,
-    default_time: time,
-) -> DraftAnalysisResult:
-    timezone = ZoneInfo(analysis.context.timezone)
-    changed = False
-    assessments: list[DraftItemAssessment] = []
-    for assessment in analysis.items:
-        item = assessment.item
-        candidate = item.reminder_candidate
-        if (
-            candidate is None
-            or candidate.status is not TemporalStatus.RESOLVED
-            or candidate.normalized_value is None
-            or candidate.time_was_explicit
-        ):
-            assessments.append(assessment)
-            continue
-        local_date = candidate.normalized_value.astimezone(timezone).date()
-        resolved = resolve_local_datetime(local_date, default_time, timezone)
-        updated_candidate = candidate.model_copy(update={"normalized_value": resolved})
-        updated_item = item.model_copy(update={"reminder_candidate": updated_candidate})
-        assessments.append(assessment.model_copy(update={"item": updated_item}))
-        changed = True
-    return analysis.model_copy(update={"items": assessments}) if changed else analysis
-
-
-def fast_capture_is_ready(
-    analysis: DraftAnalysisResult,
-    *,
-    high_confidence_threshold: float,
-) -> bool:
-    if analysis.confidence < high_confidence_threshold:
-        return False
-    for assessment in analysis.items:
-        item = assessment.item
-        if (
-            assessment.readiness is not DraftReadiness.READY
-            or item.type is DraftItemType.UNKNOWN
-            or item.confidence < high_confidence_threshold
-        ):
-            return False
-        for candidate in (item.due_date_candidate, item.reminder_candidate):
-            if (
-                candidate is not None
-                and candidate.status is not TemporalStatus.RESOLVED
-            ):
-                return False
-    return True
 
 
 def fast_capture_summary(

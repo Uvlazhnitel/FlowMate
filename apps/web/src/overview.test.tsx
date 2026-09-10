@@ -21,12 +21,12 @@ const task: WorkItemCardData = {
   id: "0283942a-a7ec-45f4-81e2-4fd5f143cdd8",
   type: "task",
   status: "active",
-  title: "Подготовить очень длинный план запуска без потери доступного полного названия",
-  description: "Описание не должно появляться в обзорной строке",
+  title: "Подготовить презентацию",
+  description: "Скрытое описание",
   priority: "urgent",
   planner_status: "not_required",
   topic_id: null,
-  topic_name: null,
+  topic_name: "Запуск",
   people: [],
   due_at: "2026-08-11T09:00:00Z",
   next_follow_up_at: null,
@@ -51,50 +51,95 @@ const inboxTask: WorkItemCardData = {
   revision: 23,
 };
 
+const completedTask: WorkItemCardData = {
+  ...task,
+  id: "a317bc8f-341c-4ba0-ab8c-081cf0297650",
+  status: "done",
+  title: "Готовая задача",
+  completed_at: "2026-08-11T10:00:00Z",
+  revision: 24,
+};
+
 function overviewResponse(): OverviewResponse {
   return {
     timezone: "Europe/Riga",
-    workspace_counts: { all: 10, work: 1, personal: 9 },
+    workspace_counts: { all: 4, work: 1, personal: 3 },
     today: {
-      items: Array.from({ length: 8 }, (_, index) => ({
-        item: {
-          ...task,
-          id: `${task.id.slice(0, -1)}${index}`,
-          title: index ? `Сегодня ${index + 1}` : task.title,
-        },
-        needs_inbox: index === 0,
-      })),
-      total: 11,
-      has_more: true,
+      items: [{ item: task, needs_inbox: false }],
+      total: 1,
+      has_more: false,
+      completed_items: [completedTask],
+      completed_total: 1,
+      completed_has_more: false,
     },
     tomorrow: {
       items: [
         {
-          item: { ...task, id: "52802780-c750-4077-83a9-a951055bc6ca", title: "Завтра" },
+          item: {
+            ...task,
+            id: "52802780-c750-4077-83a9-a951055bc6ca",
+            title: "Завтрашняя задача",
+            workspace: "work",
+          },
           needs_inbox: false,
         },
       ],
       total: 1,
       has_more: false,
+      completed_items: [],
+      completed_total: 0,
+      completed_has_more: false,
     },
     inbox: {
       items: [
         {
-          id: "3195ebcf-15f4-42ef-bf5f-947589cd06bd",
-          kind: "draft",
-          title: "Черновик запуска",
-          excerpt: "Исходная запись",
-          status: "ready",
-          reasons: ["unresolved_draft"],
-          occurred_at: "2026-08-11T08:30:00Z",
-          item_count: 2,
-          workspace: "personal",
+          id: inboxTask.id,
+          kind: "work_item",
+          item: inboxTask,
+          title: inboxTask.title,
+          excerpt: "",
+          status: "inbox",
+          reasons: ["inbox_status"],
+          occurred_at: inboxTask.updated_at,
+          item_count: 1,
+          workspace: inboxTask.workspace,
         },
       ],
       total: 1,
       has_more: false,
+      completed_items: [],
+      completed_total: 0,
+      completed_has_more: false,
     },
   };
+}
+
+function setupFetch(
+  response = overviewResponse(),
+  action?: (body: Record<string, unknown>) => Response | Promise<Response>,
+) {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = requestPath(input);
+    if (path.includes("/auth/me")) return Promise.resolve(jsonResponse(authenticatedUser));
+    if (path.includes("/actions") && action)
+      return Promise.resolve(action(requestBody(init)));
+    if (path.includes("/captures/text"))
+      return Promise.resolve(
+        jsonResponse(
+          {
+            client_capture_id: requestBody(init).client_capture_id,
+            duplicate: false,
+            disposition: "created",
+            draft_id: crypto.randomUUID(),
+            work_item_ids: [crypto.randomUUID()],
+          },
+          201,
+        ),
+      );
+    return Promise.resolve(jsonResponse(response));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 afterEach(() => {
@@ -104,66 +149,33 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("Overview home", () => {
-  it("renders three bounded columns, exact totals, and focused Inbox links", async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const path = requestPath(input);
-      return Promise.resolve(
-        path.includes("/auth/me")
-          ? jsonResponse(authenticatedUser)
-          : jsonResponse(overviewResponse()),
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
+describe("Overview board", () => {
+  it("renders three columns, real counts, one workspace badge, and no drag API", async () => {
+    setupFetch();
     renderApplication("/overview");
 
     expect(await screen.findByRole("heading", { name: "Обзор", level: 1 })).toBeVisible();
     await screen.findByRole("heading", { name: "Сегодня", level: 2 });
-    const columns = document.querySelectorAll(".overview-column");
-    expect(columns).toHaveLength(3);
-    const today = columns[0] as HTMLElement;
-    expect(within(today).getAllByRole("article")).toHaveLength(8);
-    expect(within(today).getByLabelText("11 записей")).toBeVisible();
-    expect(within(today).getByRole("link", { name: /Показать все 11/ })).toHaveAttribute(
-      "href",
-      "/today",
-    );
-    const firstTitle = within(today).getByRole("heading", { name: task.title });
-    expect(firstTitle).toHaveAttribute("title", task.title);
-    expect(within(today).queryByText(task.description!)).not.toBeInTheDocument();
-    expect(within(today).getByText("Нужно разобрать")).toBeVisible();
-    const inboxLink = screen.getByRole("link", { name: /Черновик запуска/ });
-    expect(inboxLink).toHaveAttribute(
-      "href",
-      "/inbox?kind=draft&focus=3195ebcf-15f4-42ef-bf5f-947589cd06bd",
-    );
-  });
-
-  it("filters the view independently from the creation workspace", async () => {
-    const response = overviewResponse();
-    response.today.items[0]!.item.workspace = "work";
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      void init;
-      const path = requestPath(input);
-      return Promise.resolve(
-        path.includes("/auth/me")
-          ? jsonResponse(authenticatedUser)
-          : jsonResponse(response),
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const user = userEvent.setup();
-
-    renderApplication("/overview");
-
-    expect(await screen.findByRole("button", { name: /^Все\s*10$/ })).toHaveAttribute(
+    expect(document.querySelectorAll(".overview-column")).toHaveLength(3);
+    expect(screen.getByRole("button", { name: /^Все\s*4$/ })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    expect(screen.getAllByText("Работа").length).toBeGreaterThan(1);
-    expect(screen.getAllByText("Личное").length).toBeGreaterThan(1);
+    const row = screen.getByRole("heading", { name: task.title }).closest("article")!;
+    expect(within(row).getAllByText("Личное")).toHaveLength(1);
+    expect(within(row).queryByText("Запуск")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Срочно")).not.toBeInTheDocument();
+    expect(row).not.toHaveAttribute("draggable");
+  });
+
+  it("filters the view without changing the creation workspace", async () => {
+    const fetchMock = setupFetch();
+    const user = userEvent.setup();
+    renderApplication("/overview");
+
+    await screen.findByRole("heading", { name: task.title });
     await user.click(screen.getByRole("button", { name: /^Работа\s*1$/ }));
+
     await waitFor(() =>
       expect(
         fetchMock.mock.calls.some(([input]) =>
@@ -171,302 +183,174 @@ describe("Overview home", () => {
         ),
       ).toBe(true),
     );
-    expect(screen.getByText(/В личном скрыто 9 задач/)).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Пространство задачи" })).toHaveValue(
+      "personal",
+    );
     expect(
       fetchMock.mock.calls.some(
         ([input, init]) =>
           requestPath(input).includes("/api/v1/workspace") && init?.method === "PUT",
       ),
     ).toBe(false);
-    await user.click(screen.getByRole("button", { name: "Показать всё" }));
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /^Все\s*10$/ })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      ),
-    );
   });
 
-  it("sends idempotent complete and reschedule payloads with Undo", async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const path = requestPath(input);
-      if (path.includes("/auth/me"))
-        return Promise.resolve(jsonResponse(authenticatedUser));
-      if (path.includes("/actions")) {
-        const body = requestBody(init);
-        return Promise.resolve(
-          jsonResponse({
-            changed: true,
-            work_item: {
-              ...task,
-              status: body.action === "reopen" ? "active" : "done",
-              revision: body.action === "reopen" ? 19 : 18,
-            },
-          }),
-        );
-      }
-      return Promise.resolve(jsonResponse(overviewResponse()));
-    });
-    vi.stubGlobal("fetch", fetchMock);
+  it("debounces server search and supports Ctrl+K only on Windows", async () => {
+    vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Win32");
+    const fetchMock = setupFetch();
     const user = userEvent.setup();
-
     renderApplication("/overview");
-    const title = await screen.findByRole("heading", { name: task.title });
-    const row = title.closest("article") as HTMLElement;
-    await user.click(within(row).getByRole("button", { name: "Готово" }));
-    expect(await screen.findByText("Запись завершена")).toBeVisible();
-    const completeCall = fetchMock.mock.calls.find(
-      ([input, init]) =>
-        requestPath(input).includes("/actions") && requestBody(init).action === "complete",
-    );
-    const completePayload = requestBody(completeCall?.[1]);
-    expect(completePayload).toMatchObject({
-      action: "complete",
-      expected_revision: 17,
-    });
-    expect(typeof completePayload.client_action_id).toBe("string");
-    await user.click(screen.getByRole("button", { name: "Вернуть" }));
-    expect(await screen.findByRole("heading", { name: task.title })).toBeVisible();
 
-    const restoredRow = screen
-      .getByRole("heading", { name: task.title })
-      .closest("article") as HTMLElement;
-    await user.click(within(restoredRow).getByRole("button", { name: "Ещё действия" }));
-    await user.click(within(restoredRow).getByRole("menuitem", { name: "Перенести" }));
-    await user.click(screen.getByRole("button", { name: "Завтра утром" }));
-    await waitFor(() => {
-      const rescheduleCall = fetchMock.mock.calls.find(
-        ([input, init]) =>
-          requestPath(input).includes("/actions") &&
-          requestBody(init).action === "reschedule_preset",
-      );
-      const reschedulePayload = requestBody(rescheduleCall?.[1]);
-      expect(reschedulePayload).toMatchObject({
-        action: "reschedule_preset",
-        preset: "tomorrow_morning",
-        expected_revision: 17,
-      });
-      expect(typeof reschedulePayload.client_action_id).toBe("string");
-    });
+    const search = await screen.findByRole("searchbox", { name: "Поиск задач на доске" });
+    expect(screen.getByText("Ctrl K")).toBeVisible();
+    await user.type(search, "отчёт");
+    expect(fetchMock.mock.calls.some(([input]) => requestPath(input).includes("q="))).toBe(
+      false,
+    );
+    await waitFor(
+      () =>
+        expect(
+          fetchMock.mock.calls.some(([input]) =>
+            requestPath(input).includes("q=%D0%BE%D1%82%D1%87%D1%91%D1%82"),
+          ),
+        ).toBe(true),
+      { timeout: 1_000 },
+    );
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    expect(search).toHaveFocus();
   });
 
-  it("moves an overview row between workspaces without changing its bucket", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    let workspace: WorkItemCardData["workspace"] = "personal";
-    let actionPayload: Record<string, unknown> = {};
+  it("submits a column-scoped idempotent capture and keeps its id on retry", async () => {
+    let attempts = 0;
+    const captureBodies: Record<string, unknown>[] = [];
+    const response = overviewResponse();
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path = requestPath(input);
       if (path.includes("/auth/me"))
         return Promise.resolve(jsonResponse(authenticatedUser));
-      if (path.includes("/actions")) {
-        actionPayload = requestBody(init);
-        workspace = "work";
+      if (path.includes("/captures/text")) {
+        const body = requestBody(init);
+        captureBodies.push(body);
+        attempts += 1;
+        if (attempts === 1)
+          return Promise.resolve(
+            jsonResponse(
+              { error: { code: "ai_failed", message: "AI временно недоступен" } },
+              502,
+            ),
+          );
         return Promise.resolve(
-          jsonResponse({
-            changed: true,
-            work_item: { ...task, workspace: "work", revision: 18 },
-          }),
+          jsonResponse(
+            {
+              client_capture_id: body.client_capture_id,
+              duplicate: false,
+              disposition: "created",
+              draft_id: crypto.randomUUID(),
+              work_item_ids: [crypto.randomUUID()],
+            },
+            201,
+          ),
         );
       }
-      const response = overviewResponse();
-      response.today.items[0]!.item.workspace = workspace;
-      response.workspace_counts =
-        workspace === "work"
-          ? { all: 10, work: 2, personal: 8 }
-          : { all: 10, work: 1, personal: 9 };
       return Promise.resolve(jsonResponse(response));
     });
     vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApplication("/overview");
+
+    await screen.findByRole("heading", { name: "Сегодня" });
+    await user.click(screen.getByRole("button", { name: "Добавить задачу в «Завтра»" }));
+    const input = screen.getByRole("textbox", { name: "Текст новой задачи" });
+    expect(input).toHaveFocus();
+    await user.type(input, "Позвонить врачу");
+    await user.click(screen.getByRole("button", { name: "Добавить" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("AI временно недоступен");
+    expect(input).toHaveValue("Позвонить врачу");
+    await user.click(screen.getByRole("button", { name: "Добавить" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Задача добавлена");
+    expect(captureBodies).toHaveLength(2);
+    expect(captureBodies[0]).toMatchObject({
+      text: "Позвонить врачу",
+      workspace: "personal",
+      target_bucket: "tomorrow",
+    });
+    expect(captureBodies[1]?.client_capture_id).toBe(captureBodies[0]?.client_capture_id);
+  });
+
+  it("moves by menu with keyboard support and preserves workspace", async () => {
+    let actionBody: Record<string, unknown> = {};
+    const fetchMock = setupFetch(overviewResponse(), (body) => {
+      actionBody = body;
+      return jsonResponse({ changed: true, work_item: { ...task, revision: 18 } });
+    });
     const user = userEvent.setup();
     renderApplication("/overview");
 
     const row = (await screen.findByRole("heading", { name: task.title })).closest(
       "article",
-    ) as HTMLElement;
-    await user.click(within(row).getByRole("button", { name: "Ещё действия" }));
-    await user.click(within(row).getByRole("menuitem", { name: "В работу" }));
+    )!;
+    const trigger = within(row).getByRole("button", { name: "Ещё действия" });
+    trigger.focus();
+    await user.keyboard("{ArrowDown}");
+    const tomorrow = await within(row).findByRole("menuitem", { name: "Завтра" });
+    expect(tomorrow).toHaveFocus();
+    await user.keyboard("{Enter}");
 
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(actionPayload).toMatchObject({
-      action: "move_workspace",
-      target: "work",
+    expect(actionBody).toMatchObject({
+      action: "move_bucket",
+      target: "tomorrow",
       expected_revision: 17,
     });
-    await waitFor(() => {
-      const refreshedRow = screen
-        .getByRole("heading", { name: task.title })
-        .closest("article") as HTMLElement;
-      expect(within(refreshedRow).getByText("Работа")).toBeVisible();
-    });
-    expect(screen.getByRole("button", { name: /^Все\s*10$/ })).toBeVisible();
-    expect(screen.getByRole("button", { name: /^Работа\s*2$/ })).toBeVisible();
-  });
-
-  it("shows honest empty columns and keeps their full-list links", async () => {
-    const empty = overviewResponse();
-    empty.today = { items: [], total: 0, has_more: false };
-    empty.tomorrow = { items: [], total: 0, has_more: false };
-    empty.inbox = { items: [], total: 0, has_more: false };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((input: RequestInfo | URL) =>
-        Promise.resolve(
-          requestPath(input).includes("/auth/me")
-            ? jsonResponse(authenticatedUser)
-            : jsonResponse(empty),
-        ),
-      ),
-    );
-
-    renderApplication("/overview");
-
-    expect(await screen.findByText("На сегодня всё разобрано.")).toBeVisible();
-    expect(screen.getByText("На завтра ничего не запланировано.")).toBeVisible();
-    expect(screen.getByText("Входящие разобраны.")).toBeVisible();
-    expect(screen.getAllByRole("link", { name: /Открыть раздел/ })).toHaveLength(3);
-  });
-
-  it("drags work items between columns and sends the bucket action", async () => {
-    const response = overviewResponse();
-    response.inbox.items.unshift({
-      id: inboxTask.id,
-      kind: "work_item",
-      item: inboxTask,
-      title: inboxTask.title,
-      excerpt: "",
-      status: "inbox",
-      reasons: ["inbox_status"],
-      occurred_at: inboxTask.updated_at,
-      item_count: 1,
-      workspace: inboxTask.workspace,
-    });
-    response.inbox.total += 1;
-    let resolveAction: ((value: Response) => void) | undefined;
-    let actionInit: RequestInit | undefined;
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const path = requestPath(input);
-      if (path.includes("/auth/me"))
-        return Promise.resolve(jsonResponse(authenticatedUser));
-      if (path.includes("/actions")) {
-        actionInit = init;
-        return new Promise<Response>((resolve) => {
-          resolveAction = resolve;
-        });
-      }
-      return Promise.resolve(jsonResponse(response));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    renderApplication("/overview");
-    const inboxLink = await screen.findByRole("link", { name: /Разобрать входящую/ });
-    const columns = document.querySelectorAll(".overview-column");
-    const tomorrow = columns[1] as HTMLElement;
-    const transfer = {
-      effectAllowed: "none",
-      dropEffect: "none",
-      setData: vi.fn(),
-    };
-
-    fireEvent.dragStart(inboxLink, { dataTransfer: transfer });
-    expect(tomorrow).toHaveClass("overview-column--drop-enabled");
-    fireEvent.dragOver(tomorrow, { dataTransfer: transfer });
-    expect(tomorrow).toHaveClass("overview-column--drop-active");
-    fireEvent.drop(tomorrow, { dataTransfer: transfer });
-
-    await waitFor(() => {
-      expect(
-        within(tomorrow).getByRole("heading", { name: inboxTask.title }),
-      ).toBeVisible();
-      expect(requestBody(actionInit)).toMatchObject({
-        action: "move_bucket",
-        target: "tomorrow",
-        expected_revision: 23,
-      });
-    });
-    resolveAction?.(
-      jsonResponse({
-        changed: true,
-        work_item: { ...inboxTask, status: "planned", revision: 24 },
-      }),
-    );
-    expect(await screen.findByText("Задача перемещена в «Завтра».")).toBeVisible();
-  });
-
-  it("does not drag drafts or call the API for the source column", async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL) =>
-      Promise.resolve(
-        requestPath(input).includes("/auth/me")
-          ? jsonResponse(authenticatedUser)
-          : jsonResponse(overviewResponse()),
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    renderApplication("/overview");
-    const draft = await screen.findByRole("link", { name: /Черновик запуска/ });
-    expect(draft).toHaveAttribute("draggable", "false");
-    const todayTask = screen.getByRole("heading", { name: task.title }).closest("article");
-    const today = document.querySelectorAll(".overview-column")[0] as HTMLElement;
-    const transfer = {
-      effectAllowed: "none",
-      dropEffect: "none",
-      setData: vi.fn(),
-    };
-    fireEvent.dragStart(todayTask!, { dataTransfer: transfer });
-    fireEvent.dragOver(today, { dataTransfer: transfer });
-    fireEvent.drop(today, { dataTransfer: transfer });
-    expect(
-      fetchMock.mock.calls.some(([input]) => requestPath(input).includes("/actions")),
-    ).toBe(false);
+    expect(within(row).getByText("Личное")).toBeVisible();
+    expect(await screen.findByRole("status")).toHaveTextContent("Перемещено в «Завтра»");
+    expect(fetchMock).toHaveBeenCalled();
   });
 
   it("rolls an optimistic move back after a stale revision", async () => {
-    const response = overviewResponse();
-    response.inbox.items.unshift({
-      id: inboxTask.id,
-      kind: "work_item",
-      item: inboxTask,
-      title: inboxTask.title,
-      excerpt: "",
-      status: "inbox",
-      reasons: ["inbox_status"],
-      occurred_at: inboxTask.updated_at,
-      item_count: 1,
-      workspace: inboxTask.workspace,
-    });
-    response.inbox.total += 1;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((input: RequestInfo | URL) =>
-        Promise.resolve(
-          requestPath(input).includes("/auth/me")
-            ? jsonResponse(authenticatedUser)
-            : requestPath(input).includes("/actions")
-              ? jsonResponse(
-                  { error: { code: "conflict", message: "Work item changed" } },
-                  409,
-                )
-              : jsonResponse(response),
-        ),
-      ),
+    setupFetch(overviewResponse(), () =>
+      jsonResponse({ error: { code: "conflict", message: "Work item changed" } }, 409),
     );
+    const user = userEvent.setup();
     renderApplication("/overview");
-    const inboxLink = await screen.findByRole("link", { name: /Разобрать входящую/ });
-    const tomorrow = document.querySelectorAll(".overview-column")[1] as HTMLElement;
-    const transfer = {
-      effectAllowed: "none",
-      dropEffect: "none",
-      setData: vi.fn(),
-    };
 
-    fireEvent.dragStart(inboxLink, { dataTransfer: transfer });
-    fireEvent.dragOver(tomorrow, { dataTransfer: transfer });
-    fireEvent.drop(tomorrow, { dataTransfer: transfer });
+    const row = (await screen.findByRole("heading", { name: inboxTask.title })).closest(
+      "article",
+    )!;
+    await user.click(within(row).getByRole("button", { name: "Ещё действия" }));
+    await user.click(within(row).getByRole("menuitem", { name: "Завтра" }));
 
     expect(
       await screen.findByText("Задача уже изменилась. Обзор обновлён — повторите перенос."),
     ).toBeVisible();
-    expect(screen.getByRole("link", { name: /Разобрать входящую/ })).toBeVisible();
+    const inbox = screen.getByRole("heading", { name: "Входящие" }).closest("section")!;
+    expect(within(inbox).getByRole("heading", { name: inboxTask.title })).toBeVisible();
+  });
+
+  it("shows completed-today items in a collapsible section and reopens them", async () => {
+    setupFetch(overviewResponse(), () =>
+      jsonResponse({
+        changed: true,
+        work_item: { ...completedTask, status: "active", completed_at: null, revision: 25 },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApplication("/overview");
+
+    const today = (await screen.findByRole("heading", { name: "Сегодня" })).closest(
+      "section",
+    )!;
+    expect(within(today).getByLabelText("2 записей")).toBeVisible();
     expect(
-      within(tomorrow).queryByRole("heading", { name: inboxTask.title }),
+      within(today).queryByRole("heading", { name: completedTask.title }),
     ).not.toBeInTheDocument();
+    await user.click(within(today).getByRole("button", { name: /Выполнено/ }));
+    const completed = within(today).getByRole("heading", { name: completedTask.title });
+    await user.click(
+      within(completed.closest("article")!).getByRole("button", { name: "Вернуть задачу" }),
+    );
+    await waitFor(() =>
+      expect(
+        within(today).getByRole("heading", { name: completedTask.title }),
+      ).toBeVisible(),
+    );
   });
 });

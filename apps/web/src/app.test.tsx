@@ -13,9 +13,31 @@ function emptyOperationalResponse(path: string): Response {
   if (path.endsWith("/api/v1/overview")) {
     return jsonResponse({
       timezone: "Europe/Riga",
-      today: { items: [], total: 0, has_more: false },
-      tomorrow: { items: [], total: 0, has_more: false },
-      inbox: { items: [], total: 0, has_more: false },
+      workspace_counts: { all: 0, work: 0, personal: 0 },
+      today: {
+        items: [],
+        total: 0,
+        has_more: false,
+        completed_items: [],
+        completed_total: 0,
+        completed_has_more: false,
+      },
+      tomorrow: {
+        items: [],
+        total: 0,
+        has_more: false,
+        completed_items: [],
+        completed_total: 0,
+        completed_has_more: false,
+      },
+      inbox: {
+        items: [],
+        total: 0,
+        has_more: false,
+        completed_items: [],
+        completed_total: 0,
+        completed_has_more: false,
+      },
     });
   }
   if (path.includes("/today/overview")) {
@@ -105,7 +127,9 @@ describe("protected application", () => {
     await screen.findByRole("heading", { name: "Сегодня" });
     expect(screen.queryByLabelText("Рабочее пространство")).not.toBeInTheDocument();
     expect(screen.queryByText("Создавать в:")).not.toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([input]) => requestPath(input) === "/api/v1/workspace")).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(([input]) => requestPath(input) === "/api/v1/workspace"),
+    ).toBe(false);
   });
 
   it("shows a loading state while the session is being checked", async () => {
@@ -151,7 +175,7 @@ describe("protected application", () => {
     renderApplication(path);
 
     expect(await screen.findByRole("heading", { name: title, level: 1 })).toBeVisible();
-    expect(screen.getAllByText("FlowMate")).toHaveLength(2);
+    expect(screen.getAllByText("FlowMate")).toHaveLength(path === "/overview" ? 3 : 2);
   });
 
   it("shows Overview first in desktop and mobile navigation", async () => {

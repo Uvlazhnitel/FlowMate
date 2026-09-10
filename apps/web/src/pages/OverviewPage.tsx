@@ -1,9 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, CalendarDays, CalendarRange, Inbox } from "lucide-react";
-import { useState, type DragEvent, type ReactNode } from "react";
+import {
+  BriefcaseBusiness,
+  Check,
+  ChevronDown,
+  House,
+  Inbox,
+  Plus,
+  Search,
+  Waves,
+} from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
+import { ApiError } from "../api/client";
 import {
+  captureText,
   getOverview,
   operationsKeys,
   runWorkItemAction,
@@ -11,12 +22,10 @@ import {
   type OverviewInboxItem,
   type OverviewResponse,
   type OverviewWorkItem,
+  type TextCapturePayload,
   type WorkItemCardData,
 } from "../api/operations";
-import { ApiError } from "../api/client";
 import { remainingKeys } from "../api/remaining";
-import { OperationalLayout } from "../components/OperationalLayout";
-import { ErrorState, LoadingState } from "../components/PageState";
 import { WorkspaceBadge } from "../components/WorkspaceBadge";
 import { WorkspaceScopeFilter } from "../components/WorkspaceScopeFilter";
 import type { DateTimePreferences } from "../lib/dates";
@@ -25,30 +34,17 @@ import {
   workspacePath,
   type WorkspaceScope,
 } from "../lib/workspaceScope";
-import { reasonLabels } from "./inbox/presentation";
-import { OverviewWorkItemRow } from "./overview/OverviewWorkItemRow";
+import { OverviewWorkItemRow, type OverviewBucket } from "./overview/OverviewWorkItemRow";
 
-const inboxKindLabels: Record<OverviewInboxItem["kind"], string> = {
-  draft: "Черновик AI",
-  work_item: "Задача",
-  note: "Заметка",
-};
+type CaptureBucket = TextCapturePayload["target_bucket"];
 
-type OverviewBucket = "today" | "tomorrow" | "inbox";
-
-interface DraggedWorkItem {
-  item: WorkItemCardData;
-  source: OverviewBucket;
-}
-
-const draggableTypes = new Set(["task", "follow_up", "waiting", "question"]);
 const bucketLabels: Record<OverviewBucket, string> = {
   today: "Сегодня",
   tomorrow: "Завтра",
   inbox: "Входящие",
 };
 
-function optimisticMove(
+function updateOverviewMove(
   current: OverviewResponse | undefined,
   item: WorkItemCardData,
   target: OverviewBucket,
@@ -60,22 +56,19 @@ function optimisticMove(
     (entry) => entry.kind === "work_item" && entry.item.id === item.id,
   );
   const datedEntry: OverviewWorkItem = { item, needs_inbox: false };
+  const inboxItem = { ...item, status: "inbox", effective_at: null };
   const inboxEntry: OverviewInboxItem = {
     id: item.id,
     kind: "work_item",
-    item: { ...item, status: "inbox", effective_at: null },
+    item: inboxItem,
     title: item.title,
-    excerpt: item.description ?? "",
+    excerpt: "",
     status: "inbox",
     reasons: ["inbox_status"],
     occurred_at: item.updated_at,
     item_count: 1,
     workspace: item.workspace,
   };
-  const todayTotal = current.today.total - Number(hadToday) + Number(target === "today");
-  const tomorrowTotal =
-    current.tomorrow.total - Number(hadTomorrow) + Number(target === "tomorrow");
-  const inboxTotal = current.inbox.total - Number(hadInbox) + Number(target === "inbox");
   const todayItems = current.today.items.filter((entry) => entry.item.id !== item.id);
   const tomorrowItems = current.tomorrow.items.filter((entry) => entry.item.id !== item.id);
   const inboxItems = current.inbox.items.filter(
@@ -87,138 +80,259 @@ function optimisticMove(
   return {
     ...current,
     today: {
+      ...current.today,
       items: todayItems.slice(0, 8),
-      total: todayTotal,
-      has_more: todayTotal > Math.min(todayItems.length, 8),
+      total: current.today.total - Number(hadToday) + Number(target === "today"),
     },
     tomorrow: {
+      ...current.tomorrow,
       items: tomorrowItems.slice(0, 8),
-      total: tomorrowTotal,
-      has_more: tomorrowTotal > Math.min(tomorrowItems.length, 8),
+      total: current.tomorrow.total - Number(hadTomorrow) + Number(target === "tomorrow"),
     },
     inbox: {
+      ...current.inbox,
       items: inboxItems.slice(0, 8),
-      total: inboxTotal,
-      has_more: inboxTotal > Math.min(inboxItems.length, 8),
+      total: current.inbox.total - Number(hadInbox) + Number(target === "inbox"),
     },
   };
 }
 
-function footerLabel(total: number) {
-  return total > 8 ? `Показать все ${total}` : "Открыть раздел";
+function moveToCompleted(
+  current: OverviewResponse | undefined,
+  original: WorkItemCardData,
+  completed: WorkItemCardData,
+  bucket: OverviewBucket,
+): OverviewResponse | undefined {
+  if (!current) return current;
+  const column = current[bucket];
+  const items = column.items.filter((entry) =>
+    "kind" in entry
+      ? entry.kind !== "work_item" || entry.item.id !== original.id
+      : entry.item.id !== original.id,
+  );
+  return {
+    ...current,
+    [bucket]: {
+      ...column,
+      items,
+      total: Math.max(0, column.total - 1),
+      completed_items: [completed, ...column.completed_items].slice(0, 8),
+      completed_total: column.completed_total + 1,
+    },
+  };
 }
 
-function OverviewColumn({
+function moveToActive(
+  current: OverviewResponse | undefined,
+  item: WorkItemCardData,
+  bucket: OverviewBucket,
+): OverviewResponse | undefined {
+  if (!current) return current;
+  const column = current[bucket];
+  const activeEntry =
+    bucket === "inbox"
+      ? ({
+          id: item.id,
+          kind: "work_item",
+          item,
+          title: item.title,
+          excerpt: item.description ?? "",
+          status: item.status,
+          reasons: ["inbox_status"],
+          occurred_at: item.updated_at,
+          item_count: 1,
+          workspace: item.workspace,
+        } satisfies OverviewInboxItem)
+      : ({ item, needs_inbox: false } satisfies OverviewWorkItem);
+  return {
+    ...current,
+    [bucket]: {
+      ...column,
+      items: [activeEntry, ...column.items].slice(0, 8),
+      total: column.total + 1,
+      completed_items: column.completed_items.filter((entry) => entry.id !== item.id),
+      completed_total: Math.max(0, column.completed_total - 1),
+    },
+  };
+}
+
+function boardDate(daysAhead: number, timezone: string) {
+  const value = new Date();
+  value.setDate(value.getDate() + daysAhead);
+  const date = new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric",
+    month: "long",
+    timeZone: timezone,
+  }).format(value);
+  const weekday = new Intl.DateTimeFormat("ru-RU", {
+    weekday: "long",
+    timeZone: timezone,
+  }).format(value);
+  return `${date}, ${weekday}`;
+}
+
+function isWindowsPlatform() {
+  if (typeof navigator === "undefined") return false;
+  return navigator.platform.toLowerCase().startsWith("win");
+}
+
+function OverviewColumn<T>({
+  bucket,
   title,
+  subtitle,
   icon,
   data,
-  to,
-  className,
   empty,
+  to,
+  completedOpen,
+  onToggleCompleted,
+  onAdd,
   children,
-  dropEnabled,
-  dropActive,
-  onDragOver,
-  onDragLeave,
-  onDrop,
+  completedChildren,
 }: {
+  bucket: OverviewBucket;
   title: string;
+  subtitle?: string;
   icon: ReactNode;
-  data: OverviewColumnData<unknown>;
-  to: string;
-  className: string;
+  data: OverviewColumnData<T>;
   empty: string;
+  to: string;
+  completedOpen: boolean;
+  onToggleCompleted: () => void;
+  onAdd: () => void;
   children: ReactNode;
-  dropEnabled: boolean;
-  dropActive: boolean;
-  onDragOver: (event: DragEvent<HTMLElement>) => void;
-  onDragLeave: (event: DragEvent<HTMLElement>) => void;
-  onDrop: (event: DragEvent<HTMLElement>) => void;
+  completedChildren: ReactNode;
 }) {
+  const total = data.total + data.completed_total;
   return (
     <section
-      className={`overview-column ${className} ${dropEnabled ? "overview-column--drop-enabled" : ""} ${dropActive ? "overview-column--drop-active" : ""}`}
-      aria-labelledby={`${className}-title`}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      className={`overview-column overview-column--${bucket}`}
+      aria-labelledby={`${bucket}-title`}
     >
       <header className="overview-column__header">
-        <span className="overview-column__icon">{icon}</span>
-        <h2 id={`${className}-title`}>{title}</h2>
-        <span className="overview-column__count" aria-label={`${data.total} записей`}>
-          {data.total}
+        <div>
+          <h2 id={`${bucket}-title`}>{title}</h2>
+          {subtitle && <p>{subtitle}</p>}
+        </div>
+        <span className="overview-column__count" aria-label={`${total} записей`}>
+          {total}
         </span>
+        <button type="button" aria-label={`Добавить задачу в «${title}»`} onClick={onAdd}>
+          <Plus size={21} aria-hidden />
+        </button>
       </header>
       <div className="overview-column__list">
         {data.items.length ? children : <p className="overview-column__empty">{empty}</p>}
       </div>
-      <Link className="overview-column__footer" to={to}>
-        {footerLabel(data.total)} <ArrowRight size={15} aria-hidden />
-      </Link>
+      {data.completed_total > 0 && (
+        <div className="overview-completed">
+          <button type="button" aria-expanded={completedOpen} onClick={onToggleCompleted}>
+            <ChevronDown size={17} aria-hidden />
+            <span>Выполнено</span>
+            <strong>{data.completed_total}</strong>
+          </button>
+          {completedOpen && (
+            <div className="overview-completed__list">{completedChildren}</div>
+          )}
+        </div>
+      )}
+      {data.has_more && (
+        <Link className="overview-column__more" to={to}>
+          Показать все {data.total}
+        </Link>
+      )}
+      <button className="overview-column__add" type="button" onClick={onAdd}>
+        <Plus size={18} aria-hidden /> Добавить задачу
+      </button>
+      <span className="overview-column__decorative-icon" aria-hidden>
+        {icon}
+      </span>
     </section>
   );
 }
 
-function OverviewInboxRow({
-  item,
-  moveDisabled,
-  dragging,
-  onDragStart,
-  onDragEnd,
-  scope,
-}: {
-  item: OverviewInboxItem;
-  moveDisabled: boolean;
-  dragging: boolean;
-  onDragStart: (event: DragEvent<HTMLElement>) => void;
-  onDragEnd: () => void;
-  scope: WorkspaceScope;
-}) {
-  const reason = item.reasons[0];
-  const canDrag = item.kind === "work_item" && draggableTypes.has(item.item.type);
+function InboxEntry({ item, scope }: { item: OverviewInboxItem; scope: WorkspaceScope }) {
   return (
-    <Link
-      className={`overview-inbox-row ${dragging ? "overview-row--dragging" : ""}`}
-      to={workspacePath(`/inbox?kind=${item.kind}&focus=${item.id}`, scope)}
-      draggable={canDrag && !moveDisabled}
-      aria-busy={canDrag && moveDisabled}
-      onDragStart={canDrag ? onDragStart : undefined}
-      onDragEnd={canDrag ? onDragEnd : undefined}
-    >
-      <div className="overview-row__badges">
-        <span className="overview-badge">{inboxKindLabels[item.kind]}</span>
+    <article className={`overview-inbox-row overview-card--${item.workspace}`}>
+      <span className="overview-inbox-row__marker" aria-hidden />
+      <div>
+        <Link to={workspacePath(`/inbox?kind=${item.kind}&focus=${item.id}`, scope)}>
+          <h3 title={item.title}>{item.title}</h3>
+        </Link>
         <WorkspaceBadge workspace={item.workspace} />
-        {item.item_count > 1 && (
-          <span className="overview-badge">{item.item_count} записи</span>
-        )}
       </div>
-      <h3 title={item.title}>{item.title}</h3>
-      {item.excerpt && <p>{item.excerpt}</p>}
-      {reason && (
-        <span className="overview-inbox-row__reason">{reasonLabels[reason] ?? reason}</span>
-      )}
-    </Link>
+    </article>
   );
 }
 
 export function OverviewPage({
   dateTimePreferences,
+  defaultWorkspace,
 }: {
   dateTimePreferences: DateTimePreferences;
+  defaultWorkspace: "work" | "personal";
 }) {
   const queryClient = useQueryClient();
   const { scope, setScope } = useWorkspaceScope();
-  const overviewKey = operationsKeys.overview(scope);
-  const [dragged, setDragged] = useState<DraggedWorkItem | null>(null);
-  const [dropTarget, setDropTarget] = useState<OverviewBucket | null>(null);
-  const [moveFeedback, setMoveFeedback] = useState<{
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [captureTextValue, setCaptureTextValue] = useState("");
+  const [captureWorkspace, setCaptureWorkspace] = useState(defaultWorkspace);
+  const [captureBucket, setCaptureBucket] = useState<CaptureBucket>("auto");
+  const [captureId, setCaptureId] = useState(() => crypto.randomUUID());
+  const [feedback, setFeedback] = useState<{
     kind: "success" | "error";
     text: string;
   } | null>(null);
-  const query = useQuery({ queryKey: overviewKey, queryFn: () => getOverview(scope) });
+  const [completedOpen, setCompletedOpen] = useState<Record<OverviewBucket, boolean>>({
+    today: false,
+    tomorrow: false,
+    inbox: false,
+  });
+  const composerInput = useRef<HTMLInputElement | null>(null);
+  const searchInput = useRef<HTMLInputElement | null>(null);
+  const windows = isWindowsPlatform();
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    if (!windows) return;
+    function focusSearch(event: KeyboardEvent) {
+      if (event.ctrlKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchInput.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, [windows]);
+
+  const overviewKey = operationsKeys.overview(scope, debouncedSearch);
+  const query = useQuery({
+    queryKey: overviewKey,
+    queryFn: () => getOverview(scope, debouncedSearch),
+    placeholderData: (previous) => previous,
+  });
+
+  async function refresh() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: operationsKeys.all }),
+      queryClient.invalidateQueries({ queryKey: remainingKeys.all }),
+    ]);
+  }
+
   const moveMutation = useMutation({
-    mutationFn: ({ item, target }: DraggedWorkItem & { target: OverviewBucket }) =>
+    mutationFn: ({
+      item,
+      target,
+    }: {
+      item: WorkItemCardData;
+      source: OverviewBucket;
+      target: OverviewBucket;
+    }) =>
       runWorkItemAction(item.id, {
         action: "move_bucket",
         target,
@@ -229,189 +343,289 @@ export function OverviewPage({
       await queryClient.cancelQueries({ queryKey: overviewKey });
       const previous = queryClient.getQueryData<OverviewResponse>(overviewKey);
       queryClient.setQueryData<OverviewResponse | undefined>(overviewKey, (current) =>
-        optimisticMove(current, item, target),
+        updateOverviewMove(current, item, target),
       );
+      setFeedback(null);
       return { previous };
     },
     onSuccess: (_response, variables) => {
-      setMoveFeedback({
+      setFeedback({
         kind: "success",
-        text: `Задача перемещена в «${bucketLabels[variables.target]}».`,
+        text: `Перемещено в «${bucketLabels[variables.target]}»`,
       });
     },
     onError: (error, _variables, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(overviewKey, context.previous);
-      }
-      const text =
-        error instanceof ApiError && error.status === 409
-          ? "Задача уже изменилась. Обзор обновлён — повторите перенос."
-          : error instanceof ApiError
-            ? error.message
-            : "Не удалось переместить задачу. Попробуйте ещё раз.";
-      setMoveFeedback({ kind: "error", text });
+      if (context?.previous) queryClient.setQueryData(overviewKey, context.previous);
+      setFeedback({
+        kind: "error",
+        text:
+          error instanceof ApiError && error.status === 409
+            ? "Задача уже изменилась. Обзор обновлён — повторите перенос."
+            : error instanceof ApiError
+              ? error.message
+              : "Не удалось переместить задачу.",
+      });
     },
-    onSettled: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: operationsKeys.all }),
-        queryClient.invalidateQueries({ queryKey: remainingKeys.all }),
-      ]);
+    onSettled: refresh,
+  });
+
+  const captureMutation = useMutation({
+    mutationFn: () =>
+      captureText({
+        text: captureTextValue.trim(),
+        workspace: captureWorkspace,
+        target_bucket: captureBucket,
+        client_capture_id: captureId,
+      }),
+    onSuccess: async (result) => {
+      setCaptureTextValue("");
+      setCaptureBucket("auto");
+      setCaptureId(crypto.randomUUID());
+      setFeedback({
+        kind: "success",
+        text:
+          result.disposition === "created"
+            ? "Задача добавлена"
+            : "Нужно уточнение — запись добавлена во «Входящие»",
+      });
+      await refresh();
+    },
+    onError: (error) => {
+      setFeedback({
+        kind: "error",
+        text: error instanceof ApiError ? error.message : "Не удалось добавить задачу.",
+      });
     },
   });
 
-  function startDrag(
-    event: DragEvent<HTMLElement>,
-    item: WorkItemCardData,
-    source: OverviewBucket,
-  ) {
-    if (moveMutation.isPending) {
-      event.preventDefault();
-      return;
-    }
-    moveMutation.reset();
-    setMoveFeedback(null);
-    setDragged({ item, source });
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", item.id);
+  function focusComposer(bucket: CaptureBucket) {
+    setCaptureBucket(bucket);
+    setFeedback(null);
+    composerInput.current?.focus();
   }
 
-  function dragOver(event: DragEvent<HTMLElement>, target: OverviewBucket) {
-    if (!dragged || dragged.source === target || moveMutation.isPending) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    setDropTarget(target);
+  function renderWorkItem(entry: OverviewWorkItem, bucket: OverviewBucket) {
+    return (
+      <OverviewWorkItemRow
+        key={entry.item.id}
+        entry={entry}
+        bucket={bucket}
+        dateTimePreferences={dateTimePreferences}
+        moveDisabled={moveMutation.isPending}
+        onMove={(item, source, target) => moveMutation.mutate({ item, source, target })}
+        onCompleted={(original, completedItem, source) => {
+          queryClient.setQueryData<OverviewResponse | undefined>(overviewKey, (current) =>
+            moveToCompleted(current, original, completedItem, source),
+          );
+          void refresh();
+        }}
+        onReopened={(item, source) => {
+          queryClient.setQueryData<OverviewResponse | undefined>(overviewKey, (current) =>
+            moveToActive(current, item, source),
+          );
+          void refresh();
+        }}
+      />
+    );
   }
 
-  function dragLeave(event: DragEvent<HTMLElement>, target: OverviewBucket) {
-    if (
-      dropTarget === target &&
-      !event.currentTarget.contains(event.relatedTarget as Node | null)
-    ) {
-      setDropTarget(null);
-    }
+  function renderCompleted(item: WorkItemCardData, bucket: OverviewBucket) {
+    return (
+      <OverviewWorkItemRow
+        key={item.id}
+        entry={{ item, needs_inbox: false }}
+        bucket={bucket}
+        dateTimePreferences={dateTimePreferences}
+        completed
+        onMove={() => undefined}
+        onCompleted={() => undefined}
+        onReopened={(reopened, source) => {
+          queryClient.setQueryData<OverviewResponse | undefined>(overviewKey, (current) =>
+            moveToActive(current, reopened, source),
+          );
+          void refresh();
+        }}
+      />
+    );
   }
 
-  function drop(event: DragEvent<HTMLElement>, target: OverviewBucket) {
-    event.preventDefault();
-    setDropTarget(null);
-    if (!dragged || dragged.source === target || moveMutation.isPending) return;
-    moveMutation.mutate({ ...dragged, target });
-    setDragged(null);
-  }
-
-  function endDrag() {
-    setDragged(null);
-    setDropTarget(null);
-  }
-
-  const columnDragProps = (bucket: OverviewBucket) => ({
-    dropEnabled: Boolean(dragged && dragged.source !== bucket),
-    dropActive: dropTarget === bucket,
-    onDragOver: (event: DragEvent<HTMLElement>) => dragOver(event, bucket),
-    onDragLeave: (event: DragEvent<HTMLElement>) => dragLeave(event, bucket),
-    onDrop: (event: DragEvent<HTMLElement>) => drop(event, bucket),
-  });
-
+  const counts = query.data?.workspace_counts;
   return (
-    <OperationalLayout
-      eyebrow="Главное"
-      title="Обзор"
-      description="Сегодня, завтра и входящие — в одном спокойном рабочем пространстве."
-      controls={
-        <WorkspaceScopeFilter
-          scope={scope}
-          counts={query.data?.workspace_counts}
-          onChange={setScope}
-        />
-      }
-    >
-      {query.isPending ? (
-        <LoadingState label="Собираем обзор" />
-      ) : query.isError ? (
-        <ErrorState
-          title="Не удалось загрузить обзор"
-          onRetry={() => void query.refetch()}
-        />
-      ) : (
-        <>
-          {moveFeedback && (
-            <p
-              className={`overview-move-feedback overview-move-feedback--${moveFeedback.kind}`}
-              role={moveFeedback.kind === "error" ? "alert" : "status"}
-              aria-live="polite"
-            >
-              {moveFeedback.text}
-            </p>
+    <section className="overview-board" aria-labelledby="overview-board-title">
+      <h1 id="overview-board-title" className="sr-only">
+        Обзор
+      </h1>
+      <header className="overview-topbar">
+        <Link className="overview-brand" to="/overview" aria-label="FlowMate — обзор">
+          <Waves size={31} aria-hidden />
+          <span>FlowMate</span>
+        </Link>
+        <WorkspaceScopeFilter scope={scope} counts={counts} onChange={setScope} />
+        <div className="overview-topbar__actions">
+          <label className="overview-search">
+            <Search size={17} aria-hidden />
+            <span className="sr-only">Поиск задач на доске</span>
+            <input
+              ref={searchInput}
+              type="search"
+              aria-label="Поиск задач на доске"
+              value={search}
+              placeholder="Поиск задач…"
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            {windows && <kbd>Ctrl K</kbd>}
+          </label>
+          <button
+            className="overview-primary-button"
+            type="button"
+            onClick={() => focusComposer("auto")}
+          >
+            <Plus size={20} aria-hidden /> Новая задача
+          </button>
+        </div>
+      </header>
+
+      <form
+        className="overview-composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (captureTextValue.trim() && !captureMutation.isPending)
+            captureMutation.mutate();
+        }}
+      >
+        <Plus size={25} aria-hidden />
+        <label className="overview-composer__input">
+          <span className="sr-only">Текст новой задачи</span>
+          <input
+            ref={composerInput}
+            value={captureTextValue}
+            maxLength={10_000}
+            placeholder="Например: завтра в 10 подготовить отчёт"
+            disabled={captureMutation.isPending}
+            onChange={(event) => {
+              setCaptureTextValue(event.target.value);
+              setCaptureId(crypto.randomUUID());
+            }}
+          />
+        </label>
+        {captureBucket !== "auto" && (
+          <span className="overview-composer__target">
+            В: {bucketLabels[captureBucket]}
+          </span>
+        )}
+        <label className="overview-composer__workspace">
+          {captureWorkspace === "work" ? (
+            <BriefcaseBusiness size={16} aria-hidden />
+          ) : (
+            <House size={16} aria-hidden />
           )}
-          <div className="overview-grid">
-            <OverviewColumn
-              title="Сегодня"
-              icon={<CalendarDays size={18} aria-hidden />}
-              data={query.data.today}
-              to={workspacePath("/today", scope)}
-              className="overview-column--today"
-              empty="На сегодня всё разобрано."
-              {...columnDragProps("today")}
-            >
-              {query.data.today.items.map((entry: OverviewWorkItem) => (
-                <OverviewWorkItemRow
-                  key={entry.item.id}
-                  entry={entry}
-                  dateTimePreferences={dateTimePreferences}
-                  moveDisabled={moveMutation.isPending}
-                  dragging={dragged?.item.id === entry.item.id}
-                  onDragStart={(event) => startDrag(event, entry.item, "today")}
-                  onDragEnd={endDrag}
-                />
-              ))}
-            </OverviewColumn>
-            <OverviewColumn
-              title="Завтра"
-              icon={<CalendarRange size={18} aria-hidden />}
-              data={query.data.tomorrow}
-              to={workspacePath("/tomorrow", scope)}
-              className="overview-column--tomorrow"
-              empty="На завтра ничего не запланировано."
-              {...columnDragProps("tomorrow")}
-            >
-              {query.data.tomorrow.items.map((entry: OverviewWorkItem) => (
-                <OverviewWorkItemRow
-                  key={entry.item.id}
-                  entry={entry}
-                  dateTimePreferences={dateTimePreferences}
-                  moveDisabled={moveMutation.isPending}
-                  dragging={dragged?.item.id === entry.item.id}
-                  onDragStart={(event) => startDrag(event, entry.item, "tomorrow")}
-                  onDragEnd={endDrag}
-                />
-              ))}
-            </OverviewColumn>
-            <OverviewColumn
-              title="Входящие"
-              icon={<Inbox size={18} aria-hidden />}
-              data={query.data.inbox}
-              to={workspacePath("/inbox", scope)}
-              className="overview-column--inbox"
-              empty="Входящие разобраны."
-              {...columnDragProps("inbox")}
-            >
-              {query.data.inbox.items.map((item: OverviewInboxItem) => (
-                <OverviewInboxRow
-                  key={`${item.kind}-${item.id}`}
-                  item={item}
-                  moveDisabled={moveMutation.isPending}
-                  dragging={item.kind === "work_item" && dragged?.item.id === item.item.id}
-                  onDragStart={(event) => {
-                    if (item.kind === "work_item") startDrag(event, item.item, "inbox");
-                  }}
-                  onDragEnd={endDrag}
-                  scope={scope}
-                />
-              ))}
-            </OverviewColumn>
-          </div>
-        </>
+          <span className="sr-only">Пространство задачи</span>
+          <select
+            value={captureWorkspace}
+            disabled={captureMutation.isPending}
+            onChange={(event) =>
+              setCaptureWorkspace(event.target.value as "work" | "personal")
+            }
+          >
+            <option value="work">Работа</option>
+            <option value="personal">Личное</option>
+          </select>
+        </label>
+        <button
+          type="submit"
+          disabled={!captureTextValue.trim() || captureMutation.isPending}
+        >
+          {captureMutation.isPending ? "Разбираем задачу…" : "Добавить"}
+        </button>
+      </form>
+
+      {feedback && (
+        <p
+          className={`overview-feedback overview-feedback--${feedback.kind}`}
+          role={feedback.kind === "error" ? "alert" : "status"}
+          aria-live="polite"
+        >
+          {feedback.text}
+        </p>
       )}
-    </OperationalLayout>
+
+      {query.isPending ? (
+        <p className="overview-board__state" role="status">
+          Собираем обзор…
+        </p>
+      ) : query.isError ? (
+        <div className="overview-board__state" role="alert">
+          <p>Не удалось загрузить обзор.</p>
+          <button type="button" onClick={() => void query.refetch()}>
+            Повторить
+          </button>
+        </div>
+      ) : (
+        <div className="overview-grid">
+          <OverviewColumn
+            bucket="today"
+            title="Сегодня"
+            subtitle={boardDate(0, dateTimePreferences.timezone)}
+            icon={<Check size={18} />}
+            data={query.data.today}
+            empty="На сегодня всё разобрано."
+            to={workspacePath("/today", scope)}
+            completedOpen={completedOpen.today}
+            onToggleCompleted={() =>
+              setCompletedOpen((value) => ({ ...value, today: !value.today }))
+            }
+            onAdd={() => focusComposer("today")}
+            completedChildren={query.data.today.completed_items.map((item) =>
+              renderCompleted(item, "today"),
+            )}
+          >
+            {query.data.today.items.map((entry) => renderWorkItem(entry, "today"))}
+          </OverviewColumn>
+          <OverviewColumn
+            bucket="tomorrow"
+            title="Завтра"
+            subtitle={boardDate(1, dateTimePreferences.timezone)}
+            icon={<Check size={18} />}
+            data={query.data.tomorrow}
+            empty="На завтра ничего не запланировано."
+            to={workspacePath("/tomorrow", scope)}
+            completedOpen={completedOpen.tomorrow}
+            onToggleCompleted={() =>
+              setCompletedOpen((value) => ({ ...value, tomorrow: !value.tomorrow }))
+            }
+            onAdd={() => focusComposer("tomorrow")}
+            completedChildren={query.data.tomorrow.completed_items.map((item) =>
+              renderCompleted(item, "tomorrow"),
+            )}
+          >
+            {query.data.tomorrow.items.map((entry) => renderWorkItem(entry, "tomorrow"))}
+          </OverviewColumn>
+          <OverviewColumn
+            bucket="inbox"
+            title="Входящие"
+            icon={<Inbox size={18} />}
+            data={query.data.inbox}
+            empty="Входящие разобраны."
+            to={workspacePath("/inbox", scope)}
+            completedOpen={completedOpen.inbox}
+            onToggleCompleted={() =>
+              setCompletedOpen((value) => ({ ...value, inbox: !value.inbox }))
+            }
+            onAdd={() => focusComposer("inbox")}
+            completedChildren={query.data.inbox.completed_items.map((item) =>
+              renderCompleted(item, "inbox"),
+            )}
+          >
+            {query.data.inbox.items.map((entry) =>
+              entry.kind === "work_item" ? (
+                renderWorkItem({ item: entry.item, needs_inbox: true }, "inbox")
+              ) : (
+                <InboxEntry key={`${entry.kind}-${entry.id}`} item={entry} scope={scope} />
+              ),
+            )}
+          </OverviewColumn>
+        </div>
+      )}
+    </section>
   );
 }

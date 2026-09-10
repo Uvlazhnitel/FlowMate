@@ -6,17 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from flowmate.ai.errors import safe_ai_error_code
-from flowmate.ai.schemas import (
-    DraftAnalysisResult,
-    DraftItemType,
-    DraftReadiness,
-    DraftSource,
-    TemporalStatus,
-)
+from flowmate.ai.schemas import DraftSource
 from flowmate.ai.service import DraftParsingService
 from flowmate.db.drafts import load_analysis, replace_draft_analysis
 from flowmate.db.models import AIProcessingJob, DraftSession, Note
 from flowmate.db.session import session_scope
+from flowmate.drafts.capture import fast_capture_is_ready
 from flowmate.drafts.questions import next_clarification_question
 from flowmate.stabilization.audit import record_audit_event
 from flowmate.stabilization.jobs import (
@@ -28,31 +23,6 @@ from flowmate.stabilization.jobs import (
 from flowmate.task_engine.conversion import DraftConversionService
 
 logger = logging.getLogger(__name__)
-
-
-def recovery_fast_capture_is_ready(
-    analysis: DraftAnalysisResult,
-    *,
-    high_confidence_threshold: float,
-) -> bool:
-    if analysis.confidence < high_confidence_threshold:
-        return False
-    for assessment in analysis.items:
-        if (
-            assessment.readiness is not DraftReadiness.READY
-            or assessment.item.type is DraftItemType.UNKNOWN
-            or assessment.item.confidence < high_confidence_threshold
-        ):
-            return False
-        if any(
-            candidate is not None and candidate.status is not TemporalStatus.RESOLVED
-            for candidate in (
-                assessment.item.due_date_candidate,
-                assessment.item.reminder_candidate,
-            )
-        ):
-            return False
-    return True
 
 
 class AIRecoveryProcessor:
@@ -176,7 +146,7 @@ class AIRecoveryProcessor:
             question=next_clarification_question(analysis),
             ttl_hours=self._draft_ttl_hours,
         )
-        if recovery_fast_capture_is_ready(
+        if fast_capture_is_ready(
             analysis,
             high_confidence_threshold=self._high_threshold,
         ):

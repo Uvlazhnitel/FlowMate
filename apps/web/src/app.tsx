@@ -43,7 +43,12 @@ function UserRoute({
     timeDisplayFormat: user.time_display_format,
   };
   if (page === "overview")
-    return <OverviewPage dateTimePreferences={dateTimePreferences} />;
+    return (
+      <OverviewPage
+        dateTimePreferences={dateTimePreferences}
+        defaultWorkspace={user.active_workspace}
+      />
+    );
   if (page === "today")
     return (
       <TodayPage

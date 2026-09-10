@@ -27,6 +27,7 @@ def create_app(
     settings: Settings | None = None,
     engine: AsyncEngine | None = None,
     login_code_sender: LoginCodeSender | None = None,
+    ai_provider: AIProvider | None = None,
 ) -> FastAPI:
     app_settings = (settings or get_settings()).require_api()
     configure_logging(
@@ -41,15 +42,19 @@ def create_app(
         login_bot: Bot | None = None
         owned_ai_provider: AIProvider | None = None
         app.state.login_code_sender = login_code_sender
-        try:
-            owned_ai_provider = create_ai_provider(app_settings)
-        except AIConfigurationError:
-            logging.getLogger(__name__).warning(
-                "ai_provider_disabled category=incomplete_configuration"
-            )
+        runtime_ai_provider = ai_provider
+        if runtime_ai_provider is None:
+            try:
+                owned_ai_provider = create_ai_provider(app_settings)
+                runtime_ai_provider = owned_ai_provider
+            except AIConfigurationError:
+                logging.getLogger(__name__).warning(
+                    "ai_provider_disabled category=incomplete_configuration"
+                )
+        app.state.ai_provider = runtime_ai_provider
         snooze_provider = (
-            owned_ai_provider
-            if isinstance(owned_ai_provider, SnoozeTimeProvider)
+            runtime_ai_provider
+            if isinstance(runtime_ai_provider, SnoozeTimeProvider)
             else None
         )
         app.state.rescheduling_service = ReschedulingService(

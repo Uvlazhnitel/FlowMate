@@ -245,5 +245,4 @@ describe("Today home", () => {
       ),
     ).toBe(false);
   });
-
 });
