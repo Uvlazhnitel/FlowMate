@@ -242,40 +242,4 @@ describe("Today home", () => {
     ).toBe(false);
   });
 
-  it("refreshes the overview after a workspace switch", async () => {
-    let workspace = "personal";
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const path = requestPath(input);
-      if (path.includes("/auth/me"))
-        return Promise.resolve(jsonResponse(authenticatedUser));
-      if (path.includes("/api/v1/workspace")) {
-        workspace = "work";
-        return Promise.resolve(
-          jsonResponse({ ...authenticatedUser, active_workspace: "work" }),
-        );
-      }
-      if (path.includes("/today/overview")) {
-        const item = {
-          ...focusItem,
-          id: workspace === "work" ? "9b3a99be-c748-46a5-9bd1-0631c4585fc2" : focusItem.id,
-          title: workspace === "work" ? "Рабочий фокус" : "Личный фокус",
-        };
-        return Promise.resolve(jsonResponse(overview({ focus: [item], later: [] })));
-      }
-      return Promise.resolve(jsonResponse(page()));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const user = userEvent.setup();
-
-    renderApplication("/today");
-    expect(await screen.findByText("Личный фокус")).toBeVisible();
-    const desktopSwitcher = screen
-      .getAllByLabelText("Рабочее пространство")
-      .find((node) => node.closest(".sidebar"));
-    expect(desktopSwitcher).toBeDefined();
-    await user.click(within(desktopSwitcher!).getByRole("button", { name: "Работа" }));
-
-    expect(await screen.findByText("Рабочий фокус")).toBeVisible();
-    expect(screen.queryByText("Личный фокус")).not.toBeInTheDocument();
-  });
 });

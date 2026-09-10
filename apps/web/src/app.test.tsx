@@ -86,7 +86,7 @@ afterEach(() => {
 });
 
 describe("protected application", () => {
-  it("switches between Personal and Work from the application shell", async () => {
+  it("does not show the obsolete creation workspace switcher", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const path = requestPath(input);
       if (path.includes("/api/v1/auth/me")) {
@@ -103,29 +103,9 @@ describe("protected application", () => {
 
     renderApplication("/today");
     await screen.findByRole("heading", { name: "Сегодня" });
-    const switchers = screen.getAllByLabelText("Рабочее пространство");
-    expect(switchers).toHaveLength(2);
-    for (const switcher of switchers) {
-      expect(
-        within(switcher)
-          .getAllByRole("button")
-          .map((button) => button.textContent),
-      ).toEqual(["Работа", "Личное"]);
-    }
-
-    const desktopSwitcher = switchers.at(0);
-    expect(desktopSwitcher).toBeDefined();
-    if (desktopSwitcher === undefined) return;
-    const workButton = within(desktopSwitcher).getByRole("button", { name: "Работа" });
-    expect(workButton).toBeDefined();
-    await userEvent.click(workButton);
-
-    await waitFor(() => {
-      expect(
-        fetchMock.mock.calls.some(([input]) => requestPath(input) === "/api/v1/workspace"),
-      ).toBe(true);
-    });
-    expect(workButton).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByLabelText("Рабочее пространство")).not.toBeInTheDocument();
+    expect(screen.queryByText("Создавать в:")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => requestPath(input) === "/api/v1/workspace")).toBe(false);
   });
 
   it("shows a loading state while the session is being checked", async () => {
