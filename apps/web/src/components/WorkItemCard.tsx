@@ -6,7 +6,7 @@ import {
   Clock3,
   FilePlus2,
   ListPlus,
-  MoreHorizontal,
+  MoreVertical,
   RotateCcw,
   Trash2,
   X,
@@ -456,6 +456,28 @@ export function WorkItemCard({
         {priorityLabel && (
           <span className={`priority priority--${item.priority}`}>{priorityLabel}</span>
         )}
+        <details className="card-more card-more--top" ref={moreMenu} open={moreOpen}>
+          <summary
+            className="card-action card-action--icon"
+            role="button"
+            aria-label="Ещё действия"
+            title="Ещё действия"
+            aria-expanded={moreOpen}
+            aria-disabled={interactionsDisabled}
+            onClick={(event) => {
+              event.preventDefault();
+              if (interactionsDisabled) return;
+              const nextOpen = !moreOpen;
+              if (moreMenu.current) moreMenu.current.open = nextOpen;
+              setMoreOpen(nextOpen);
+            }}
+          >
+            <MoreVertical size={18} aria-hidden />
+          </summary>
+          <div className="card-more__menu" role="menu" hidden={!moreOpen}>
+            {secondaryActions(true)}
+          </div>
+        </details>
       </div>
       <h3>
         <InlineTitleEditor
@@ -477,29 +499,6 @@ export function WorkItemCard({
         )}
       </div>
       <SubtaskChecklist item={item} compact={compact} />
-      <div className="work-card__actions">
-        <details className="card-more" ref={moreMenu} open={moreOpen}>
-          <summary
-            className="card-action"
-            role="button"
-            aria-label="Ещё действия"
-            aria-expanded={moreOpen}
-            aria-disabled={interactionsDisabled}
-            onClick={(event) => {
-              event.preventDefault();
-              if (interactionsDisabled) return;
-              const nextOpen = !moreOpen;
-              if (moreMenu.current) moreMenu.current.open = nextOpen;
-              setMoreOpen(nextOpen);
-            }}
-          >
-            <MoreHorizontal size={16} aria-hidden /> Ещё
-          </summary>
-          <div className="card-more__menu" role="menu" hidden={!moreOpen}>
-            {secondaryActions(true)}
-          </div>
-        </details>
-      </div>
       {rescheduleStatus && (
         <p className="reschedule-status" role="status">
           {rescheduleStatus}

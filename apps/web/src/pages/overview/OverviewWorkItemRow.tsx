@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Check, Clock3, MoreHorizontal, RotateCcw } from "lucide-react";
+import { ArrowLeftRight, Check, Clock3, MoreVertical, RotateCcw } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 
@@ -244,6 +244,33 @@ export function OverviewWorkItemRow({
             {priorityLabel}
           </span>
         )}
+        <details className="card-more card-more--top" ref={moreMenu} open={moreOpen}>
+          <summary
+            className="overview-action overview-action--icon"
+            role="button"
+            aria-label="Ещё действия"
+            title="Ещё действия"
+            aria-expanded={moreOpen}
+            aria-disabled={mutation.isPending}
+            onClick={(event) => {
+              event.preventDefault();
+              if (mutation.isPending) return;
+              const nextOpen = !moreOpen;
+              if (moreMenu.current) moreMenu.current.open = nextOpen;
+              setMoreOpen(nextOpen);
+            }}
+          >
+            <MoreVertical size={17} aria-hidden />
+          </summary>
+          <div className="card-more__menu" role="menu" hidden={!moreOpen}>
+            <button className="overview-action" type="button" role="menuitem" disabled={mutation.isPending} onClick={() => { mutation.reset(); setRescheduleOpen(true); }}>
+              <Clock3 size={14} aria-hidden /> Перенести
+            </button>
+            <button className="overview-action" type="button" role="menuitem" disabled={mutation.isPending} onClick={moveWorkspace}>
+              <ArrowLeftRight size={14} aria-hidden /> {item.workspace === "work" ? "В личное" : "В работу"}
+            </button>
+          </div>
+        </details>
       </div>
       <h3 title={item.title}>
         <InlineTitleEditor
@@ -257,50 +284,6 @@ export function OverviewWorkItemRow({
         {formatDateTime(item.effective_at, dateTimePreferences)}
       </p>
       <SubtaskChecklist item={item} compact />
-      <div className="overview-row__actions">
-        <details className="card-more" ref={moreMenu} open={moreOpen}>
-          <summary
-            className="overview-action"
-            role="button"
-            aria-label="Ещё действия"
-            aria-expanded={moreOpen}
-            aria-disabled={mutation.isPending}
-            onClick={(event) => {
-              event.preventDefault();
-              if (mutation.isPending) return;
-              const nextOpen = !moreOpen;
-              if (moreMenu.current) moreMenu.current.open = nextOpen;
-              setMoreOpen(nextOpen);
-            }}
-          >
-            <MoreHorizontal size={14} aria-hidden /> Ещё
-          </summary>
-          <div className="card-more__menu" role="menu" hidden={!moreOpen}>
-            <button
-              className="overview-action"
-              type="button"
-              role="menuitem"
-              disabled={mutation.isPending}
-              onClick={() => {
-                mutation.reset();
-                setRescheduleOpen(true);
-              }}
-            >
-              <Clock3 size={14} aria-hidden /> Перенести
-            </button>
-            <button
-              className="overview-action"
-              type="button"
-              role="menuitem"
-              disabled={mutation.isPending}
-              onClick={moveWorkspace}
-            >
-              <ArrowLeftRight size={14} aria-hidden />
-              {item.workspace === "work" ? "В личное" : "В работу"}
-            </button>
-          </div>
-        </details>
-      </div>
       {staleError && (
         <p className="inline-error" role="alert">
           {staleError}

@@ -1787,9 +1787,17 @@ h2 {
 }
 .work-card__topline {
   display: flex;
-  justify-content: space-between;
+  align-items: flex-start;
   gap: 12px;
 }
+.card-more--top { margin-left: auto; flex: 0 0 auto; }
+.card-action--icon, .overview-action--icon {
+  width: 30px; min-width: 30px; height: 30px; min-height: 30px;
+  padding: 0; display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 9px;
+  color: var(--forest); background: transparent;
+}
+.card-action--icon:hover, .overview-action--icon:hover { background: rgba(23, 63, 58, 0.07); }
 .work-card h3 {
   position: relative;
   width: fit-content;
@@ -2077,6 +2085,7 @@ h2 {
   background: var(--paper-strong);
   box-shadow: var(--shadow);
 }
+.card-more--top .card-more__menu { top: calc(100% + 8px); bottom: auto; }
 .card-more__menu .card-action,
 .card-more__menu .overview-action {
   width: 100%;
