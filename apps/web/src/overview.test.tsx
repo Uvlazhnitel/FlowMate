@@ -156,6 +156,7 @@ describe("Overview board", () => {
 
     expect(await screen.findByRole("heading", { name: "Обзор", level: 1 })).toBeVisible();
     await screen.findByRole("heading", { name: "Сегодня", level: 2 });
+    expect(document.querySelector(".overview-board__frame")).toBeVisible();
     expect(document.querySelectorAll(".overview-column")).toHaveLength(3);
     expect(screen.getByRole("button", { name: /^Все\s*4$/ })).toHaveAttribute(
       "aria-pressed",

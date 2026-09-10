@@ -77,6 +77,12 @@
     auto;
 }
 
+.overview-board__frame {
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
 .overview-topbar {
   min-height: 66px;
   display: grid;
@@ -292,14 +298,14 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .overview-column,
 .overview-column--today {
   position: relative;
   min-width: 0;
-  min-height: calc(100vh - 182px);
+  min-height: 0;
   grid-column: auto;
   overflow: visible;
   border: 1px solid var(--overview-border);
@@ -3494,12 +3500,12 @@ h2 {
   margin-top: 12px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .app-shell--overview .overview-column,
 .app-shell--overview .overview-column--today {
-  min-height: calc(100vh - 182px);
+  min-height: 0;
   grid-column: auto;
   border-color: var(--overview-border);
   border-radius: var(--overview-radius);
