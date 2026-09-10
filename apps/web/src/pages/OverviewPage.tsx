@@ -9,7 +9,7 @@ import {
   Search,
   Waves,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { ApiError } from "../api/client";
@@ -187,6 +187,10 @@ function OverviewColumn<T>({
   completedOpen,
   onToggleCompleted,
   onAdd,
+  dragSource,
+  dropActive,
+  onDragTargetChange,
+  onDropItem,
   children,
   completedChildren,
 }: {
@@ -200,14 +204,34 @@ function OverviewColumn<T>({
   completedOpen: boolean;
   onToggleCompleted: () => void;
   onAdd: () => void;
+  dragSource: OverviewBucket | null;
+  dropActive: boolean;
+  onDragTargetChange: (bucket: OverviewBucket | null) => void;
+  onDropItem: (bucket: OverviewBucket) => void;
   children: ReactNode;
   completedChildren: ReactNode;
 }) {
   const total = data.total + data.completed_total;
   return (
     <section
-      className={`overview-column overview-column--${bucket}`}
+      className={`overview-column overview-column--${bucket} ${dropActive ? "overview-column--drop-target" : ""}`}
       aria-labelledby={`${bucket}-title`}
+      onDragOver={(event: DragEvent<HTMLElement>) => {
+        if (dragSource === null || dragSource === bucket) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        onDragTargetChange(bucket);
+      }}
+      onDragLeave={(event: DragEvent<HTMLElement>) => {
+        const nextTarget = event.relatedTarget;
+        if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+        if (dropActive) onDragTargetChange(null);
+      }}
+      onDrop={(event: DragEvent<HTMLElement>) => {
+        if (dragSource === null || dragSource === bucket) return;
+        event.preventDefault();
+        onDropItem(bucket);
+      }}
     >
       <header className="overview-column__header">
         <div>
@@ -289,6 +313,13 @@ export function OverviewPage({
     tomorrow: false,
     inbox: false,
   });
+  const draggedItem = useRef<{
+    item: WorkItemCardData;
+    source: OverviewBucket;
+  } | null>(null);
+  const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
+  const [dragSource, setDragSource] = useState<OverviewBucket | null>(null);
+  const [dropTarget, setDropTarget] = useState<OverviewBucket | null>(null);
   const composerInput = useRef<HTMLInputElement | null>(null);
   const searchInput = useRef<HTMLInputElement | null>(null);
   const windows = isWindowsPlatform();
@@ -404,6 +435,27 @@ export function OverviewPage({
     composerInput.current?.focus();
   }
 
+  function startDragging(item: WorkItemCardData, source: OverviewBucket) {
+    draggedItem.current = { item, source };
+    setDraggedItemId(item.id);
+    setDragSource(source);
+    setDropTarget(null);
+  }
+
+  function stopDragging() {
+    draggedItem.current = null;
+    setDraggedItemId(null);
+    setDragSource(null);
+    setDropTarget(null);
+  }
+
+  function dropDraggedItem(target: OverviewBucket) {
+    const payload = draggedItem.current;
+    stopDragging();
+    if (!payload || payload.source === target || moveMutation.isPending) return;
+    moveMutation.mutate({ ...payload, target });
+  }
+
   function renderWorkItem(entry: OverviewWorkItem, bucket: OverviewBucket) {
     return (
       <OverviewWorkItemRow
@@ -412,6 +464,9 @@ export function OverviewPage({
         bucket={bucket}
         dateTimePreferences={dateTimePreferences}
         moveDisabled={moveMutation.isPending}
+        dragging={draggedItemId === entry.item.id}
+        onDragStart={startDragging}
+        onDragEnd={stopDragging}
         onMove={(item, source, target) => moveMutation.mutate({ item, source, target })}
         onCompleted={(original, completedItem, source) => {
           queryClient.setQueryData<OverviewResponse | undefined>(overviewKey, (current) =>
@@ -575,6 +630,10 @@ export function OverviewPage({
               setCompletedOpen((value) => ({ ...value, today: !value.today }))
             }
             onAdd={() => focusComposer("today")}
+            dragSource={dragSource}
+            dropActive={dropTarget === "today"}
+            onDragTargetChange={setDropTarget}
+            onDropItem={dropDraggedItem}
             completedChildren={query.data.today.completed_items.map((item) =>
               renderCompleted(item, "today"),
             )}
@@ -594,6 +653,10 @@ export function OverviewPage({
               setCompletedOpen((value) => ({ ...value, tomorrow: !value.tomorrow }))
             }
             onAdd={() => focusComposer("tomorrow")}
+            dragSource={dragSource}
+            dropActive={dropTarget === "tomorrow"}
+            onDragTargetChange={setDropTarget}
+            onDropItem={dropDraggedItem}
             completedChildren={query.data.tomorrow.completed_items.map((item) =>
               renderCompleted(item, "tomorrow"),
             )}
@@ -612,6 +675,10 @@ export function OverviewPage({
               setCompletedOpen((value) => ({ ...value, inbox: !value.inbox }))
             }
             onAdd={() => focusComposer("inbox")}
+            dragSource={dragSource}
+            dropActive={dropTarget === "inbox"}
+            onDragTargetChange={setDropTarget}
+            onDropItem={dropDraggedItem}
             completedChildren={query.data.inbox.completed_items.map((item) =>
               renderCompleted(item, "inbox"),
             )}

@@ -150,7 +150,7 @@ afterEach(() => {
 });
 
 describe("Overview board", () => {
-  it("renders three columns, real counts, one workspace badge, and no drag API", async () => {
+  it("renders three columns, real counts, one workspace badge, and draggable tasks", async () => {
     setupFetch();
     renderApplication("/overview");
 
@@ -165,7 +165,43 @@ describe("Overview board", () => {
     expect(within(row).getAllByText("Личное")).toHaveLength(1);
     expect(within(row).queryByText("Запуск")).not.toBeInTheDocument();
     expect(within(row).queryByText("Срочно")).not.toBeInTheDocument();
-    expect(row).not.toHaveAttribute("draggable");
+    expect(row).toHaveAttribute("draggable", "true");
+  });
+
+  it("moves a task by dragging it to another column", async () => {
+    let actionBody: Record<string, unknown> = {};
+    setupFetch(overviewResponse(), (body) => {
+      actionBody = body;
+      return jsonResponse({ changed: true, work_item: { ...task, revision: 18 } });
+    });
+    renderApplication("/overview");
+
+    const row = (await screen.findByRole("heading", { name: task.title })).closest(
+      "article",
+    )!;
+    const tomorrow = screen
+      .getByRole("heading", { name: "Завтра", level: 2 })
+      .closest("section")!;
+    const dataTransfer = {
+      dropEffect: "none",
+      effectAllowed: "none",
+      setData: vi.fn(),
+    };
+
+    fireEvent.dragStart(row, { dataTransfer });
+    fireEvent.dragOver(tomorrow, { dataTransfer });
+    expect(tomorrow).toHaveClass("overview-column--drop-target");
+    fireEvent.drop(tomorrow, { dataTransfer });
+
+    await waitFor(() =>
+      expect(actionBody).toMatchObject({
+        action: "move_bucket",
+        target: "tomorrow",
+        expected_revision: 17,
+      }),
+    );
+    expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", task.id);
+    expect(await screen.findByRole("status")).toHaveTextContent("Перемещено в «Завтра»");
   });
 
   it("filters the view without changing the creation workspace", async () => {

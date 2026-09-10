@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftRight, Check, Clock3, MoreVertical } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 
 import { ApiError } from "../../api/client";
 import {
@@ -34,6 +34,9 @@ export function OverviewWorkItemRow({
   dateTimePreferences,
   moveDisabled = false,
   completed = false,
+  dragging = false,
+  onDragStart,
+  onDragEnd,
   onMove,
   onCompleted,
   onReopened,
@@ -43,6 +46,9 @@ export function OverviewWorkItemRow({
   dateTimePreferences: DateTimePreferences;
   moveDisabled?: boolean;
   completed?: boolean;
+  dragging?: boolean;
+  onDragStart?: (item: WorkItemCardData, source: OverviewBucket) => void;
+  onDragEnd?: () => void;
   onMove: (item: WorkItemCardData, source: OverviewBucket, target: OverviewBucket) => void;
   onCompleted: (
     item: WorkItemCardData,
@@ -208,8 +214,19 @@ export function OverviewWorkItemRow({
 
   return (
     <article
-      className={`overview-task-row overview-card--${item.workspace} ${completed ? "overview-task-row--completed" : ""} ${completing ? "overview-task-row--completing" : ""}`}
+      className={`overview-task-row overview-card--${item.workspace} ${completed ? "overview-task-row--completed" : ""} ${completing ? "overview-task-row--completing" : ""} ${dragging ? "overview-task-row--dragging" : ""}`}
       aria-busy={pending}
+      draggable={!completed && !pending}
+      onDragStart={(event: DragEvent<HTMLElement>) => {
+        if (completed || pending) {
+          event.preventDefault();
+          return;
+        }
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", item.id);
+        onDragStart?.(item, bucket);
+      }}
+      onDragEnd={onDragEnd}
     >
       <button
         className={`overview-checkbox ${completed ? "overview-checkbox--checked" : ""}`}
