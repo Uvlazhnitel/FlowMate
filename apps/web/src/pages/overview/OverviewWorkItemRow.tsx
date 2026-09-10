@@ -15,6 +15,7 @@ import { ApiError } from "../../api/client";
 import { remainingKeys } from "../../api/remaining";
 import { formatDateTime, type DateTimePreferences } from "../../lib/dates";
 import { RescheduleDialog } from "../../components/RescheduleDialog";
+import { WorkspaceBadge } from "../../components/WorkspaceBadge";
 
 const typeLabels: Record<string, string> = {
   task: "Задача",
@@ -178,6 +179,7 @@ export function OverviewWorkItemRow({
         >
           {item.overdue ? "Просрочено" : (typeLabels[item.type] ?? item.type)}
         </span>
+        <WorkspaceBadge workspace={item.workspace} />
         {entry.needs_inbox && <span className="overview-badge">Нужно разобрать</span>}
         {priorityLabel && (
           <span className={`overview-priority overview-priority--${item.priority}`}>

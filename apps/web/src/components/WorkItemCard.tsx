@@ -28,6 +28,7 @@ import {
   type DateTimePreferences,
 } from "../lib/dates";
 import { RescheduleDialog } from "./RescheduleDialog";
+import { WorkspaceBadge } from "./WorkspaceBadge";
 
 const typeLabels: Record<string, string> = {
   task: "Задача",
@@ -364,6 +365,7 @@ export function WorkItemCard({
       )}
       <div className="work-card__topline">
         <StatusBadge item={item} />
+        <WorkspaceBadge workspace={item.workspace} />
         {priorityLabel && (
           <span className={`priority priority--${item.priority}`}>{priorityLabel}</span>
         )}

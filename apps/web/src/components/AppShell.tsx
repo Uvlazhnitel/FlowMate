@@ -15,10 +15,15 @@ import {
   Users,
 } from "lucide-react";
 import type { ComponentType } from "react";
-import { NavLink, Outlet, useMatch } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
 
 import { sessionQueryKey, setWorkspace, type AuthenticatedUser } from "../api/auth";
 import { ApiError } from "../api/client";
+import {
+  normalizeWorkspaceScope,
+  workspacePath,
+  type WorkspaceScope,
+} from "../lib/workspaceScope";
 
 interface NavigationItem {
   to: string;
@@ -40,8 +45,15 @@ const navigationItems: NavigationItem[] = [
 ];
 
 const primaryMobilePaths = new Set(["/overview", "/today", "/inbox", "/agenda"]);
+const workspaceScopePaths = new Set(["/overview", "/today", "/tomorrow", "/inbox"]);
 
-function Navigation({ mobile = false }: { mobile?: boolean }) {
+function Navigation({
+  mobile = false,
+  workspaceScope,
+}: {
+  mobile?: boolean;
+  workspaceScope?: WorkspaceScope;
+}) {
   const visible = mobile
     ? navigationItems.filter((item) => primaryMobilePaths.has(item.to))
     : navigationItems;
@@ -49,7 +61,14 @@ function Navigation({ mobile = false }: { mobile?: boolean }) {
   return (
     <nav className={mobile ? "mobile-nav" : "sidebar-nav"} aria-label="Основная навигация">
       {visible.map((item) => {
-        return <NavigationLink key={item.to} item={item} mobile={mobile} />;
+        return (
+          <NavigationLink
+            key={item.to}
+            item={item}
+            mobile={mobile}
+            workspaceScope={workspaceScope}
+          />
+        );
       })}
       {mobile && (
         <details className="mobile-more">
@@ -59,7 +78,12 @@ function Navigation({ mobile = false }: { mobile?: boolean }) {
           </summary>
           <div>
             {overflow.map((item) => (
-              <NavigationLink key={item.to} item={item} mobile />
+              <NavigationLink
+                key={item.to}
+                item={item}
+                mobile
+                workspaceScope={workspaceScope}
+              />
             ))}
           </div>
         </details>
@@ -68,13 +92,25 @@ function Navigation({ mobile = false }: { mobile?: boolean }) {
   );
 }
 
-function NavigationLink({ item, mobile }: { item: NavigationItem; mobile: boolean }) {
+function NavigationLink({
+  item,
+  mobile,
+  workspaceScope,
+}: {
+  item: NavigationItem;
+  mobile: boolean;
+  workspaceScope?: WorkspaceScope;
+}) {
   const Icon = item.icon;
   const isActive = useMatch({ path: item.to, end: true }) !== null;
+  const target =
+    workspaceScope && workspaceScopePaths.has(item.to)
+      ? workspacePath(item.to, workspaceScope)
+      : item.to;
   return (
     <Tooltip.Root delayDuration={350}>
       <Tooltip.Trigger asChild>
-        <NavLink to={item.to} className={`nav-link ${isActive ? "nav-link--active" : ""}`}>
+        <NavLink to={target} className={`nav-link ${isActive ? "nav-link--active" : ""}`}>
           <Icon size={19} aria-hidden />
           <span>{item.label}</span>
         </NavLink>
@@ -92,6 +128,10 @@ export function AppShell({ user }: { user: AuthenticatedUser }) {
   const name = user.display_name?.trim() || "Владелец";
   const initials = name.slice(0, 2).toUpperCase();
   const queryClient = useQueryClient();
+  const location = useLocation();
+  const workspaceScope = workspaceScopePaths.has(location.pathname)
+    ? normalizeWorkspaceScope(new URLSearchParams(location.search).get("workspace"))
+    : undefined;
   const workspace = useMutation({
     mutationFn: setWorkspace,
     onSuccess: async (updatedUser) => {
@@ -104,28 +144,31 @@ export function AppShell({ user }: { user: AuthenticatedUser }) {
   const workspaceError =
     workspace.error instanceof ApiError ? workspace.error.message : null;
   const workspaceSwitcher = (
-    <div className="workspace-switcher" aria-label="Рабочее пространство">
-      {(
-        [
-          ["work", "Работа"],
-          ["personal", "Личное"],
-        ] as const
-      ).map(([value, label]) => (
-        <button
-          key={value}
-          type="button"
-          className={
-            user.active_workspace === value ? "workspace-switcher__active" : undefined
-          }
-          disabled={workspace.isPending}
-          aria-pressed={user.active_workspace === value}
-          onClick={() => {
-            if (user.active_workspace !== value) workspace.mutate(value);
-          }}
-        >
-          {label}
-        </button>
-      ))}
+    <div className="workspace-create-control">
+      <span>Создавать в:</span>
+      <div className="workspace-switcher" aria-label="Рабочее пространство">
+        {(
+          [
+            ["work", "Работа"],
+            ["personal", "Личное"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={
+              user.active_workspace === value ? "workspace-switcher__active" : undefined
+            }
+            disabled={workspace.isPending}
+            aria-pressed={user.active_workspace === value}
+            onClick={() => {
+              if (user.active_workspace !== value) workspace.mutate(value);
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
     </div>
   );
   return (
@@ -136,7 +179,7 @@ export function AppShell({ user }: { user: AuthenticatedUser }) {
             <span className="brand__mark">F</span>
             <span>FlowMate</span>
           </div>
-          <Navigation />
+          <Navigation workspaceScope={workspaceScope} />
           {workspaceSwitcher}
           {workspaceError && (
             <p className="workspace-switcher__error" role="alert">
@@ -171,7 +214,7 @@ export function AppShell({ user }: { user: AuthenticatedUser }) {
           )}
           <Outlet context={user} />
         </main>
-        <Navigation mobile />
+        <Navigation mobile workspaceScope={workspaceScope} />
       </div>
     </Tooltip.Provider>
   );

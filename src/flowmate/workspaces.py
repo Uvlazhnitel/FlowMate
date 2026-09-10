@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import String, event
+from sqlalchemy import String, event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, Session, mapped_column, with_loader_criteria
 
@@ -21,6 +23,8 @@ WORKSPACE_LABELS = {
 }
 SESSION_WORKSPACE_KEY = "flowmate_workspace"
 SESSION_USER_ID_KEY = "flowmate_workspace_user_id"
+WorkspaceReadScope = Literal["all", "work", "personal"]
+WorkspaceCounts = dict[str, int]
 
 
 class WorkspaceScoped:
@@ -51,6 +55,55 @@ def activate_workspace(
 def active_workspace(session: AsyncSession) -> str | None:
     value = session.info.get(SESSION_WORKSPACE_KEY)
     return value if isinstance(value, str) else None
+
+
+def normalize_workspace_read_scope(value: str | None) -> WorkspaceReadScope:
+    if value == "work":
+        return "work"
+    if value == "personal":
+        return "personal"
+    return "all"
+
+
+def workspace_counts(*, work: int = 0, personal: int = 0) -> WorkspaceCounts:
+    return {"all": work + personal, "work": work, "personal": personal}
+
+
+@contextmanager
+def workspace_context(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    workspace: Workspace | str,
+) -> Iterator[None]:
+    previous_workspace = session.info.get(SESSION_WORKSPACE_KEY)
+    previous_user_id = session.info.get(SESSION_USER_ID_KEY)
+    activate_workspace(session, user_id=user_id, workspace=workspace)
+    try:
+        yield
+    finally:
+        if previous_workspace is None:
+            session.info.pop(SESSION_WORKSPACE_KEY, None)
+        else:
+            session.info[SESSION_WORKSPACE_KEY] = previous_workspace
+        if previous_user_id is None:
+            session.info.pop(SESSION_USER_ID_KEY, None)
+        else:
+            session.info[SESSION_USER_ID_KEY] = previous_user_id
+
+
+async def owned_entity_workspace(
+    session: AsyncSession,
+    model: Any,
+    *,
+    user_id: UUID,
+    entity_id: UUID,
+) -> str | None:
+    return await session.scalar(
+        select(model.workspace)
+        .where(model.id == entity_id, model.user_id == user_id)
+        .execution_options(include_all_workspaces=True)
+    )
 
 
 @event.listens_for(Session, "do_orm_execute")

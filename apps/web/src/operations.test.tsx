@@ -34,6 +34,7 @@ const workItem: WorkItemCardData = {
   overdue: true,
   revision: 1,
   reminder: null,
+  workspace: "personal",
 };
 
 function page(items: object[], hasMore = false, offset = 0) {

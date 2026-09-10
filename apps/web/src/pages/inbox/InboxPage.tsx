@@ -22,7 +22,9 @@ import {
 } from "../../api/remaining";
 import { OperationalLayout } from "../../components/OperationalLayout";
 import { EmptyState, ErrorState, LoadingState } from "../../components/PageState";
+import { WorkspaceScopeFilter } from "../../components/WorkspaceScopeFilter";
 import type { DateTimePreferences } from "../../lib/dates";
+import { useWorkspaceScope, workspacePath } from "../../lib/workspaceScope";
 import { DraftInboxCard } from "./DraftInboxCard";
 import { InboxBulkActions } from "./InboxBulkActions";
 import { InboxFilters } from "./InboxFilters";
@@ -38,20 +40,21 @@ export function InboxPage({
   const timezone = dateTimePreferences.timezone;
   const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
+  const { scope, setScope } = useWorkspaceScope();
   const kind = params.get("kind") ?? "";
   const reason = params.get("reason") ?? "";
   const focus = params.get("focus") ?? "";
   const page = Number(params.get("page") ?? 0);
   const [selected, setSelected] = useState<Record<string, InboxEntry>>({});
   const query = useQuery({
-    queryKey: [...remainingKeys.all, "inbox", kind, reason, page],
-    queryFn: () => getInbox(kind, reason, page * 20),
+    queryKey: [...remainingKeys.all, "inbox", kind, reason, page, scope],
+    queryFn: () => getInbox(kind, reason, page * 20, scope),
   });
   const options = useQuery({
-    queryKey: [...remainingKeys.all, "inbox-options"],
+    queryKey: [...remainingKeys.all, "inbox-options", scope],
     queryFn: async () => {
       const [topics, people] = await Promise.all([
-        getSettingsTopics(),
+        getSettingsTopics(0, scope),
         getSettingsPeople(),
       ]);
       return { topics: topics.items, people: people.items };
@@ -64,6 +67,16 @@ export function InboxPage({
       queryClient.invalidateQueries({ queryKey: operationsKeys.all }),
     ]);
   };
+  function setInboxParams(nextKind: string, nextReason: string) {
+    const next = new URLSearchParams(params);
+    if (nextKind) next.set("kind", nextKind);
+    else next.delete("kind");
+    if (nextReason) next.set("reason", nextReason);
+    else next.delete("reason");
+    next.delete("page");
+    next.delete("focus");
+    setParams(next);
+  }
   const draftMutation = useMutation({
     mutationFn: ({
       draft,
@@ -175,16 +188,19 @@ export function InboxPage({
       title="Входящие"
       description="Здесь мы разбираем всё новое: уточняем, превращаем в записи или оставляем заметкой."
       controls={
-        <InboxFilters
-          kind={kind}
-          reason={reason}
-          onKindChange={(value) => setParams(value ? { kind: value } : {})}
-          onReasonChange={(value) =>
-            setParams(
-              value ? { ...(kind ? { kind } : {}), reason: value } : kind ? { kind } : {},
-            )
-          }
-        />
+        <div className="workspace-page-controls">
+          <WorkspaceScopeFilter
+            scope={scope}
+            counts={query.data.workspace_counts}
+            onChange={setScope}
+          />
+          <InboxFilters
+            kind={kind}
+            reason={reason}
+            onKindChange={(value) => setInboxParams(value, "")}
+            onReasonChange={(value) => setInboxParams(kind, value)}
+          />
+        </div>
       }
     >
       <InboxBulkActions
@@ -196,7 +212,7 @@ export function InboxPage({
       {focus && !focusedEntry && (
         <div className="inbox-focus-missing" role="status">
           <span>Запись уже обработана, перемещена или больше не требует разбора.</span>
-          <Link to="/inbox">Показать актуальные входящие</Link>
+          <Link to={workspacePath("/inbox", scope)}>Показать актуальные входящие</Link>
         </div>
       )}
       {!query.data.items.length ? (
@@ -241,7 +257,7 @@ export function InboxPage({
                   <DraftInboxCard
                     entry={entry}
                     timezone={timezone}
-                    topics={topics}
+                    topics={topics.filter((topic) => topic.workspace === entry.workspace)}
                     people={people}
                     pending={draftMutation.isPending}
                     onAction={(action) => draftMutation.mutate({ draft: entry, action })}
@@ -261,7 +277,7 @@ export function InboxPage({
                     entry={entry}
                     dateTimePreferences={dateTimePreferences}
                     timezone={timezone}
-                    topics={topics}
+                    topics={topics.filter((topic) => topic.workspace === entry.workspace)}
                     people={people}
                     onSaved={() => void refresh()}
                   />
@@ -275,26 +291,22 @@ export function InboxPage({
         <button
           className="button button--secondary"
           disabled={page === 0}
-          onClick={() =>
-            setParams({
-              ...(kind ? { kind } : {}),
-              ...(reason ? { reason } : {}),
-              page: String(page - 1),
-            })
-          }
+          onClick={() => {
+            const next = new URLSearchParams(params);
+            next.set("page", String(page - 1));
+            setParams(next);
+          }}
         >
           Назад
         </button>
         <button
           className="button button--secondary"
           disabled={!query.data.has_more}
-          onClick={() =>
-            setParams({
-              ...(kind ? { kind } : {}),
-              ...(reason ? { reason } : {}),
-              page: String(page + 1),
-            })
-          }
+          onClick={() => {
+            const next = new URLSearchParams(params);
+            next.set("page", String(page + 1));
+            setParams(next);
+          }}
         >
           Дальше
         </button>

@@ -13,7 +13,7 @@ from flowmate.api.dependencies import get_session
 from flowmate.auth.dependencies import PwaIdentity, require_csrf, require_pwa_session
 from flowmate.core.config import Settings, get_settings
 from flowmate.db.drafts import transition_draft
-from flowmate.db.models import Note
+from flowmate.db.models import DraftSession, Note, WorkItem
 from flowmate.reminders.preferences import (
     EffectiveNotificationPreferences,
     NotificationDefaults,
@@ -41,6 +41,11 @@ from flowmate.task_engine.remaining import (
     get_owned_draft,
     list_inbox,
     serialize_draft,
+)
+from flowmate.workspaces import (
+    normalize_workspace_read_scope,
+    owned_entity_workspace,
+    workspace_context,
 )
 
 router = APIRouter()
@@ -85,12 +90,17 @@ class BulkActionRequest(StrictRequest):
 
 
 def _page_payload(page: PageResult) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "items": page.items,
         "limit": page.limit,
         "offset": page.offset,
         "has_more": page.has_more,
     }
+    if page.total is not None:
+        payload["total"] = page.total
+    if page.workspace_counts is not None:
+        payload["workspace_counts"] = page.workspace_counts
+    return payload
 
 
 def _now() -> datetime:
@@ -116,6 +126,7 @@ async def inbox(
     reason: str | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
+    workspace: str | None = None,
 ) -> dict[str, object]:
     return _page_payload(
         await list_inbox(
@@ -127,6 +138,7 @@ async def inbox(
             reason=reason,
             limit=limit,
             offset=offset,
+            workspace_scope=normalize_workspace_read_scope(workspace),
         )
     )
 
@@ -136,6 +148,18 @@ async def inbox_draft(
     draft_id: UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_pwa_session)],
+) -> dict[str, object]:
+    workspace = await owned_entity_workspace(
+        session, DraftSession, user_id=identity.user.id, entity_id=draft_id
+    )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    with workspace_context(session, user_id=identity.user.id, workspace=workspace):
+        return await _inbox_draft_in_workspace(draft_id, session, identity)
+
+
+async def _inbox_draft_in_workspace(
+    draft_id: UUID, session: AsyncSession, identity: PwaIdentity
 ) -> dict[str, object]:
     draft = await get_owned_draft(session, identity.user.id, draft_id)
     if draft is None:
@@ -160,6 +184,27 @@ async def update_draft_item(
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_csrf)],
     settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, object]:
+    workspace = await owned_entity_workspace(
+        session, DraftSession, user_id=identity.user.id, entity_id=draft_id
+    )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    with workspace_context(session, user_id=identity.user.id, workspace=workspace):
+        response = await _update_draft_item_in_workspace(
+            draft_id, item_id, payload, session, identity, settings
+        )
+        await session.flush()
+        return response
+
+
+async def _update_draft_item_in_workspace(
+    draft_id: UUID,
+    item_id: UUID,
+    payload: DraftItemEditRequest,
+    session: AsyncSession,
+    identity: PwaIdentity,
+    settings: Settings,
 ) -> dict[str, object]:
     preferences = await _preferences(session, identity, settings)
     if payload.local_time is not None and payload.local_date is None:
@@ -211,6 +256,26 @@ async def draft_action(
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_csrf)],
     settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, object]:
+    workspace = await owned_entity_workspace(
+        session, DraftSession, user_id=identity.user.id, entity_id=draft_id
+    )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    with workspace_context(session, user_id=identity.user.id, workspace=workspace):
+        response = await _draft_action_in_workspace(
+            draft_id, payload, session, identity, settings
+        )
+        await session.flush()
+        return response
+
+
+async def _draft_action_in_workspace(
+    draft_id: UUID,
+    payload: DraftActionRequest,
+    session: AsyncSession,
+    identity: PwaIdentity,
+    settings: Settings,
 ) -> dict[str, object]:
     if payload.action == "delete":
         try:
@@ -291,6 +356,23 @@ async def note_action(
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_csrf)],
 ) -> dict[str, object]:
+    workspace = await owned_entity_workspace(
+        session, Note, user_id=identity.user.id, entity_id=note_id
+    )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Note not found")
+    with workspace_context(session, user_id=identity.user.id, workspace=workspace):
+        response = await _note_action_in_workspace(note_id, payload, session, identity)
+        await session.flush()
+        return response
+
+
+async def _note_action_in_workspace(
+    note_id: UUID,
+    payload: NoteActionRequest,
+    session: AsyncSession,
+    identity: PwaIdentity,
+) -> dict[str, object]:
     if payload.action == "delete":
         try:
             deleted = await delete_standalone_inbox_note(
@@ -328,72 +410,86 @@ async def bulk_inbox_action(
     if any(entry.kind not in allowed[payload.action] for entry in payload.entries):
         raise HTTPException(status_code=422, detail="Action is not safe for selection")
     for entry in payload.entries:
-        if entry.kind == "draft":
-            if payload.action == "delete":
-                if entry.expected_revision is None:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="Draft revision is required",
-                    )
-                try:
-                    await delete_inbox_draft(
-                        session,
-                        identity.user.id,
-                        entry.id,
-                        expected_revision=entry.expected_revision,
-                    )
-                except InboxDeletionNotFoundError as error:
-                    raise HTTPException(status_code=404, detail=str(error)) from error
-                except InboxDeletionConflictError as error:
-                    raise HTTPException(status_code=409, detail=str(error)) from error
-                continue
-            draft = await get_owned_draft(
-                session, identity.user.id, entry.id, for_update=True
-            )
-            if draft is None:
-                raise HTTPException(status_code=404, detail="Inbox item not found")
-            revision = int(draft.updated_at.astimezone(UTC).timestamp() * 1_000_000)
-            if entry.expected_revision is None or revision != entry.expected_revision:
-                raise HTTPException(status_code=409, detail="Draft is stale")
-            await transition_draft(session, draft, "cancelled")
-            note = await session.get(Note, draft.source_note_id)
-            if note is not None and note.user_id == identity.user.id:
-                note.inbox_disposition = "archived"
-        elif entry.kind == "note":
-            if payload.action == "delete":
-                try:
-                    await delete_standalone_inbox_note(
-                        session, identity.user.id, entry.id
-                    )
-                except InboxDeletionNotFoundError as error:
-                    raise HTTPException(status_code=404, detail=str(error)) from error
-                except InboxDeletionConflictError as error:
-                    raise HTTPException(status_code=409, detail=str(error)) from error
-                continue
-            note = await session.scalar(
-                select(Note)
-                .where(Note.id == entry.id, Note.user_id == identity.user.id)
-                .with_for_update()
-            )
-            if note is None:
-                raise HTTPException(status_code=404, detail="Inbox item not found")
-            note.inbox_disposition = "kept" if payload.action == "keep" else "archived"
-        else:
-            if entry.expected_revision is None or entry.client_action_id is None:
+        model = {"draft": DraftSession, "note": Note, "work_item": WorkItem}[entry.kind]
+        workspace = await owned_entity_workspace(
+            session, model, user_id=identity.user.id, entity_id=entry.id
+        )
+        if workspace is None:
+            raise HTTPException(status_code=404, detail="Inbox item not found")
+        with workspace_context(session, user_id=identity.user.id, workspace=workspace):
+            await _run_bulk_entry(payload.action, entry, session, identity)
+            await session.flush()
+    return {"processed": len(payload.entries)}
+
+
+async def _run_bulk_entry(
+    action: Literal["cancel", "archive", "keep", "delete"],
+    entry: BulkEntry,
+    session: AsyncSession,
+    identity: PwaIdentity,
+) -> None:
+    if entry.kind == "draft":
+        if action == "delete":
+            if entry.expected_revision is None:
                 raise HTTPException(
-                    status_code=422,
-                    detail="Work item revision and action ID are required",
+                    status_code=422, detail="Draft revision is required"
                 )
-            bind_client_action(session, entry.client_action_id)
             try:
-                await archive_work_item(
+                await delete_inbox_draft(
                     session,
                     identity.user.id,
                     entry.id,
-                    None,
                     expected_revision=entry.expected_revision,
                 )
-            except (ValueError, InvalidWorkItemTransitionError) as error:
+            except InboxDeletionNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except InboxDeletionConflictError as error:
                 raise HTTPException(status_code=409, detail=str(error)) from error
-    await session.flush()
-    return {"processed": len(payload.entries)}
+            return
+        draft = await get_owned_draft(
+            session, identity.user.id, entry.id, for_update=True
+        )
+        if draft is None:
+            raise HTTPException(status_code=404, detail="Inbox item not found")
+        revision = int(draft.updated_at.astimezone(UTC).timestamp() * 1_000_000)
+        if entry.expected_revision is None or revision != entry.expected_revision:
+            raise HTTPException(status_code=409, detail="Draft is stale")
+        await transition_draft(session, draft, "cancelled")
+        note = await session.get(Note, draft.source_note_id)
+        if note is not None and note.user_id == identity.user.id:
+            note.inbox_disposition = "archived"
+        return
+    if entry.kind == "note":
+        if action == "delete":
+            try:
+                await delete_standalone_inbox_note(session, identity.user.id, entry.id)
+            except InboxDeletionNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except InboxDeletionConflictError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return
+        note = await session.scalar(
+            select(Note)
+            .where(Note.id == entry.id, Note.user_id == identity.user.id)
+            .with_for_update()
+        )
+        if note is None:
+            raise HTTPException(status_code=404, detail="Inbox item not found")
+        note.inbox_disposition = "kept" if action == "keep" else "archived"
+        return
+    if entry.expected_revision is None or entry.client_action_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Work item revision and action ID are required",
+        )
+    bind_client_action(session, entry.client_action_id)
+    try:
+        await archive_work_item(
+            session,
+            identity.user.id,
+            entry.id,
+            None,
+            expected_revision=entry.expected_revision,
+        )
+    except (ValueError, InvalidWorkItemTransitionError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error

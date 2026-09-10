@@ -194,7 +194,7 @@ async def test_overview_bucket_action_moves_task_and_is_idempotent(
 
 
 @pytest.mark.integration
-async def test_pwa_workspace_switch_changes_operational_scope(
+async def test_pwa_operational_workspace_scope_is_independent_from_creation_scope(
     database_engine: AsyncEngine,
 ) -> None:
     sender = CapturingLoginCodeSender()
@@ -218,18 +218,19 @@ async def test_pwa_workspace_switch_changes_operational_scope(
                     select(User).where(User.telegram_user_id == TELEGRAM_USER_ID)
                 )
                 assert user is not None
+                personal_today = WorkItem(
+                    user_id=user.id,
+                    workspace="personal",
+                    type="task",
+                    title="Personal only",
+                    status="active",
+                    priority="normal",
+                    planner_status="needs_transfer",
+                    due_at=due_at,
+                )
                 session.add_all(
                     [
-                        WorkItem(
-                            user_id=user.id,
-                            workspace="personal",
-                            type="task",
-                            title="Personal only",
-                            status="active",
-                            priority="normal",
-                            planner_status="needs_transfer",
-                            due_at=due_at,
-                        ),
+                        personal_today,
                         WorkItem(
                             user_id=user.id,
                             workspace="personal",
@@ -263,25 +264,57 @@ async def test_pwa_workspace_switch_changes_operational_scope(
                         ),
                     ]
                 )
+                await session.flush()
+                personal_today_id = personal_today.id
                 await session.commit()
 
-            personal = await client.get("/api/v1/today?section=due_today")
+            combined = await client.get("/api/v1/today?section=due_today")
+            assert {item["title"] for item in combined.json()["items"]} == {
+                "Personal only",
+                "Work only",
+            }
+            assert combined.json()["total"] == 2
+            assert combined.json()["workspace_counts"] == {
+                "all": 2,
+                "work": 1,
+                "personal": 1,
+            }
+            assert {item["workspace"] for item in combined.json()["items"]} == {
+                "work",
+                "personal",
+            }
+            combined_overview = await client.get("/api/v1/today/overview")
+            assert {item["title"] for item in combined_overview.json()["focus"]} == {
+                "Personal only",
+                "Work only",
+            }
+            combined_home = await client.get("/api/v1/overview")
+            assert combined_home.status_code == 200
+            assert {
+                entry["item"]["title"]
+                for entry in combined_home.json()["today"]["items"]
+            } == {"Personal only", "Work only"}
+            combined_tomorrow = await client.get("/api/v1/tomorrow")
+            assert {item["title"] for item in combined_tomorrow.json()["items"]} == {
+                "Personal tomorrow",
+                "Work tomorrow",
+            }
+
+            personal = await client.get(
+                "/api/v1/today?section=due_today&workspace=personal"
+            )
             assert [item["title"] for item in personal.json()["items"]] == [
                 "Personal only"
             ]
-            personal_overview = await client.get("/api/v1/today/overview")
-            assert [item["title"] for item in personal_overview.json()["focus"]] == [
-                "Personal only"
-            ]
-            personal_home = await client.get("/api/v1/overview")
-            assert personal_home.status_code == 200
-            assert personal_home.json()["today"]["items"][0]["item"]["title"] == (
-                "Personal only"
+            work = await client.get("/api/v1/today?section=due_today&workspace=work")
+            assert [item["title"] for item in work.json()["items"]] == ["Work only"]
+            unknown = await client.get(
+                "/api/v1/today?section=due_today&workspace=unexpected"
             )
-            personal_tomorrow = await client.get("/api/v1/tomorrow")
-            assert [item["title"] for item in personal_tomorrow.json()["items"]] == [
-                "Personal tomorrow"
-            ]
+            assert {item["title"] for item in unknown.json()["items"]} == {
+                "Personal only",
+                "Work only",
+            }
 
             switched = await client.put(
                 "/api/v1/workspace",
@@ -293,20 +326,25 @@ async def test_pwa_workspace_switch_changes_operational_scope(
             assert (await client.get("/api/v1/auth/me")).json()[
                 "active_workspace"
             ] == "work"
-            work = await client.get("/api/v1/today?section=due_today")
-            assert [item["title"] for item in work.json()["items"]] == ["Work only"]
-            work_overview = await client.get("/api/v1/today/overview")
-            assert [item["title"] for item in work_overview.json()["focus"]] == [
-                "Work only"
-            ]
-            work_home = await client.get("/api/v1/overview")
-            assert work_home.json()["today"]["items"][0]["item"]["title"] == (
-                "Work only"
+            still_combined = await client.get("/api/v1/today?section=due_today")
+            assert {item["title"] for item in still_combined.json()["items"]} == {
+                "Personal only",
+                "Work only",
+            }
+
+            personal_item = personal.json()["items"][0]
+            moved = await client.post(
+                f"/api/v1/work-items/{personal_today_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "move_bucket",
+                    "target": "tomorrow",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": personal_item["revision"],
+                },
             )
-            work_tomorrow = await client.get("/api/v1/tomorrow")
-            assert [item["title"] for item in work_tomorrow.json()["items"]] == [
-                "Work tomorrow"
-            ]
+            assert moved.status_code == 200, moved.text
+            assert moved.json()["work_item"]["workspace"] == "personal"
 
 
 @pytest.mark.integration

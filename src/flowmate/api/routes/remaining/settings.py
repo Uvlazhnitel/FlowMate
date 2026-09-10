@@ -30,6 +30,7 @@ from flowmate.task_engine.service import (
     normalize_optional_text,
     normalize_required_text,
 )
+from flowmate.workspaces import WorkspaceReadScope, normalize_workspace_read_scope
 
 router = APIRouter()
 
@@ -89,6 +90,7 @@ def _topic_payload(topic: Topic) -> dict[str, object]:
         "description": topic.description,
         "aliases": topic.aliases,
         "is_active": topic.is_active,
+        "workspace": topic.workspace,
     }
 
 
@@ -202,8 +204,13 @@ async def _settings_topics(
     active: bool | None,
     limit: int,
     offset: int,
+    workspace_scope: WorkspaceReadScope | None = None,
 ) -> PageResult:
     statement = select(Topic).where(Topic.user_id == user_id)
+    if workspace_scope is not None:
+        statement = statement.execution_options(include_all_workspaces=True)
+        if workspace_scope != "all":
+            statement = statement.where(Topic.workspace == workspace_scope)
     if query and query.strip():
         statement = statement.where(Topic.name.ilike(f"%{query.strip()}%"))
     if active is not None:
@@ -248,6 +255,7 @@ async def settings_topics(
     active: bool | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
+    workspace: str | None = None,
 ) -> dict[str, object]:
     page = await _settings_topics(
         session,
@@ -256,6 +264,9 @@ async def settings_topics(
         active=active,
         limit=limit,
         offset=offset,
+        workspace_scope=(
+            normalize_workspace_read_scope(workspace) if workspace is not None else None
+        ),
     )
     return {
         **_page_payload(page),

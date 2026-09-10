@@ -189,6 +189,191 @@ h2 {
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.08);
 }
+
+.workspace-create-control {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.workspace-create-control .workspace-switcher {
+  margin-top: 0;
+}
+
+.workspace-create-control > span {
+  color: inherit;
+  opacity: 0.65;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.workspace-page-controls {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.workspace-scope-filter {
+  display: inline-flex;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper-strong);
+}
+
+.workspace-scope-filter button {
+  display: inline-flex;
+  min-height: 2.5rem;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.8rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.workspace-scope-filter button.workspace-scope-filter__active {
+  background: var(--ink);
+  color: white;
+}
+
+.workspace-scope-filter button strong {
+  min-width: 1.3rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.workspace-scope-filter:focus-within {
+  outline: 2px solid var(--coral);
+  outline-offset: 2px;
+}
+
+.workspace-scope-filter button:focus-visible {
+  outline: none;
+}
+
+.workspace-scope-filter button:hover {
+  color: var(--ink);
+}
+
+.workspace-scope-filter button.workspace-scope-filter__active:hover {
+  color: white;
+}
+
+.workspace-scope-filter button.workspace-scope-filter__active strong {
+  background: rgb(255 255 255 / 18%);
+}
+
+.workspace-scope-filter button:not(.workspace-scope-filter__active) strong {
+  background: var(--paper);
+}
+
+.workspace-scope-filter button:active {
+  transform: translateY(1px);
+}
+
+.workspace-scope-filter button[aria-pressed="true"] {
+  box-shadow: 0 4px 14px rgba(36, 50, 46, 0.12);
+}
+
+.workspace-scope-filter button[aria-pressed="false"] {
+  box-shadow: none;
+}
+
+.workspace-scope-filter button span {
+  white-space: nowrap;
+}
+
+.workspace-scope-filter button:first-child {
+  padding-inline: 0.9rem;
+}
+
+.workspace-scope-filter button:last-child {
+  padding-inline: 0.9rem;
+}
+
+.workspace-scope-control {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.workspace-scope-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.workspace-scope-hint button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--forest-light);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+
+.workspace-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.18rem 0.45rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.workspace-badge--work {
+  background: #e7eefb;
+  color: #34558b;
+}
+
+.workspace-badge--personal {
+  background: #f9ead8;
+  color: #87592b;
+}
+
+.inbox-card__kickers {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+@media (max-width: 640px) {
+  .workspace-page-controls,
+  .workspace-scope-control,
+  .workspace-scope-filter {
+    width: 100%;
+  }
+
+  .workspace-scope-filter button {
+    flex: 1;
+    justify-content: center;
+    padding-inline: 0.45rem;
+  }
+
+  .mobile-header .workspace-create-control > span {
+    display: none;
+  }
+}
 .workspace-switcher button {
   min-height: 34px;
   padding: 0 8px;

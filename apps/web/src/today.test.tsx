@@ -30,6 +30,7 @@ const focusItem: WorkItemCardData = {
   overdue: true,
   revision: 1,
   reminder: null,
+  workspace: "personal",
 };
 
 const laterItem: WorkItemCardData = {

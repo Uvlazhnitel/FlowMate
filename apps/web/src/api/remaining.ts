@@ -1,5 +1,6 @@
 import { apiRequest } from "./client";
 import type { PageResponse, PlannerStatus, WorkItemCardData } from "./operations";
+import type { WorkspaceScope } from "../lib/workspaceScope";
 
 export type InboxKind = "draft" | "work_item" | "note";
 export type DraftInboxAction = "confirm" | "save_as_note" | "cancel" | "recover" | "delete";
@@ -41,12 +42,14 @@ export interface DraftInboxEntry {
   updated_at: string;
   expires_at: string;
   items: DraftItemData[];
+  workspace: "work" | "personal";
 }
 
 export interface WorkItemInboxEntry {
   kind: "work_item";
   reasons: string[];
   item: WorkItemCardData;
+  workspace: "work" | "personal";
 }
 
 export interface NoteInboxEntry {
@@ -56,6 +59,7 @@ export interface NoteInboxEntry {
   excerpt: string;
   source: string;
   created_at: string;
+  workspace: "work" | "personal";
 }
 
 export type InboxEntry = DraftInboxEntry | WorkItemInboxEntry | NoteInboxEntry;
@@ -106,6 +110,7 @@ export interface SettingsTopic {
   description: string | null;
   aliases: string[];
   is_active: boolean;
+  workspace: "work" | "personal";
 }
 
 export interface SettingsPerson {
@@ -128,9 +133,20 @@ function query(path: string, values: Record<string, string | number | undefined>
 
 export const remainingKeys = { all: ["remaining"] as const };
 
-export const getInbox = (kind: string, reason: string, offset: number) =>
+export const getInbox = (
+  kind: string,
+  reason: string,
+  offset: number,
+  workspace: WorkspaceScope = "all",
+) =>
   apiRequest<PageResponse<InboxEntry>>(
-    query("/api/v1/inbox", { kind, reason, limit: 20, offset }),
+    query("/api/v1/inbox", {
+      kind,
+      reason,
+      workspace: workspace === "all" ? undefined : workspace,
+      limit: 20,
+      offset,
+    }),
   );
 
 export const updateDraftItem = (
@@ -192,23 +208,23 @@ export const updatePreferences = (preferences: PreferencesData) =>
     body: JSON.stringify(preferences),
   });
 
-export const getSettingsTopics = (offset = 0) =>
+export const getSettingsTopics = (offset = 0, workspace?: WorkspaceScope) =>
   apiRequest<PageResponse<SettingsTopic>>(
-    `/api/v1/settings/topics?limit=25&offset=${offset}`,
+    query("/api/v1/settings/topics", { limit: 50, offset, workspace }),
   );
 
 export const getSettingsPeople = (offset = 0) =>
   apiRequest<PageResponse<SettingsPerson>>(
-    `/api/v1/settings/people?limit=25&offset=${offset}`,
+    query("/api/v1/settings/people", { limit: 50, offset }),
   );
 
-export const createTopic = (payload: Omit<SettingsTopic, "id">) =>
+export const createTopic = (payload: Omit<SettingsTopic, "id" | "workspace">) =>
   apiRequest<SettingsTopic>("/api/v1/topics", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 
-export const updateTopic = (id: string, payload: Omit<SettingsTopic, "id">) =>
+export const updateTopic = (id: string, payload: Omit<SettingsTopic, "id" | "workspace">) =>
   apiRequest<SettingsTopic>(`/api/v1/settings/topics/${id}`, {
     method: "PATCH",
     body: JSON.stringify(payload),

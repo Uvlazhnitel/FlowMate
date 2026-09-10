@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowRight, ArrowUpRight } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useSearchParams } from "react-router-dom";
 
 import { getToday, getTodayOverview, operationsKeys } from "../api/operations";
@@ -10,7 +11,14 @@ import {
 } from "../components/OperationalLayout";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { WorkItemCard } from "../components/WorkItemCard";
+import { WorkspaceScopeFilter } from "../components/WorkspaceScopeFilter";
 import type { DateTimePreferences } from "../lib/dates";
+import {
+  useWorkspaceScope,
+  workspacePath,
+  type WorkspaceCounts,
+  type WorkspaceScope,
+} from "../lib/workspaceScope";
 
 const sections = [
   ["overdue", "Просрочено"],
@@ -69,10 +77,12 @@ function TodayContent({
   dateTimePreferences: DateTimePreferences;
   defaultSnoozeMinutes: number;
 }) {
-  const [, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
+  const { scope, setScope } = useWorkspaceScope();
+  const [sectionCounts, setSectionCounts] = useState<WorkspaceCounts>();
   const overview = useQuery({
-    queryKey: operationsKeys.todayOverview,
-    queryFn: getTodayOverview,
+    queryKey: operationsKeys.todayOverview(scope),
+    queryFn: () => getTodayOverview(scope),
   });
 
   return (
@@ -81,24 +91,35 @@ function TodayContent({
       title="Сегодня"
       description="Разберите входящее, выберите главное и спокойно двигайтесь по дню."
       controls={
-        <nav className="today-section-nav" aria-label="Раздел Сегодня">
-          <select
-            aria-label="Раздел Сегодня"
-            value={selectedSection ?? "overview"}
-            onChange={(event) =>
-              setParams(
-                event.target.value === "overview" ? {} : { section: event.target.value },
-              )
+        <div className="workspace-page-controls">
+          <WorkspaceScopeFilter
+            scope={scope}
+            counts={
+              selectedSection === null ? overview.data?.workspace_counts : sectionCounts
             }
-          >
-            <option value="overview">Главное сейчас</option>
-            {sections.map(([key, label]) => (
-              <option key={key} value={key}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </nav>
+            onChange={setScope}
+          />
+          <nav className="today-section-nav" aria-label="Раздел Сегодня">
+            <select
+              aria-label="Раздел Сегодня"
+              value={selectedSection ?? "overview"}
+              onChange={(event) => {
+                const next = new URLSearchParams(params);
+                if (event.target.value === "overview") next.delete("section");
+                else next.set("section", event.target.value);
+                next.delete("page");
+                setParams(next);
+              }}
+            >
+              <option value="overview">Главное сейчас</option>
+              {sections.map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </nav>
+        </div>
       }
     >
       {overview.isPending ? (
@@ -110,7 +131,11 @@ function TodayContent({
         />
       ) : (
         <>
-          <TodaySummary summary={overview.data.summary} selectedSection={selectedSection} />
+          <TodaySummary
+            summary={overview.data.summary}
+            selectedSection={selectedSection}
+            scope={scope}
+          />
           {selectedSection === null ? (
             <TodayOverview
               focus={overview.data.focus}
@@ -118,6 +143,7 @@ function TodayContent({
               inboxCount={overview.data.summary.inbox}
               dateTimePreferences={dateTimePreferences}
               defaultSnoozeMinutes={defaultSnoozeMinutes}
+              scope={scope}
             />
           ) : (
             <TodaySection
@@ -127,6 +153,8 @@ function TodayContent({
               }
               dateTimePreferences={dateTimePreferences}
               defaultSnoozeMinutes={defaultSnoozeMinutes}
+              scope={scope}
+              onCounts={setSectionCounts}
             />
           )}
         </>
@@ -138,6 +166,7 @@ function TodayContent({
 function TodaySummary({
   summary,
   selectedSection,
+  scope,
 }: {
   summary: {
     overdue: number;
@@ -148,11 +177,24 @@ function TodaySummary({
     inbox: number;
   };
   selectedSection: TodaySectionKey | null;
+  scope: WorkspaceScope;
 }) {
   const primary = [
-    ["inbox", "Входящие", summary.inbox, "/inbox", null],
-    ["overdue", "Просрочено", summary.overdue, "/today?section=overdue", "overdue"],
-    ["due_today", "На сегодня", summary.due_today, "/today?section=due_today", "due_today"],
+    ["inbox", "Входящие", summary.inbox, workspacePath("/inbox", scope), null],
+    [
+      "overdue",
+      "Просрочено",
+      summary.overdue,
+      workspacePath("/today?section=overdue", scope),
+      "overdue",
+    ],
+    [
+      "due_today",
+      "На сегодня",
+      summary.due_today,
+      workspacePath("/today?section=due_today", scope),
+      "due_today",
+    ],
   ] as const;
   const attention = [
     ["Фоллоу-апы", summary.follow_ups, "follow_ups"],
@@ -191,7 +233,7 @@ function TodaySummary({
             count > 0 ? (
               <Link
                 key={section}
-                to={`/today?section=${section}`}
+                to={workspacePath(`/today?section=${section}`, scope)}
                 aria-current={selectedSection === section ? "page" : undefined}
               >
                 {label} {count}
@@ -200,7 +242,7 @@ function TodaySummary({
           )}
         </nav>
       )}
-      <Link className="today-tomorrow-link" to="/tomorrow">
+      <Link className="today-tomorrow-link" to={workspacePath("/tomorrow", scope)}>
         Посмотреть задачи на завтра
         <ArrowRight size={16} aria-hidden />
       </Link>
@@ -214,12 +256,14 @@ function TodayOverview({
   inboxCount,
   dateTimePreferences,
   defaultSnoozeMinutes,
+  scope,
 }: {
   focus: Awaited<ReturnType<typeof getTodayOverview>>["focus"];
   later: Awaited<ReturnType<typeof getTodayOverview>>["later_today"];
   inboxCount: number;
   dateTimePreferences: DateTimePreferences;
   defaultSnoozeMinutes: number;
+  scope: WorkspaceScope;
 }) {
   const focusIds = new Set(focus.map((item) => item.id));
   const laterItems = later.items.filter((item) => !focusIds.has(item.id));
@@ -233,7 +277,7 @@ function TodayOverview({
             inboxCount > 0 ? (
               <>
                 Во входящих осталось {inboxCount}.{" "}
-                <Link to="/inbox">Разобрать входящие</Link>
+                <Link to={workspacePath("/inbox", scope)}>Разобрать входящие</Link>
               </>
             ) : (
               "Срочных записей на сегодня нет. Остальные открытые задачи остаются в своих разделах."
@@ -277,7 +321,10 @@ function TodayOverview({
             ))}
           </div>
           {later.has_more && (
-            <Link className="today-more-link" to="/today?section=due_today">
+            <Link
+              className="today-more-link"
+              to={workspacePath("/today?section=due_today", scope)}
+            >
               Показать все задачи на сегодня
             </Link>
           )}
@@ -292,18 +339,26 @@ function TodaySection({
   label,
   dateTimePreferences,
   defaultSnoozeMinutes,
+  scope,
+  onCounts,
 }: {
   section: TodaySectionKey;
   label: string;
   dateTimePreferences: DateTimePreferences;
   defaultSnoozeMinutes: number;
+  scope: WorkspaceScope;
+  onCounts: (counts: WorkspaceCounts) => void;
 }) {
   const query = useInfiniteQuery({
-    queryKey: [...operationsKeys.all, "today", "section", section],
-    queryFn: ({ pageParam }) => getToday(section, pageParam),
+    queryKey: [...operationsKeys.all, "today", "section", section, scope],
+    queryFn: ({ pageParam }) => getToday(section, pageParam, scope),
     initialPageParam: 0,
     getNextPageParam: (page) => (page.has_more ? page.offset + page.limit : undefined),
   });
+  const counts = query.data?.pages[0]?.workspace_counts;
+  useEffect(() => {
+    if (counts) onCounts(counts);
+  }, [counts, onCounts]);
   if (query.isPending) return <LoadingState label={`Загружаем: ${label}`} />;
   if (query.isError)
     return (

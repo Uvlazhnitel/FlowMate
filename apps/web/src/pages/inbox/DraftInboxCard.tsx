@@ -7,6 +7,7 @@ import type {
   SettingsTopic,
 } from "../../api/remaining";
 import { DraftItemEditor } from "./DraftItemEditor";
+import { WorkspaceBadge } from "../../components/WorkspaceBadge";
 
 export function DraftInboxCard({
   entry,
@@ -29,7 +30,10 @@ export function DraftInboxCard({
     <>
       <div className="inbox-card__heading">
         <div>
-          <span className="directory-kicker">Черновик AI · {entry.status}</span>
+          <div className="inbox-card__kickers">
+            <span className="directory-kicker">Черновик AI · {entry.status}</span>
+            <WorkspaceBadge workspace={entry.workspace} />
+          </div>
           <h2>{entry.items[0]?.title ?? "Черновик"}</h2>
         </div>
         <span>

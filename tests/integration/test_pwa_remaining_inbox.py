@@ -114,6 +114,25 @@ async def test_inbox_edit_uncertainty_conversion_and_isolation(
                 incomplete = await create_work_item(
                     session, user.id, item_type="task", title="Unplanned item"
                 )
+                session.add(
+                    Note(
+                        user_id=user.id,
+                        workspace="work",
+                        content="Work note",
+                        source="manual",
+                    )
+                )
+                session.add(
+                    WorkItem(
+                        user_id=user.id,
+                        workspace="work",
+                        type="task",
+                        title="Work inbox item",
+                        status="inbox",
+                        priority="normal",
+                        planner_status="needs_transfer",
+                    )
+                )
                 foreign = await create_telegram_user(session, FOREIGN_TELEGRAM_USER_ID)
                 foreign_note = Note(
                     user_id=foreign.id, content="Private note", source="manual"
@@ -133,12 +152,38 @@ async def test_inbox_edit_uncertainty_conversion_and_isolation(
             assert inbox.json()["has_more"] is True
             all_inbox = await client.get("/api/v1/inbox?limit=20")
             entries = all_inbox.json()["items"]
+            assert all_inbox.json()["total"] == 5
+            assert all_inbox.json()["workspace_counts"] == {
+                "all": 5,
+                "work": 2,
+                "personal": 3,
+            }
             assert {entry["kind"] for entry in entries} == {
                 "draft",
                 "note",
                 "work_item",
             }
             assert "Private note" not in all_inbox.text
+            assert {entry["workspace"] for entry in entries} == {
+                "work",
+                "personal",
+            }
+            work_inbox = await client.get("/api/v1/inbox?workspace=work&limit=20")
+            assert work_inbox.json()["total"] == 2
+            assert {entry["workspace"] for entry in work_inbox.json()["items"]} == {
+                "work"
+            }
+            personal_inbox = await client.get(
+                "/api/v1/inbox?workspace=personal&limit=20"
+            )
+            assert personal_inbox.json()["total"] == 3
+            assert {entry["workspace"] for entry in personal_inbox.json()["items"]} == {
+                "personal"
+            }
+            unknown_inbox = await client.get(
+                "/api/v1/inbox?workspace=unexpected&limit=20"
+            )
+            assert unknown_inbox.json()["total"] == 5
             draft_entry = next(entry for entry in entries if entry["kind"] == "draft")
             assert {"low_confidence", "incomplete"} <= set(draft_entry["reasons"])
             work_entry = next(
@@ -255,7 +300,12 @@ async def test_inbox_bulk_action_rolls_back_as_one_transaction(
                 )
                 assert user is not None
                 first = Note(user_id=user.id, content="First", source="manual")
-                second = Note(user_id=user.id, content="Second", source="manual")
+                second = Note(
+                    user_id=user.id,
+                    workspace="work",
+                    content="Second",
+                    source="manual",
+                )
                 foreign = await create_telegram_user(session, FOREIGN_TELEGRAM_USER_ID)
                 private = Note(user_id=foreign.id, content="Private", source="manual")
                 session.add_all([first, second, private])
@@ -293,6 +343,16 @@ async def test_inbox_bulk_action_rolls_back_as_one_transaction(
             )
             assert succeeded.status_code == 200
             assert succeeded.json() == {"processed": 2}
+            async with AsyncSession(database_engine) as session:
+                archived = {
+                    note.id: note
+                    for note in await session.scalars(
+                        select(Note).where(Note.id.in_((first_id, second_id)))
+                    )
+                }
+                assert archived[first_id].inbox_disposition == "archived"
+                assert archived[second_id].inbox_disposition == "archived"
+                assert archived[second_id].workspace == "work"
 
 
 @pytest.mark.integration

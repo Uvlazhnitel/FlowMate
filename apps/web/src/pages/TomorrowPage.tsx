@@ -10,7 +10,9 @@ import {
 } from "../components/OperationalLayout";
 import { EmptyState, ErrorState, LoadingState } from "../components/PageState";
 import { WorkItemCard } from "../components/WorkItemCard";
+import { WorkspaceScopeFilter } from "../components/WorkspaceScopeFilter";
 import type { DateTimePreferences } from "../lib/dates";
+import { useWorkspaceScope, workspacePath } from "../lib/workspaceScope";
 
 export function TomorrowPage({
   dateTimePreferences,
@@ -19,9 +21,10 @@ export function TomorrowPage({
   dateTimePreferences: DateTimePreferences;
   defaultSnoozeMinutes: number;
 }) {
+  const { scope, setScope } = useWorkspaceScope();
   const query = useInfiniteQuery({
-    queryKey: operationsKeys.tomorrow,
-    queryFn: ({ pageParam }) => getTomorrow(pageParam),
+    queryKey: operationsKeys.tomorrow(scope),
+    queryFn: ({ pageParam }) => getTomorrow(pageParam, scope),
     initialPageParam: 0,
     getNextPageParam: (page) => (page.has_more ? page.offset + page.limit : undefined),
   });
@@ -50,10 +53,20 @@ export function TomorrowPage({
       title="Завтра"
       description="Все открытые записи, которые запланированы на следующий день."
       controls={
-        <Link className="button button--secondary tomorrow-back-link" to="/today">
-          <ArrowLeft size={16} aria-hidden />
-          Вернуться к сегодня
-        </Link>
+        <div className="workspace-page-controls">
+          <WorkspaceScopeFilter
+            scope={scope}
+            counts={query.data?.pages[0]?.workspace_counts}
+            onChange={setScope}
+          />
+          <Link
+            className="button button--secondary tomorrow-back-link"
+            to={workspacePath("/today", scope)}
+          >
+            <ArrowLeft size={16} aria-hidden />
+            Вернуться к сегодня
+          </Link>
+        </div>
       }
     >
       {content}

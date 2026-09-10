@@ -1,4 +1,5 @@
 import { apiRequest } from "./client";
+import type { WorkspaceCounts, WorkspaceScope } from "../lib/workspaceScope";
 
 export interface PersonRef {
   0: string;
@@ -39,6 +40,7 @@ export interface WorkItemCardData {
   overdue: boolean;
   revision: number;
   reminder: ReminderCard | null;
+  workspace: "work" | "personal";
 }
 
 export interface PageResponse<T> {
@@ -47,6 +49,8 @@ export interface PageResponse<T> {
   offset: number;
   has_more: boolean;
   timezone?: string;
+  total?: number;
+  workspace_counts?: WorkspaceCounts;
 }
 
 export interface ActivityEntry {
@@ -59,6 +63,8 @@ export interface ActivityEntry {
 
 export interface TodayOverviewResponse {
   timezone: string;
+  total: number;
+  workspace_counts: WorkspaceCounts;
   summary: {
     overdue: number;
     due_today: number;
@@ -88,6 +94,7 @@ interface OverviewInboxItemBase {
   reasons: string[];
   occurred_at: string;
   item_count: number;
+  workspace: "work" | "personal";
 }
 
 export type OverviewInboxItem = OverviewInboxItemBase &
@@ -103,6 +110,7 @@ export interface OverviewColumn<T> {
 
 export interface OverviewResponse {
   timezone: string;
+  workspace_counts: WorkspaceCounts;
   today: OverviewColumn<OverviewWorkItem>;
   tomorrow: OverviewColumn<OverviewWorkItem>;
   inbox: OverviewColumn<OverviewInboxItem>;
@@ -224,9 +232,10 @@ export interface ActionResponse {
 
 export const operationsKeys = {
   all: ["operations"] as const,
-  overview: ["operations", "overview"] as const,
-  todayOverview: ["operations", "today", "overview"] as const,
-  tomorrow: ["operations", "tomorrow"] as const,
+  overview: (workspace: WorkspaceScope) => ["operations", "overview", workspace] as const,
+  todayOverview: (workspace: WorkspaceScope) =>
+    ["operations", "today", "overview", workspace] as const,
+  tomorrow: (workspace: WorkspaceScope) => ["operations", "tomorrow", workspace] as const,
 };
 
 function query(path: string, values: Record<string, string | number | undefined>) {
@@ -237,19 +246,35 @@ function query(path: string, values: Record<string, string | number | undefined>
   return `${path}?${params.toString()}`;
 }
 
-export const getTodayOverview = () =>
-  apiRequest<TodayOverviewResponse>("/api/v1/today/overview");
-
-export const getOverview = () => apiRequest<OverviewResponse>("/api/v1/overview");
-
-export const getToday = (section: string, offset = 0) =>
-  apiRequest<PageResponse<WorkItemCardData>>(
-    query("/api/v1/today", { section, limit: 20, offset }),
+export const getTodayOverview = (workspace: WorkspaceScope = "all") =>
+  apiRequest<TodayOverviewResponse>(
+    workspace === "all"
+      ? "/api/v1/today/overview"
+      : query("/api/v1/today/overview", { workspace }),
   );
 
-export const getTomorrow = (offset = 0) =>
+export const getOverview = (workspace: WorkspaceScope = "all") =>
+  apiRequest<OverviewResponse>(
+    workspace === "all" ? "/api/v1/overview" : query("/api/v1/overview", { workspace }),
+  );
+
+export const getToday = (section: string, offset = 0, workspace: WorkspaceScope = "all") =>
   apiRequest<PageResponse<WorkItemCardData>>(
-    query("/api/v1/tomorrow", { limit: 20, offset }),
+    query("/api/v1/today", {
+      section,
+      workspace: workspace === "all" ? undefined : workspace,
+      limit: 20,
+      offset,
+    }),
+  );
+
+export const getTomorrow = (offset = 0, workspace: WorkspaceScope = "all") =>
+  apiRequest<PageResponse<WorkItemCardData>>(
+    query("/api/v1/tomorrow", {
+      workspace: workspace === "all" ? undefined : workspace,
+      limit: 20,
+      offset,
+    }),
   );
 
 export const getTopics = (q: string, offset: number) =>

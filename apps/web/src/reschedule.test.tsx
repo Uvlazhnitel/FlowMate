@@ -27,6 +27,7 @@ const item: WorkItemCardData = {
   overdue: false,
   revision: 17,
   reminder: null,
+  workspace: "personal",
 };
 
 const preferences = {

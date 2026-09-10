@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from flowmate.api.dependencies import get_rescheduling_service, get_session
 from flowmate.auth.dependencies import PwaIdentity, require_csrf, require_pwa_session
 from flowmate.core.config import Settings, get_settings
+from flowmate.db.models import WorkItem
 from flowmate.reminders.actions import snooze_work_item_reminder
 from flowmate.reminders.preferences import (
     EffectiveNotificationPreferences,
@@ -53,6 +54,11 @@ from flowmate.task_engine.queries import PersonScope
 from flowmate.task_engine.rescheduling import (
     ReschedulePreset,
     ReschedulingService,
+)
+from flowmate.workspaces import (
+    normalize_workspace_read_scope,
+    owned_entity_workspace,
+    workspace_context,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["pwa-operations"])
@@ -173,6 +179,10 @@ def _page_payload(page: object, *, timezone: str | None = None) -> dict[str, obj
         "offset": page.offset,  # type: ignore[attr-defined]
         "has_more": page.has_more,  # type: ignore[attr-defined]
     }
+    if page.total is not None:  # type: ignore[attr-defined]
+        payload["total"] = page.total  # type: ignore[attr-defined]
+    if page.workspace_counts is not None:  # type: ignore[attr-defined]
+        payload["workspace_counts"] = page.workspace_counts  # type: ignore[attr-defined]
     if timezone is not None:
         payload["timezone"] = timezone
     return payload
@@ -196,10 +206,15 @@ async def today_overview(
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_pwa_session)],
     settings: Annotated[Settings, Depends(get_settings)],
+    workspace: str | None = None,
 ) -> dict[str, object]:
     preferences = await _preferences(session, identity, settings)
     payload = await today_overview_snapshot(
-        session, identity.user.id, now=_clock(), preferences=preferences
+        session,
+        identity.user.id,
+        now=_clock(),
+        preferences=preferences,
+        workspace_scope=normalize_workspace_read_scope(workspace),
     )
     return {"timezone": preferences.timezone, **payload}
 
@@ -209,6 +224,7 @@ async def overview(
     session: Annotated[AsyncSession, Depends(get_session)],
     identity: Annotated[PwaIdentity, Depends(require_pwa_session)],
     settings: Annotated[Settings, Depends(get_settings)],
+    workspace: str | None = None,
 ) -> dict[str, object]:
     preferences = await _preferences(session, identity, settings)
     payload = await overview_snapshot(
@@ -217,6 +233,7 @@ async def overview(
         now=_clock(),
         preferences=preferences,
         low_confidence_threshold=settings.ai_high_confidence_threshold,
+        workspace_scope=normalize_workspace_read_scope(workspace),
     )
     return {"timezone": preferences.timezone, **payload}
 
@@ -229,6 +246,7 @@ async def today(
     settings: Annotated[Settings, Depends(get_settings)],
     limit: Annotated[int, Query(ge=1, le=50)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
+    workspace: str | None = None,
 ) -> dict[str, object]:
     preferences = await _preferences(session, identity, settings)
     page = await list_today_section(
@@ -239,6 +257,7 @@ async def today(
         preferences=preferences,
         limit=limit,
         offset=offset,
+        workspace_scope=normalize_workspace_read_scope(workspace),
     )
     return {"section": section, **_page_payload(page, timezone=preferences.timezone)}
 
@@ -250,6 +269,7 @@ async def tomorrow(
     settings: Annotated[Settings, Depends(get_settings)],
     limit: Annotated[int, Query(ge=1, le=50)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
+    workspace: str | None = None,
 ) -> dict[str, object]:
     preferences = await _preferences(session, identity, settings)
     page = await list_tomorrow_items(
@@ -259,6 +279,7 @@ async def tomorrow(
         preferences=preferences,
         limit=limit,
         offset=offset,
+        workspace_scope=normalize_workspace_read_scope(workspace),
     )
     return _page_payload(page, timezone=preferences.timezone)
 
@@ -433,6 +454,35 @@ async def work_item_action(
     rescheduling_service: Annotated[
         ReschedulingService, Depends(get_rescheduling_service)
     ],
+) -> dict[str, object]:
+    workspace = await owned_entity_workspace(
+        session,
+        WorkItem,
+        user_id=identity.user.id,
+        entity_id=work_item_id,
+    )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    with workspace_context(session, user_id=identity.user.id, workspace=workspace):
+        response = await _work_item_action_in_workspace(
+            work_item_id,
+            payload,
+            session,
+            identity,
+            settings,
+            rescheduling_service,
+        )
+        await session.flush()
+        return response
+
+
+async def _work_item_action_in_workspace(
+    work_item_id: UUID,
+    payload: WorkItemActionRequest,
+    session: AsyncSession,
+    identity: PwaIdentity,
+    settings: Settings,
+    rescheduling_service: ReschedulingService,
 ) -> dict[str, object]:
     bind_client_action(session, payload.client_action_id)
     user_id = identity.user.id

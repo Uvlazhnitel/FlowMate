@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 from uuid import UUID
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.db.models import (
@@ -25,8 +25,13 @@ from flowmate.task_engine.queries import (
     OPEN_STATUSES,
     PersonScope,
     list_person_counts,
-    list_scheduled_items,
     validate_pagination,
+)
+from flowmate.workspaces import (
+    WorkspaceCounts,
+    WorkspaceReadScope,
+    active_workspace,
+    workspace_counts,
 )
 
 TodaySection = Literal["overdue", "due_today", "follow_ups", "waiting", "questions"]
@@ -48,6 +53,8 @@ class PageResult:
     offset: int
     has_more: bool
     total: int | None = None
+    workspace_counts: WorkspaceCounts | None = None
+    workspace_entity_keys: dict[str, set[tuple[str, UUID]]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +86,7 @@ class WorkItemCard:
     overdue: bool
     revision: int
     reminder: ReminderCard | None
+    workspace: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +146,30 @@ def effective_date_sql() -> Any:
     )
 
 
+def _workspace_condition(model: Any, scope: WorkspaceReadScope) -> Any:
+    return true() if scope == "all" else model.workspace == scope
+
+
+def _all_workspaces(statement: Any) -> Any:
+    return statement.execution_options(include_all_workspaces=True)
+
+
+async def _work_item_workspace_counts(
+    session: AsyncSession, *conditions: Any
+) -> WorkspaceCounts:
+    rows = await session.execute(
+        _all_workspaces(
+            select(WorkItem.workspace, func.count(WorkItem.id))
+            .where(*conditions)
+            .group_by(WorkItem.workspace)
+        )
+    )
+    values = {workspace: int(total) for workspace, total in rows}
+    return workspace_counts(
+        work=values.get("work", 0), personal=values.get("personal", 0)
+    )
+
+
 async def _page(
     statement: Any, session: AsyncSession, limit: int, offset: int
 ) -> PageResult:
@@ -160,40 +192,46 @@ async def build_work_item_cards(
     topic_names: dict[UUID, str] = {}
     if topic_ids:
         rows = await session.execute(
-            select(Topic.id, Topic.name).where(
-                Topic.user_id == user_id, Topic.id.in_(topic_ids)
+            _all_workspaces(
+                select(Topic.id, Topic.name).where(
+                    Topic.user_id == user_id, Topic.id.in_(topic_ids)
+                )
             )
         )
         topic_names = {topic_id: name for topic_id, name in rows}
     people: dict[UUID, list[tuple[UUID, str]]] = {item_id: [] for item_id in item_ids}
     rows = await session.execute(
-        select(WorkItemPerson.work_item_id, Person.id, Person.display_name)
-        .join(Person, Person.id == WorkItemPerson.person_id)
-        .where(
-            WorkItemPerson.user_id == user_id,
-            WorkItemPerson.work_item_id.in_(item_ids),
-            Person.user_id == user_id,
+        _all_workspaces(
+            select(WorkItemPerson.work_item_id, Person.id, Person.display_name)
+            .join(Person, Person.id == WorkItemPerson.person_id)
+            .where(
+                WorkItemPerson.user_id == user_id,
+                WorkItemPerson.work_item_id.in_(item_ids),
+                Person.user_id == user_id,
+            )
+            .order_by(WorkItemPerson.work_item_id, Person.display_name, Person.id)
         )
-        .order_by(WorkItemPerson.work_item_id, Person.display_name, Person.id)
     )
     for item_id, person_id, name in rows:
         people[item_id].append((person_id, name))
     reminders: dict[UUID, Reminder] = {}
     reminder_rows = list(
         await session.scalars(
-            select(Reminder)
-            .where(
-                Reminder.user_id == user_id,
-                Reminder.work_item_id.in_(item_ids),
-                Reminder.status.in_(ACTIVE_REMINDER_STATUSES),
-            )
-            .order_by(
-                func.coalesce(
-                    Reminder.snoozed_until,
-                    Reminder.next_attempt_at,
-                    Reminder.scheduled_at,
-                ),
-                Reminder.id,
+            _all_workspaces(
+                select(Reminder)
+                .where(
+                    Reminder.user_id == user_id,
+                    Reminder.work_item_id.in_(item_ids),
+                    Reminder.status.in_(ACTIVE_REMINDER_STATUSES),
+                )
+                .order_by(
+                    func.coalesce(
+                        Reminder.snoozed_until,
+                        Reminder.next_attempt_at,
+                        Reminder.scheduled_at,
+                    ),
+                    Reminder.id,
+                )
             )
         )
     )
@@ -243,6 +281,7 @@ async def build_work_item_cards(
                 overdue=date is not None and date < now,
                 revision=work_item_revision(item.updated_at),
                 reminder=reminder_card,
+                workspace=item.workspace,
             )
         )
     return cards
@@ -257,40 +296,60 @@ async def list_today_section(
     preferences: EffectiveNotificationPreferences,
     limit: int,
     offset: int,
+    workspace_scope: WorkspaceReadScope = "all",
 ) -> PageResult:
     _, end = local_day_bounds(now, preferences)
-    statement = select(WorkItem).where(
-        WorkItem.user_id == user_id, WorkItem.status.in_(OPEN_STATUSES)
-    )
+    conditions: list[Any] = [
+        WorkItem.user_id == user_id,
+        WorkItem.status.in_(OPEN_STATUSES),
+    ]
+    order_by: tuple[Any, ...]
     if section == "follow_ups":
-        statement = statement.where(
-            WorkItem.type == WorkItemType.FOLLOW_UP.value,
-            WorkItem.next_follow_up_at < end,
-        ).order_by(WorkItem.next_follow_up_at, WorkItem.id)
+        conditions.extend(
+            (
+                WorkItem.type == WorkItemType.FOLLOW_UP.value,
+                WorkItem.next_follow_up_at < end,
+            )
+        )
+        order_by = (WorkItem.next_follow_up_at, WorkItem.id)
     elif section == "waiting":
-        statement = statement.where(
-            WorkItem.type == WorkItemType.WAITING.value, WorkItem.due_at < end
-        ).order_by(WorkItem.due_at, WorkItem.id)
+        conditions.extend(
+            (WorkItem.type == WorkItemType.WAITING.value, WorkItem.due_at < end)
+        )
+        order_by = (WorkItem.due_at, WorkItem.id)
     elif section == "questions":
-        statement = statement.where(
-            WorkItem.type == WorkItemType.QUESTION.value
-        ).order_by(WorkItem.due_at.asc().nulls_last(), WorkItem.created_at, WorkItem.id)
+        conditions.append(WorkItem.type == WorkItemType.QUESTION.value)
+        order_by = (
+            WorkItem.due_at.asc().nulls_last(),
+            WorkItem.created_at,
+            WorkItem.id,
+        )
     elif section == "overdue":
-        statement = statement.where(
-            WorkItem.type.not_in(SEMANTIC_TYPES), WorkItem.due_at < now
-        ).order_by(WorkItem.due_at, WorkItem.id)
+        conditions.extend((WorkItem.type.not_in(SEMANTIC_TYPES), WorkItem.due_at < now))
+        order_by = (WorkItem.due_at, WorkItem.id)
     else:
-        statement = statement.where(
-            WorkItem.type.not_in(SEMANTIC_TYPES),
-            WorkItem.due_at >= now,
-            WorkItem.due_at < end,
-        ).order_by(WorkItem.due_at, WorkItem.id)
+        conditions.extend(
+            (
+                WorkItem.type.not_in(SEMANTIC_TYPES),
+                WorkItem.due_at >= now,
+                WorkItem.due_at < end,
+            )
+        )
+        order_by = (WorkItem.due_at, WorkItem.id)
+    counts = await _work_item_workspace_counts(session, *conditions)
+    statement = _all_workspaces(
+        select(WorkItem)
+        .where(*conditions, _workspace_condition(WorkItem, workspace_scope))
+        .order_by(*order_by)
+    )
     page = await _page(statement, session, limit, offset)
     return PageResult(
         list(await build_work_item_cards(session, user_id, page.items, now=now)),
         limit,
         offset,
         page.has_more,
+        counts[workspace_scope],
+        counts,
     )
 
 
@@ -302,73 +361,7 @@ async def list_tomorrow_items(
     preferences: EffectiveNotificationPreferences,
     limit: int,
     offset: int,
-) -> PageResult:
-    start, end = local_day_bounds(now, preferences, days_ahead=1)
-    items = await list_scheduled_items(
-        session,
-        user_id,
-        start=start,
-        end=end,
-        limit=limit + 1,
-        offset=offset,
-    )
-    page_items = items[:limit]
-    return PageResult(
-        list(await build_work_item_cards(session, user_id, page_items, now=now)),
-        limit,
-        offset,
-        len(items) > limit,
-    )
-
-
-async def list_overview_today_items(
-    session: AsyncSession,
-    user_id: UUID,
-    *,
-    now: datetime,
-    preferences: EffectiveNotificationPreferences,
-    limit: int,
-) -> PageResult:
-    _, end = local_day_bounds(now, preferences)
-    category = _focus_category_sql(now, end)
-    effective = effective_date_sql()
-    conditions = (
-        WorkItem.user_id == user_id,
-        WorkItem.status.in_(OPEN_STATUSES),
-        category < 5,
-    )
-    total = int(
-        (await session.scalar(select(func.count(WorkItem.id)).where(*conditions))) or 0
-    )
-    items = list(
-        await session.scalars(
-            select(WorkItem)
-            .where(*conditions)
-            .order_by(
-                category,
-                _priority_rank_sql(),
-                effective.asc().nulls_last(),
-                WorkItem.id,
-            )
-            .limit(limit)
-        )
-    )
-    return PageResult(
-        list(await build_work_item_cards(session, user_id, items, now=now)),
-        limit,
-        0,
-        total > limit,
-        total,
-    )
-
-
-async def list_overview_tomorrow_items(
-    session: AsyncSession,
-    user_id: UUID,
-    *,
-    now: datetime,
-    preferences: EffectiveNotificationPreferences,
-    limit: int,
+    workspace_scope: WorkspaceReadScope = "all",
 ) -> PageResult:
     start, end = local_day_bounds(now, preferences, days_ahead=1)
     effective = effective_date_sql()
@@ -386,9 +379,106 @@ async def list_overview_tomorrow_items(
         effective >= start,
         effective < end,
     )
-    total = int(
-        (await session.scalar(select(func.count(WorkItem.id)).where(*conditions))) or 0
+    counts = await _work_item_workspace_counts(session, *conditions)
+    statement = _all_workspaces(
+        select(WorkItem)
+        .where(*conditions, _workspace_condition(WorkItem, workspace_scope))
+        .order_by(effective, _priority_rank_sql(), WorkItem.id)
     )
+    page = await _page(statement, session, limit, offset)
+    return PageResult(
+        list(await build_work_item_cards(session, user_id, page.items, now=now)),
+        limit,
+        offset,
+        page.has_more,
+        counts[workspace_scope],
+        counts,
+    )
+
+
+async def list_overview_today_items(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    now: datetime,
+    preferences: EffectiveNotificationPreferences,
+    limit: int,
+    workspace_scope: WorkspaceReadScope = "all",
+) -> PageResult:
+    _, end = local_day_bounds(now, preferences)
+    category = _focus_category_sql(now, end)
+    effective = effective_date_sql()
+    conditions = (
+        WorkItem.user_id == user_id,
+        WorkItem.status.in_(OPEN_STATUSES),
+        category < 5,
+    )
+    counts = await _work_item_workspace_counts(session, *conditions)
+    key_rows = await session.execute(
+        _all_workspaces(select(WorkItem.id, WorkItem.workspace).where(*conditions))
+    )
+    keys: dict[str, set[tuple[str, UUID]]] = {"work": set(), "personal": set()}
+    for item_id, workspace in key_rows:
+        keys[workspace].add(("work_item", item_id))
+    items = list(
+        await session.scalars(
+            _all_workspaces(
+                select(WorkItem)
+                .where(*conditions, _workspace_condition(WorkItem, workspace_scope))
+                .order_by(
+                    category,
+                    _priority_rank_sql(),
+                    effective.asc().nulls_last(),
+                    WorkItem.id,
+                )
+                .limit(limit)
+            )
+        )
+    )
+    total = counts[workspace_scope]
+    return PageResult(
+        list(await build_work_item_cards(session, user_id, items, now=now)),
+        limit,
+        0,
+        total > limit,
+        total,
+        counts,
+        keys,
+    )
+
+
+async def list_overview_tomorrow_items(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    now: datetime,
+    preferences: EffectiveNotificationPreferences,
+    limit: int,
+    workspace_scope: WorkspaceReadScope = "all",
+) -> PageResult:
+    start, end = local_day_bounds(now, preferences, days_ahead=1)
+    effective = effective_date_sql()
+    conditions = (
+        WorkItem.user_id == user_id,
+        WorkItem.status.in_(OPEN_STATUSES),
+        WorkItem.type.in_(
+            (
+                WorkItemType.TASK.value,
+                WorkItemType.FOLLOW_UP.value,
+                WorkItemType.WAITING.value,
+                WorkItemType.QUESTION.value,
+            )
+        ),
+        effective >= start,
+        effective < end,
+    )
+    counts = await _work_item_workspace_counts(session, *conditions)
+    key_rows = await session.execute(
+        _all_workspaces(select(WorkItem.id, WorkItem.workspace).where(*conditions))
+    )
+    keys: dict[str, set[tuple[str, UUID]]] = {"work": set(), "personal": set()}
+    for item_id, workspace in key_rows:
+        keys[workspace].add(("work_item", item_id))
     page = await list_tomorrow_items(
         session,
         user_id,
@@ -396,8 +486,10 @@ async def list_overview_tomorrow_items(
         preferences=preferences,
         limit=limit,
         offset=0,
+        workspace_scope=workspace_scope,
     )
-    return PageResult(page.items, limit, 0, total > limit, total)
+    total = counts[workspace_scope]
+    return PageResult(page.items, limit, 0, total > limit, total, counts, keys)
 
 
 async def _today_summary(
@@ -406,12 +498,21 @@ async def _today_summary(
     *,
     now: datetime,
     end: datetime,
+    workspace_scope: WorkspaceReadScope,
 ) -> dict[str, int]:
-    owned_open = (WorkItem.user_id == user_id, WorkItem.status.in_(OPEN_STATUSES))
+    owned_open = (
+        WorkItem.user_id == user_id,
+        WorkItem.status.in_(OPEN_STATUSES),
+        _workspace_condition(WorkItem, workspace_scope),
+    )
 
     async def count(*conditions: Any) -> int:
         return int(
-            (await session.scalar(select(func.count(WorkItem.id)).where(*conditions)))
+            (
+                await session.scalar(
+                    _all_workspaces(select(func.count(WorkItem.id)).where(*conditions))
+                )
+            )
             or 0
         )
 
@@ -441,10 +542,12 @@ async def _today_summary(
         "inbox": await count(
             WorkItem.user_id == user_id,
             WorkItem.status == WorkItemStatus.INBOX.value,
+            _workspace_condition(WorkItem, workspace_scope),
         ),
         "planner_queue": await count(
             WorkItem.user_id == user_id,
             WorkItem.planner_status.in_(("needs_transfer", "update_required")),
+            _workspace_condition(WorkItem, workspace_scope),
         ),
     }
 
@@ -487,24 +590,28 @@ async def _select_focus_items(
     *,
     now: datetime,
     end: datetime,
+    workspace_scope: WorkspaceReadScope,
 ) -> list[WorkItem]:
     category = _focus_category_sql(now, end)
     effective = effective_date_sql()
     return list(
         await session.scalars(
-            select(WorkItem)
-            .where(
-                WorkItem.user_id == user_id,
-                WorkItem.status.in_(OPEN_STATUSES),
-                category < 5,
+            _all_workspaces(
+                select(WorkItem)
+                .where(
+                    WorkItem.user_id == user_id,
+                    WorkItem.status.in_(OPEN_STATUSES),
+                    category < 5,
+                    _workspace_condition(WorkItem, workspace_scope),
+                )
+                .order_by(
+                    category,
+                    _priority_rank_sql(),
+                    effective.asc().nulls_last(),
+                    WorkItem.id,
+                )
+                .limit(5)
             )
-            .order_by(
-                category,
-                _priority_rank_sql(),
-                effective.asc().nulls_last(),
-                WorkItem.id,
-            )
-            .limit(5)
         )
     )
 
@@ -516,13 +623,17 @@ async def _select_later_today(
     now: datetime,
     end: datetime,
     focus_ids: set[UUID],
+    workspace_scope: WorkspaceReadScope,
 ) -> tuple[list[WorkItem], bool]:
-    statement = select(WorkItem).where(
-        WorkItem.user_id == user_id,
-        WorkItem.status.in_(OPEN_STATUSES),
-        WorkItem.type.not_in(SEMANTIC_TYPES),
-        WorkItem.due_at >= now,
-        WorkItem.due_at < end,
+    statement = _all_workspaces(
+        select(WorkItem).where(
+            WorkItem.user_id == user_id,
+            WorkItem.status.in_(OPEN_STATUSES),
+            WorkItem.type.not_in(SEMANTIC_TYPES),
+            WorkItem.due_at >= now,
+            WorkItem.due_at < end,
+            _workspace_condition(WorkItem, workspace_scope),
+        )
     )
     if focus_ids:
         statement = statement.where(WorkItem.id.not_in(focus_ids))
@@ -544,18 +655,41 @@ async def today_overview_snapshot(
     *,
     now: datetime,
     preferences: EffectiveNotificationPreferences,
+    workspace_scope: WorkspaceReadScope = "all",
 ) -> dict[str, object]:
     _, end = local_day_bounds(now, preferences)
-    summary = await _today_summary(session, user_id, now=now, end=end)
-    focus_items = await _select_focus_items(session, user_id, now=now, end=end)
+    category = _focus_category_sql(now, end)
+    counts = await _work_item_workspace_counts(
+        session,
+        WorkItem.user_id == user_id,
+        WorkItem.status.in_(OPEN_STATUSES),
+        category < 5,
+    )
+    summary = await _today_summary(
+        session,
+        user_id,
+        now=now,
+        end=end,
+        workspace_scope=workspace_scope,
+    )
+    focus_items = await _select_focus_items(
+        session,
+        user_id,
+        now=now,
+        end=end,
+        workspace_scope=workspace_scope,
+    )
     later_items, later_has_more = await _select_later_today(
         session,
         user_id,
         now=now,
         end=end,
         focus_ids={item.id for item in focus_items},
+        workspace_scope=workspace_scope,
     )
     return {
+        "total": counts[workspace_scope],
+        "workspace_counts": counts,
         "summary": summary,
         "focus": await build_work_item_cards(session, user_id, focus_items, now=now),
         "later_today": {
@@ -575,8 +709,23 @@ async def dashboard_snapshot(
     preferences: EffectiveNotificationPreferences,
 ) -> dict[str, object]:
     _, end = local_day_bounds(now, preferences)
-    summary = await _today_summary(session, user_id, now=now, end=end)
-    recommended_items = await _select_focus_items(session, user_id, now=now, end=end)
+    dashboard_scope: WorkspaceReadScope = (
+        "work" if active_workspace(session) == "work" else "personal"
+    )
+    summary = await _today_summary(
+        session,
+        user_id,
+        now=now,
+        end=end,
+        workspace_scope=dashboard_scope,
+    )
+    recommended_items = await _select_focus_items(
+        session,
+        user_id,
+        now=now,
+        end=end,
+        workspace_scope=dashboard_scope,
+    )
     effective = effective_date_sql()
     upcoming_items = list(
         await session.scalars(

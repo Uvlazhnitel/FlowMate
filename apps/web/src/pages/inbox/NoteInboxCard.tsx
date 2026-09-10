@@ -2,6 +2,7 @@ import { Archive, Save, Trash2 } from "lucide-react";
 
 import type { NoteInboxAction, NoteInboxEntry } from "../../api/remaining";
 import { formatDateTime, type DateTimePreferences } from "../../lib/dates";
+import { WorkspaceBadge } from "../../components/WorkspaceBadge";
 
 export function NoteInboxCard({
   entry,
@@ -16,9 +17,12 @@ export function NoteInboxCard({
 }) {
   return (
     <>
-      <span className="directory-kicker">
-        {entry.source} · {formatDateTime(entry.created_at, dateTimePreferences)}
-      </span>
+      <div className="inbox-card__kickers">
+        <span className="directory-kicker">
+          {entry.source} · {formatDateTime(entry.created_at, dateTimePreferences)}
+        </span>
+        <WorkspaceBadge workspace={entry.workspace} />
+      </div>
       <h2>Неразобранная заметка</h2>
       <p>{entry.excerpt}</p>
       <div className="work-card__actions">

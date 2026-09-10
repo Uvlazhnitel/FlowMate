@@ -12,6 +12,7 @@ from flowmate.task_engine.operational import (
     list_overview_tomorrow_items,
 )
 from flowmate.task_engine.remaining import list_inbox, work_item_inbox_reasons
+from flowmate.workspaces import WorkspaceReadScope, workspace_counts
 
 OVERVIEW_LIMIT = 8
 
@@ -37,6 +38,7 @@ def _inbox_preview(entry: dict[str, Any]) -> dict[str, object]:
             "reasons": entry.get("reasons") or [],
             "occurred_at": entry.get("updated_at"),
             "item_count": len(items),
+            "workspace": entry["workspace"],
         }
     if kind == "work_item":
         card = entry["item"]
@@ -50,6 +52,7 @@ def _inbox_preview(entry: dict[str, Any]) -> dict[str, object]:
             "reasons": entry.get("reasons") or [],
             "occurred_at": card.updated_at,
             "item_count": 1,
+            "workspace": card.workspace,
         }
     return {
         "id": entry["id"],
@@ -60,6 +63,7 @@ def _inbox_preview(entry: dict[str, Any]) -> dict[str, object]:
         "reasons": entry.get("reasons") or [],
         "occurred_at": entry.get("created_at"),
         "item_count": 1,
+        "workspace": entry["workspace"],
     }
 
 
@@ -75,6 +79,7 @@ async def overview_snapshot(
     now: datetime,
     preferences: EffectiveNotificationPreferences,
     low_confidence_threshold: float,
+    workspace_scope: WorkspaceReadScope = "all",
 ) -> dict[str, object]:
     today = await list_overview_today_items(
         session,
@@ -82,6 +87,7 @@ async def overview_snapshot(
         now=now,
         preferences=preferences,
         limit=OVERVIEW_LIMIT,
+        workspace_scope=workspace_scope,
     )
     tomorrow = await list_overview_tomorrow_items(
         session,
@@ -89,6 +95,7 @@ async def overview_snapshot(
         now=now,
         preferences=preferences,
         limit=OVERVIEW_LIMIT,
+        workspace_scope=workspace_scope,
     )
     inbox = await list_inbox(
         session,
@@ -99,8 +106,17 @@ async def overview_snapshot(
         reason=None,
         limit=OVERVIEW_LIMIT,
         offset=0,
+        workspace_scope=workspace_scope,
+    )
+    unique: dict[str, set[tuple[str, UUID]]] = {"work": set(), "personal": set()}
+    for page in (today, tomorrow, inbox):
+        for workspace, keys in (page.workspace_entity_keys or {}).items():
+            unique[workspace].update(keys)
+    counts = workspace_counts(
+        work=len(unique["work"]), personal=len(unique["personal"])
     )
     return {
+        "workspace_counts": counts,
         "today": _column(today, [_work_item_preview(item) for item in today.items]),
         "tomorrow": _column(
             tomorrow, [_work_item_preview(item) for item in tomorrow.items]

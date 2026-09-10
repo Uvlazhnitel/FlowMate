@@ -37,6 +37,7 @@ const task: WorkItemCardData = {
   overdue: true,
   revision: 17,
   reminder: null,
+  workspace: "personal",
 };
 
 const inboxTask: WorkItemCardData = {
@@ -53,6 +54,7 @@ const inboxTask: WorkItemCardData = {
 function overviewResponse(): OverviewResponse {
   return {
     timezone: "Europe/Riga",
+    workspace_counts: { all: 10, work: 1, personal: 9 },
     today: {
       items: Array.from({ length: 8 }, (_, index) => ({
         item: {
@@ -86,6 +88,7 @@ function overviewResponse(): OverviewResponse {
           reasons: ["unresolved_draft"],
           occurred_at: "2026-08-11T08:30:00Z",
           item_count: 2,
+          workspace: "personal",
         },
       ],
       total: 1,
@@ -134,6 +137,53 @@ describe("Overview home", () => {
     expect(inboxLink).toHaveAttribute(
       "href",
       "/inbox?kind=draft&focus=3195ebcf-15f4-42ef-bf5f-947589cd06bd",
+    );
+  });
+
+  it("filters the view independently from the creation workspace", async () => {
+    const response = overviewResponse();
+    response.today.items[0]!.item.workspace = "work";
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      void init;
+      const path = requestPath(input);
+      return Promise.resolve(
+        path.includes("/auth/me")
+          ? jsonResponse(authenticatedUser)
+          : jsonResponse(response),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderApplication("/overview");
+
+    expect(await screen.findByRole("button", { name: /^Все\s*10$/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getAllByText("Работа").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Личное").length).toBeGreaterThan(1);
+    await user.click(screen.getByRole("button", { name: /^Работа\s*1$/ }));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          requestPath(input).includes("/api/v1/overview?workspace=work"),
+        ),
+      ).toBe(true),
+    );
+    expect(screen.getByText(/В личном скрыто 9 задач/)).toBeVisible();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          requestPath(input).includes("/api/v1/workspace") && init?.method === "PUT",
+      ),
+    ).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Показать всё" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Все\s*10$/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
     );
   });
 
@@ -235,6 +285,7 @@ describe("Overview home", () => {
       reasons: ["inbox_status"],
       occurred_at: inboxTask.updated_at,
       item_count: 1,
+      workspace: inboxTask.workspace,
     });
     response.inbox.total += 1;
     let resolveAction: ((value: Response) => void) | undefined;
@@ -326,6 +377,7 @@ describe("Overview home", () => {
       reasons: ["inbox_status"],
       occurred_at: inboxTask.updated_at,
       item_count: 1,
+      workspace: inboxTask.workspace,
     });
     response.inbox.total += 1;
     vi.stubGlobal(

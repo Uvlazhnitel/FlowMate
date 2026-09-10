@@ -17,7 +17,14 @@ import { ApiError } from "../api/client";
 import { remainingKeys } from "../api/remaining";
 import { OperationalLayout } from "../components/OperationalLayout";
 import { ErrorState, LoadingState } from "../components/PageState";
+import { WorkspaceBadge } from "../components/WorkspaceBadge";
+import { WorkspaceScopeFilter } from "../components/WorkspaceScopeFilter";
 import type { DateTimePreferences } from "../lib/dates";
+import {
+  useWorkspaceScope,
+  workspacePath,
+  type WorkspaceScope,
+} from "../lib/workspaceScope";
 import { reasonLabels } from "./inbox/presentation";
 import { OverviewWorkItemRow } from "./overview/OverviewWorkItemRow";
 
@@ -63,6 +70,7 @@ function optimisticMove(
     reasons: ["inbox_status"],
     occurred_at: item.updated_at,
     item_count: 1,
+    workspace: item.workspace,
   };
   const todayTotal = current.today.total - Number(hadToday) + Number(target === "today");
   const tomorrowTotal =
@@ -158,19 +166,21 @@ function OverviewInboxRow({
   dragging,
   onDragStart,
   onDragEnd,
+  scope,
 }: {
   item: OverviewInboxItem;
   moveDisabled: boolean;
   dragging: boolean;
   onDragStart: (event: DragEvent<HTMLElement>) => void;
   onDragEnd: () => void;
+  scope: WorkspaceScope;
 }) {
   const reason = item.reasons[0];
   const canDrag = item.kind === "work_item" && draggableTypes.has(item.item.type);
   return (
     <Link
       className={`overview-inbox-row ${dragging ? "overview-row--dragging" : ""}`}
-      to={`/inbox?kind=${item.kind}&focus=${item.id}`}
+      to={workspacePath(`/inbox?kind=${item.kind}&focus=${item.id}`, scope)}
       draggable={canDrag && !moveDisabled}
       aria-busy={canDrag && moveDisabled}
       onDragStart={canDrag ? onDragStart : undefined}
@@ -178,6 +188,7 @@ function OverviewInboxRow({
     >
       <div className="overview-row__badges">
         <span className="overview-badge">{inboxKindLabels[item.kind]}</span>
+        <WorkspaceBadge workspace={item.workspace} />
         {item.item_count > 1 && (
           <span className="overview-badge">{item.item_count} записи</span>
         )}
@@ -197,13 +208,15 @@ export function OverviewPage({
   dateTimePreferences: DateTimePreferences;
 }) {
   const queryClient = useQueryClient();
+  const { scope, setScope } = useWorkspaceScope();
+  const overviewKey = operationsKeys.overview(scope);
   const [dragged, setDragged] = useState<DraggedWorkItem | null>(null);
   const [dropTarget, setDropTarget] = useState<OverviewBucket | null>(null);
   const [moveFeedback, setMoveFeedback] = useState<{
     kind: "success" | "error";
     text: string;
   } | null>(null);
-  const query = useQuery({ queryKey: operationsKeys.overview, queryFn: getOverview });
+  const query = useQuery({ queryKey: overviewKey, queryFn: () => getOverview(scope) });
   const moveMutation = useMutation({
     mutationFn: ({ item, target }: DraggedWorkItem & { target: OverviewBucket }) =>
       runWorkItemAction(item.id, {
@@ -213,11 +226,10 @@ export function OverviewPage({
         expected_revision: item.revision,
       }),
     onMutate: async ({ item, target }) => {
-      await queryClient.cancelQueries({ queryKey: operationsKeys.overview });
-      const previous = queryClient.getQueryData<OverviewResponse>(operationsKeys.overview);
-      queryClient.setQueryData<OverviewResponse | undefined>(
-        operationsKeys.overview,
-        (current) => optimisticMove(current, item, target),
+      await queryClient.cancelQueries({ queryKey: overviewKey });
+      const previous = queryClient.getQueryData<OverviewResponse>(overviewKey);
+      queryClient.setQueryData<OverviewResponse | undefined>(overviewKey, (current) =>
+        optimisticMove(current, item, target),
       );
       return { previous };
     },
@@ -229,7 +241,7 @@ export function OverviewPage({
     },
     onError: (error, _variables, context) => {
       if (context?.previous) {
-        queryClient.setQueryData(operationsKeys.overview, context.previous);
+        queryClient.setQueryData(overviewKey, context.previous);
       }
       const text =
         error instanceof ApiError && error.status === 409
@@ -305,6 +317,13 @@ export function OverviewPage({
       eyebrow="Главное"
       title="Обзор"
       description="Сегодня, завтра и входящие — в одном спокойном рабочем пространстве."
+      controls={
+        <WorkspaceScopeFilter
+          scope={scope}
+          counts={query.data?.workspace_counts}
+          onChange={setScope}
+        />
+      }
     >
       {query.isPending ? (
         <LoadingState label="Собираем обзор" />
@@ -329,7 +348,7 @@ export function OverviewPage({
               title="Сегодня"
               icon={<CalendarDays size={18} aria-hidden />}
               data={query.data.today}
-              to="/today"
+              to={workspacePath("/today", scope)}
               className="overview-column--today"
               empty="На сегодня всё разобрано."
               {...columnDragProps("today")}
@@ -350,7 +369,7 @@ export function OverviewPage({
               title="Завтра"
               icon={<CalendarRange size={18} aria-hidden />}
               data={query.data.tomorrow}
-              to="/tomorrow"
+              to={workspacePath("/tomorrow", scope)}
               className="overview-column--tomorrow"
               empty="На завтра ничего не запланировано."
               {...columnDragProps("tomorrow")}
@@ -371,7 +390,7 @@ export function OverviewPage({
               title="Входящие"
               icon={<Inbox size={18} aria-hidden />}
               data={query.data.inbox}
-              to="/inbox"
+              to={workspacePath("/inbox", scope)}
               className="overview-column--inbox"
               empty="Входящие разобраны."
               {...columnDragProps("inbox")}
@@ -386,6 +405,7 @@ export function OverviewPage({
                     if (item.kind === "work_item") startDrag(event, item.item, "inbox");
                   }}
                   onDragEnd={endDrag}
+                  scope={scope}
                 />
               ))}
             </OverviewColumn>

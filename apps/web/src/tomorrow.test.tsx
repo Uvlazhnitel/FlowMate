@@ -30,6 +30,7 @@ const tomorrowItem: WorkItemCardData = {
   overdue: false,
   revision: 1,
   reminder: null,
+  workspace: "personal",
 };
 
 function page(items: WorkItemCardData[], offset: number, hasMore: boolean) {

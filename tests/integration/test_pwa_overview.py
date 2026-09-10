@@ -146,11 +146,29 @@ async def test_overview_snapshot_is_bounded_ordered_and_workspace_safe(
 
     inbox = overview["inbox"]
     assert isinstance(inbox, dict)
-    assert inbox["total"] == 3
+    assert inbox["total"] == 4
     assert {entry["kind"] for entry in inbox["items"]} == {
         "draft",
         "note",
         "work_item",
     }
     assert "Foreign private note" not in str(inbox)
-    assert "Other workspace note" not in str(inbox)
+    assert "Other workspace note" in str(inbox)
+    assert overview["workspace_counts"] == {
+        "all": 21,
+        "work": 1,
+        "personal": 20,
+    }
+
+    personal_overview = await overview_snapshot(
+        database_session,
+        user.id,
+        now=now,
+        preferences=preferences,
+        low_confidence_threshold=0.8,
+        workspace_scope="personal",
+    )
+    personal_inbox = personal_overview["inbox"]
+    assert isinstance(personal_inbox, dict)
+    assert personal_inbox["total"] == 3
+    assert "Other workspace note" not in str(personal_inbox)

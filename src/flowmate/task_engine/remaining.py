@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, exists, select
@@ -30,7 +30,11 @@ from flowmate.db.models import (
 )
 from flowmate.stabilization.audit import record_audit_event
 from flowmate.task_engine.enums import PlannerStatus, WorkItemPriority, WorkItemType
-from flowmate.task_engine.operational import PageResult, build_work_item_cards
+from flowmate.task_engine.operational import (
+    PageResult,
+    WorkItemCard,
+    build_work_item_cards,
+)
 from flowmate.task_engine.planner import ELIGIBLE_PLANNER_TYPES
 from flowmate.task_engine.queries import OPEN_STATUSES, validate_pagination
 from flowmate.task_engine.service import (
@@ -39,6 +43,7 @@ from flowmate.task_engine.service import (
     normalize_optional_text,
     normalize_required_text,
 )
+from flowmate.workspaces import WorkspaceReadScope, workspace_counts
 
 InboxKind = Literal["draft", "work_item", "note"]
 DELETABLE_DRAFT_STATUSES = frozenset(
@@ -60,6 +65,10 @@ TimelineEventType = Literal[
     "bucket_moved",
     "archived",
 ]
+
+
+def _all_workspaces(statement: Any) -> Any:
+    return statement.execution_options(include_all_workspaces=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,14 +245,16 @@ async def _draft_people(
     if not item_ids:
         return values
     rows = await session.execute(
-        select(DraftItemPerson.draft_item_id, Person.id, Person.display_name)
-        .join(Person, Person.id == DraftItemPerson.person_id)
-        .where(
-            DraftItemPerson.user_id == user_id,
-            DraftItemPerson.draft_item_id.in_(item_ids),
-            Person.user_id == user_id,
+        _all_workspaces(
+            select(DraftItemPerson.draft_item_id, Person.id, Person.display_name)
+            .join(Person, Person.id == DraftItemPerson.person_id)
+            .where(
+                DraftItemPerson.user_id == user_id,
+                DraftItemPerson.draft_item_id.in_(item_ids),
+                Person.user_id == user_id,
+            )
+            .order_by(Person.display_name, Person.id)
         )
-        .order_by(Person.display_name, Person.id)
     )
     for item_id, person_id, name in rows:
         values[item_id].append({"id": person_id, "display_name": name})
@@ -262,7 +273,11 @@ async def serialize_draft(
     topics = {
         topic.id: topic
         for topic in await session.scalars(
-            select(Topic).where(Topic.user_id == draft.user_id, Topic.id.in_(topic_ids))
+            _all_workspaces(
+                select(Topic).where(
+                    Topic.user_id == draft.user_id, Topic.id.in_(topic_ids)
+                )
+            )
         )
     }
     return {
@@ -274,6 +289,7 @@ async def serialize_draft(
         "updated_at": draft.updated_at,
         "expires_at": draft.expires_at,
         "recoverable": bool(draft.items and draft.analysis_payload),
+        "workspace": draft.workspace,
         "source_excerpt": source_content[:500],
         "items": [
             {
@@ -344,6 +360,7 @@ async def list_inbox(
     reason: str | None,
     limit: int,
     offset: int,
+    workspace_scope: WorkspaceReadScope = "all",
 ) -> PageResult:
     validate_pagination(limit, offset)
     if limit > 50:
@@ -352,23 +369,33 @@ async def list_inbox(
     if kind in {None, "draft"}:
         drafts = list(
             await session.scalars(
-                select(DraftSession)
-                .options(selectinload(DraftSession.items))
-                .where(
-                    DraftSession.user_id == user_id,
-                    DraftSession.status.in_(
-                        ("parsing", "needs_clarification", "ready", "expired", "failed")
-                    ),
+                _all_workspaces(
+                    select(DraftSession)
+                    .options(selectinload(DraftSession.items))
+                    .where(
+                        DraftSession.user_id == user_id,
+                        DraftSession.status.in_(
+                            (
+                                "parsing",
+                                "needs_clarification",
+                                "ready",
+                                "expired",
+                                "failed",
+                            )
+                        ),
+                    )
+                    .order_by(DraftSession.updated_at.desc(), DraftSession.id)
                 )
-                .order_by(DraftSession.updated_at.desc(), DraftSession.id)
             )
         )
         note_by_id = {
             note.id: note
             for note in await session.scalars(
-                select(Note).where(
-                    Note.user_id == user_id,
-                    Note.id.in_([draft.source_note_id for draft in drafts]),
+                _all_workspaces(
+                    select(Note).where(
+                        Note.user_id == user_id,
+                        Note.id.in_([draft.source_note_id for draft in drafts]),
+                    )
                 )
             )
         }
@@ -401,9 +428,14 @@ async def list_inbox(
     if kind in {None, "work_item"}:
         work_items = list(
             await session.scalars(
-                select(WorkItem)
-                .where(WorkItem.user_id == user_id, WorkItem.status.in_(OPEN_STATUSES))
-                .order_by(WorkItem.updated_at.desc(), WorkItem.id)
+                _all_workspaces(
+                    select(WorkItem)
+                    .where(
+                        WorkItem.user_id == user_id,
+                        WorkItem.status.in_(OPEN_STATUSES),
+                    )
+                    .order_by(WorkItem.updated_at.desc(), WorkItem.id)
+                )
             )
         )
         cards = await build_work_item_cards(session, user_id, work_items, now=now)
@@ -415,20 +447,23 @@ async def list_inbox(
                 "kind": "work_item",
                 "reasons": work_reasons,
                 "item": card,
+                "workspace": card.workspace,
             }
             entries.append((card.updated_at, str(card.id), payload))
 
     if kind in {None, "note"}:
         notes = list(
             await session.scalars(
-                select(Note)
-                .where(
-                    Note.user_id == user_id,
-                    Note.inbox_disposition == "pending",
-                    ~exists().where(DraftSession.source_note_id == Note.id),
-                    ~exists().where(NoteLink.note_id == Note.id),
+                _all_workspaces(
+                    select(Note)
+                    .where(
+                        Note.user_id == user_id,
+                        Note.inbox_disposition == "pending",
+                        ~exists().where(DraftSession.source_note_id == Note.id),
+                        ~exists().where(NoteLink.note_id == Note.id),
+                    )
+                    .order_by(Note.created_at.desc(), Note.id)
                 )
-                .order_by(Note.created_at.desc(), Note.id)
             )
         )
         if reason in {None, "unstructured_note"}:
@@ -444,18 +479,44 @@ async def list_inbox(
                             "excerpt": (note.content or "")[:500],
                             "source": note.source,
                             "created_at": note.created_at,
+                            "workspace": note.workspace,
                         },
                     )
                 )
 
     entries.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
-    page = entries[offset : offset + limit + 1]
+    by_workspace = {
+        "work": sum(entry[2]["workspace"] == "work" for entry in entries),
+        "personal": sum(entry[2]["workspace"] == "personal" for entry in entries),
+    }
+    counts = workspace_counts(
+        work=by_workspace["work"], personal=by_workspace["personal"]
+    )
+    keys: dict[str, set[tuple[str, UUID]]] = {"work": set(), "personal": set()}
+    for _, _, payload in entries:
+        workspace = str(payload["workspace"])
+        kind_value = str(payload["kind"])
+        entity = payload.get("item")
+        entity_id = (
+            cast(WorkItemCard, entity).id
+            if kind_value == "work_item"
+            else cast(UUID, payload["id"])
+        )
+        keys[workspace].add((kind_value, entity_id))
+    scoped_entries = (
+        entries
+        if workspace_scope == "all"
+        else [entry for entry in entries if entry[2]["workspace"] == workspace_scope]
+    )
+    page = scoped_entries[offset : offset + limit + 1]
     return PageResult(
         items=[entry[2] for entry in page[:limit]],
         limit=limit,
         offset=offset,
         has_more=len(page) > limit,
-        total=len(entries),
+        total=len(scoped_entries),
+        workspace_counts=counts,
+        workspace_entity_keys=keys,
     )
 
 
