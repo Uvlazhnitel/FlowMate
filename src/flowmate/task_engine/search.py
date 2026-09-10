@@ -9,6 +9,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from flowmate.db.models import Person, Topic, WorkItem, WorkItemPerson
 from flowmate.task_engine.enums import WorkItemStatus, WorkItemType
+from flowmate.task_engine.queries import top_level_work_item_filter
 
 OPEN_SEARCH_STATUSES = tuple(
     status.value
@@ -191,7 +192,9 @@ async def search_work_items(
     if now.utcoffset() is None:
         raise ValueError("search clock must be timezone-aware")
     effective_date = effective_search_date()
-    statement = select(WorkItem).where(WorkItem.user_id == user_id)
+    statement = select(WorkItem).where(
+        WorkItem.user_id == user_id, top_level_work_item_filter()
+    )
     if filters.statuses:
         statement = statement.where(WorkItem.status.in_(filters.statuses))
     elif not filters.include_all_statuses:

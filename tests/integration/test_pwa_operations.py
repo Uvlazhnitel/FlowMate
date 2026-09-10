@@ -1617,3 +1617,189 @@ async def test_today_overview_later_today_is_bounded_sorted_and_disjoint(
     ]
     assert all(item.id in {value.id for value in later_items} for item in later_cards)
     assert cast(dict[str, int], overview["summary"])["due_today"] == 12
+
+
+@pytest.mark.integration
+async def test_pwa_subtasks_are_nested_and_follow_parent_lifecycle(
+    database_engine: AsyncEngine,
+) -> None:
+    sender = CapturingLoginCodeSender()
+    app = create_app(
+        settings=auth_settings(app_timezone="UTC"),
+        engine=database_engine,
+        login_code_sender=sender,
+    )
+    async with started_app(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            csrf = await authenticated_client(client, sender)
+            async with AsyncSession(database_engine) as session:
+                user = await session.scalar(
+                    select(User).where(User.telegram_user_id == TELEGRAM_USER_ID)
+                )
+                assert user is not None
+                topic = await create_topic(session, user.id, "Automation")
+                parent = await create_work_item(
+                    session,
+                    user.id,
+                    item_type="agenda_item",
+                    title="Build automation",
+                    status="active",
+                    topic_id=topic.id,
+                )
+                parent_id = parent.id
+                topic_id = topic.id
+                user_id = user.id
+                await session.commit()
+
+            parent_page = await client.get(
+                f"/api/v1/topics/{topic_id}/content?section=active&limit=20"
+            )
+            assert parent_page.status_code == 200
+            parent_card = parent_page.json()["items"][0]
+            action_uuid = uuid4()
+            action_id = str(action_uuid)
+            payload = {
+                "title": "Send automation to admins",
+                "client_action_id": action_id,
+                "expected_revision": parent_card["revision"],
+            }
+            created = await client.post(
+                f"/api/v1/work-items/{parent_id}/subtasks",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json=payload,
+            )
+            assert created.status_code == 200, created.text
+            created_payload = created.json()
+            assert created_payload["changed"] is True
+            assert created_payload["subtask"]["title"] == "Send automation to admins"
+            assert created_payload["subtask"]["status"] == "active"
+            assert (
+                created_payload["subtask"]["workspace"]
+                == created_payload["work_item"]["workspace"]
+            )
+            assert len(created_payload["work_item"]["subtasks"]) == 1
+            subtask_id = created_payload["subtask"]["id"]
+
+            duplicate = await client.post(
+                f"/api/v1/work-items/{parent_id}/subtasks",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json=payload,
+            )
+            assert duplicate.status_code == 200
+            assert duplicate.json()["changed"] is False
+            assert duplicate.json()["subtask"]["id"] == subtask_id
+
+            nested = await client.post(
+                f"/api/v1/work-items/{subtask_id}/subtasks",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "title": "Nested",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": created_payload["subtask"]["revision"],
+                },
+            )
+            assert nested.status_code == 409
+
+            child_completed = await client.post(
+                f"/api/v1/work-items/{subtask_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "complete",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": created_payload["subtask"]["revision"],
+                },
+            )
+            assert child_completed.status_code == 200, child_completed.text
+            assert child_completed.json()["work_item"]["status"] == "done"
+            child_reopened = await client.post(
+                f"/api/v1/work-items/{subtask_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "reopen",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": child_completed.json()["work_item"][
+                        "revision"
+                    ],
+                },
+            )
+            assert child_reopened.status_code == 200, child_reopened.text
+            assert child_reopened.json()["work_item"]["status"] == "active"
+
+            refreshed_page = await client.get(
+                f"/api/v1/topics/{topic_id}/content?section=active&limit=20"
+            )
+            refreshed_items = refreshed_page.json()["items"]
+            assert [item["id"] for item in refreshed_items] == [str(parent_id)]
+            assert refreshed_items[0]["subtasks"][0]["id"] == subtask_id
+
+            completed = await client.post(
+                f"/api/v1/work-items/{parent_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "complete",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": created_payload["work_item"]["revision"],
+                },
+            )
+            assert completed.status_code == 200, completed.text
+            completed_payload = completed.json()["work_item"]
+            assert completed_payload["status"] == "done"
+            assert completed_payload["subtasks"][0]["status"] == "done"
+
+            reopened = await client.post(
+                f"/api/v1/work-items/{parent_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "reopen",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": completed_payload["revision"],
+                },
+            )
+            assert reopened.status_code == 200, reopened.text
+            reopened_payload = reopened.json()["work_item"]
+            assert reopened_payload["status"] == "inbox"
+            assert reopened_payload["subtasks"][0]["status"] == "active"
+
+            async with AsyncSession(database_engine) as session:
+                subtask = await session.get(WorkItem, subtask_id)
+                assert subtask is not None
+                assert subtask.user_id == user_id
+                assert subtask.topic_id == topic_id
+                relation = await session.scalar(
+                    select(WorkItemRelation).where(
+                        WorkItemRelation.source_work_item_id == parent_id,
+                        WorkItemRelation.target_work_item_id == subtask.id,
+                        WorkItemRelation.relation_type == "subtask",
+                    )
+                )
+                assert relation is not None
+                linked_event = await session.scalar(
+                    select(WorkItemEvent).where(
+                        WorkItemEvent.work_item_id == parent_id,
+                        WorkItemEvent.client_action_id == action_uuid,
+                    )
+                )
+                assert linked_event is not None
+                assert "Send automation" not in str(linked_event.payload)
+
+            target_workspace = (
+                "work" if reopened_payload["workspace"] == "personal" else "personal"
+            )
+            moved = await client.post(
+                f"/api/v1/work-items/{parent_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "move_workspace",
+                    "target": target_workspace,
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": reopened_payload["revision"],
+                },
+            )
+            assert moved.status_code == 200, moved.text
+            assert moved.json()["work_item"]["workspace"] == target_workspace
+            assert (
+                moved.json()["work_item"]["subtasks"][0]["workspace"]
+                == target_workspace
+            )

@@ -25,7 +25,7 @@ from flowmate.reminders.preferences import (
 from flowmate.reminders.sync import ReminderPolicy, sync_work_item_reminders
 from flowmate.reminders.timezone import resolve_local_datetime
 from flowmate.task_engine.enums import WorkItemPriority, WorkItemStatus, WorkItemType
-from flowmate.task_engine.queries import OPEN_STATUSES
+from flowmate.task_engine.queries import OPEN_STATUSES, top_level_work_item_filter
 from flowmate.workspaces import WORKSPACE_LABELS, WORKSPACE_VALUES, Workspace
 
 CANONICAL_DIGEST_WORKSPACE = Workspace.PERSONAL.value
@@ -158,6 +158,7 @@ async def _build_workspace_digest_snapshot(
     max_category = 6 if reminder_type is ReminderType.MORNING_DIGEST else 3
     conditions = (
         WorkItem.user_id == user_id,
+        top_level_work_item_filter(),
         WorkItem.workspace == workspace,
         WorkItem.status.in_(OPEN_STATUSES),
         category < max_category,
@@ -509,6 +510,7 @@ async def list_digest_reschedule_items(
             select(WorkItem)
             .where(
                 WorkItem.user_id == user_id,
+                top_level_work_item_filter(),
                 WorkItem.workspace == workspace,
                 WorkItem.status.in_(OPEN_STATUSES),
                 or_(

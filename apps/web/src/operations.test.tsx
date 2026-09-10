@@ -602,4 +602,78 @@ describe("operational screens", () => {
       await screen.findByText("За последние 90 дней активности с людьми не было."),
     ).toBeVisible();
   });
+
+  it("adds and completes a nested subtask without duplicating the parent", async () => {
+    let currentItem: WorkItemCardData = { ...workItem, subtasks: [] };
+    const payloads: Record<string, unknown>[] = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/subtasks")) {
+        payloads.push(JSON.parse(requestBody(init)) as Record<string, unknown>);
+        const subtask = {
+          id: "0b812a18-6e88-4787-ab3d-4d940da9f9e8",
+          title: "Отправить автоматизацию админам",
+          status: "active",
+          completed_at: null,
+          revision: 2,
+          workspace: "personal" as const,
+        };
+        currentItem = { ...currentItem, revision: 2, subtasks: [subtask] };
+        return Promise.resolve(
+          jsonResponse({
+            changed: true,
+            work_item: currentItem,
+            subtask,
+          }),
+        );
+      }
+      if (path.includes("/actions")) {
+        const body = JSON.parse(requestBody(init)) as Record<string, unknown>;
+        payloads.push(body);
+        const currentSubtask = currentItem.subtasks![0]!;
+        const subtask = {
+          ...currentSubtask,
+          status: "done",
+          completed_at: "2026-07-21T10:00:00Z",
+          revision: 3,
+        };
+        currentItem = { ...currentItem, subtasks: [subtask] };
+        return Promise.resolve(
+          jsonResponse({
+            changed: true,
+            work_item: { ...workItem, ...subtask, subtasks: [] },
+          }),
+        );
+      }
+      if (path.includes("/today/overview")) return Promise.resolve(overview());
+      if (path.includes("section=overdue")) return Promise.resolve(page([currentItem]));
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderApplication("/today?section=overdue");
+    const card = (await screen.findByText("Подготовить запуск")).closest(
+      ".work-card",
+    ) as HTMLElement;
+    await user.click(within(card).getByRole("button", { name: "Добавить подпункт" }));
+    await user.type(
+      within(card).getByRole("textbox", { name: "Название подпункта" }),
+      "Отправить автоматизацию админам{Enter}",
+    );
+
+    expect(await within(card).findByText("Подпункты · 0/1")).toBeVisible();
+    expect(payloads[0]).toMatchObject({
+      title: "Отправить автоматизацию админам",
+      expected_revision: 1,
+    });
+    await user.click(within(card).getByRole("button", { name: "Выполнить подпункт" }));
+    await waitFor(() =>
+      expect(payloads[1]).toMatchObject({ action: "complete", expected_revision: 2 }),
+    );
+    expect(await within(card).findByText("Подпункты · 1/1")).toBeVisible();
+    expect(within(card).getAllByText("Подготовить запуск")).toHaveLength(1);
+  });
 });

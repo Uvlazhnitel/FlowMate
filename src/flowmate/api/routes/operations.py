@@ -31,6 +31,7 @@ from flowmate.task_engine.management import (
     change_planner_status,
     complete_work_item,
     convert_work_item_to_task,
+    create_subtask,
     edit_work_item,
     mark_waiting_received,
     move_work_item_workspace,
@@ -149,6 +150,13 @@ class EditWorkItemAction(WorkItemActionBase):
     date_changed: bool = False
     local_date: date | None = None
     local_time: time | None = None
+
+
+class CreateSubtaskRequest(WorkItemActionBase):
+    title: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000),
+    ]
 
 
 WorkItemActionRequest = Annotated[
@@ -481,6 +489,62 @@ async def work_item_action(
         )
         await session.flush()
         return response
+
+
+@router.post("/work-items/{work_item_id}/subtasks")
+async def add_work_item_subtask(
+    work_item_id: UUID,
+    payload: CreateSubtaskRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    identity: Annotated[PwaIdentity, Depends(require_csrf)],
+) -> dict[str, object]:
+    workspace = await owned_entity_workspace(
+        session,
+        WorkItem,
+        user_id=identity.user.id,
+        entity_id=work_item_id,
+    )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    bind_client_action(session, payload.client_action_id)
+    try:
+        with workspace_context(session, user_id=identity.user.id, workspace=workspace):
+            result = await create_subtask(
+                session,
+                identity.user.id,
+                work_item_id,
+                payload.title,
+                expected_revision=payload.expected_revision,
+            )
+            await session.flush()
+            await session.refresh(result.parent)
+            cards = await build_work_item_cards(
+                session, identity.user.id, [result.parent], now=_clock()
+            )
+    except StaleWorkItemError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Work item changed"
+        ) from error
+    except InvalidWorkItemTransitionError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(error)
+        ) from error
+    except ValueError as error:
+        message = str(error)
+        if "not found" in message:
+            raise HTTPException(
+                status_code=404, detail="Work item not found"
+            ) from error
+        raise HTTPException(status_code=422, detail=message) from error
+    parent_card = cards[0]
+    subtask = next(
+        item for item in parent_card.subtasks if item.id == result.subtask.id
+    )
+    return {
+        "changed": result.changed,
+        "work_item": parent_card,
+        "subtask": subtask,
+    }
 
 
 async def _work_item_action_in_workspace(

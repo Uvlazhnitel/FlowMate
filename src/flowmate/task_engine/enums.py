@@ -42,6 +42,7 @@ class WorkItemRelationType(StrEnum):
     AFTER_COMPLETION = "after_completion"
     CREATED_FROM = "created_from"
     WAITING_FOR = "waiting_for"
+    SUBTASK = "subtask"
 
 
 class WorkItemEventType(StrEnum):

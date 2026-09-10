@@ -15,6 +15,7 @@ from flowmate.db.models import (
     WorkItem,
     WorkItemEvent,
     WorkItemPerson,
+    WorkItemRelation,
 )
 from flowmate.reminders.preferences import EffectiveNotificationPreferences
 from flowmate.reminders.sync import ACTIVE_REMINDER_STATUSES
@@ -25,6 +26,7 @@ from flowmate.task_engine.queries import (
     OPEN_STATUSES,
     PersonScope,
     list_person_counts,
+    top_level_work_item_filter,
     validate_pagination,
 )
 from flowmate.workspaces import (
@@ -65,6 +67,16 @@ class ReminderCard:
 
 
 @dataclass(frozen=True, slots=True)
+class SubtaskCard:
+    id: UUID
+    title: str
+    status: str
+    completed_at: datetime | None
+    revision: int
+    workspace: str
+
+
+@dataclass(frozen=True, slots=True)
 class WorkItemCard:
     id: UUID
     type: str
@@ -87,6 +99,7 @@ class WorkItemCard:
     revision: int
     reminder: ReminderCard | None
     workspace: str
+    subtasks: tuple[SubtaskCard, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,6 +251,35 @@ async def build_work_item_cards(
     for reminder in reminder_rows:
         if reminder.work_item_id is not None:
             reminders.setdefault(reminder.work_item_id, reminder)
+    subtasks: dict[UUID, list[SubtaskCard]] = {item_id: [] for item_id in item_ids}
+    subtask_rows = await session.execute(
+        _all_workspaces(
+            select(WorkItemRelation.source_work_item_id, WorkItem)
+            .join(WorkItem, WorkItem.id == WorkItemRelation.target_work_item_id)
+            .where(
+                WorkItemRelation.user_id == user_id,
+                WorkItemRelation.source_work_item_id.in_(item_ids),
+                WorkItemRelation.relation_type == "subtask",
+                WorkItem.user_id == user_id,
+            )
+            .order_by(
+                WorkItemRelation.source_work_item_id,
+                WorkItemRelation.created_at,
+                WorkItemRelation.id,
+            )
+        )
+    )
+    for parent_id, subtask in subtask_rows:
+        subtasks[parent_id].append(
+            SubtaskCard(
+                id=subtask.id,
+                title=subtask.title,
+                status=subtask.status,
+                completed_at=subtask.completed_at,
+                revision=work_item_revision(subtask.updated_at),
+                workspace=subtask.workspace,
+            )
+        )
     cards: list[WorkItemCard] = []
     for item in items:
         date = effective_date(item)
@@ -282,6 +324,7 @@ async def build_work_item_cards(
                 revision=work_item_revision(item.updated_at),
                 reminder=reminder_card,
                 workspace=item.workspace,
+                subtasks=tuple(subtasks[item.id]),
             )
         )
     return cards
@@ -301,6 +344,7 @@ async def list_today_section(
     _, end = local_day_bounds(now, preferences)
     conditions: list[Any] = [
         WorkItem.user_id == user_id,
+        top_level_work_item_filter(),
         WorkItem.status.in_(OPEN_STATUSES),
     ]
     order_by: tuple[Any, ...]
@@ -367,6 +411,7 @@ async def list_tomorrow_items(
     effective = effective_date_sql()
     conditions = (
         WorkItem.user_id == user_id,
+        top_level_work_item_filter(),
         WorkItem.status.in_(OPEN_STATUSES),
         WorkItem.type.in_(
             (
@@ -410,6 +455,7 @@ async def list_overview_today_items(
     effective = effective_date_sql()
     conditions = (
         WorkItem.user_id == user_id,
+        top_level_work_item_filter(),
         WorkItem.status.in_(OPEN_STATUSES),
         category < 5,
     )
@@ -460,6 +506,7 @@ async def list_overview_tomorrow_items(
     effective = effective_date_sql()
     conditions = (
         WorkItem.user_id == user_id,
+        top_level_work_item_filter(),
         WorkItem.status.in_(OPEN_STATUSES),
         WorkItem.type.in_(
             (
@@ -502,6 +549,7 @@ async def _today_summary(
 ) -> dict[str, int]:
     owned_open = (
         WorkItem.user_id == user_id,
+        top_level_work_item_filter(),
         WorkItem.status.in_(OPEN_STATUSES),
         _workspace_condition(WorkItem, workspace_scope),
     )
@@ -541,11 +589,13 @@ async def _today_summary(
         ),
         "inbox": await count(
             WorkItem.user_id == user_id,
+            top_level_work_item_filter(),
             WorkItem.status == WorkItemStatus.INBOX.value,
             _workspace_condition(WorkItem, workspace_scope),
         ),
         "planner_queue": await count(
             WorkItem.user_id == user_id,
+            top_level_work_item_filter(),
             WorkItem.planner_status.in_(("needs_transfer", "update_required")),
             _workspace_condition(WorkItem, workspace_scope),
         ),
@@ -600,6 +650,7 @@ async def _select_focus_items(
                 select(WorkItem)
                 .where(
                     WorkItem.user_id == user_id,
+                    top_level_work_item_filter(),
                     WorkItem.status.in_(OPEN_STATUSES),
                     category < 5,
                     _workspace_condition(WorkItem, workspace_scope),
@@ -628,6 +679,7 @@ async def _select_later_today(
     statement = _all_workspaces(
         select(WorkItem).where(
             WorkItem.user_id == user_id,
+            top_level_work_item_filter(),
             WorkItem.status.in_(OPEN_STATUSES),
             WorkItem.type.not_in(SEMANTIC_TYPES),
             WorkItem.due_at >= now,
@@ -662,6 +714,7 @@ async def today_overview_snapshot(
     counts = await _work_item_workspace_counts(
         session,
         WorkItem.user_id == user_id,
+        top_level_work_item_filter(),
         WorkItem.status.in_(OPEN_STATUSES),
         category < 5,
     )
@@ -732,6 +785,7 @@ async def dashboard_snapshot(
             select(WorkItem)
             .where(
                 WorkItem.user_id == user_id,
+                top_level_work_item_filter(),
                 WorkItem.status.in_(OPEN_STATUSES),
                 effective >= now,
             )
@@ -775,7 +829,7 @@ async def list_topics_summary(
 ) -> PageResult:
     validate_pagination(limit, offset)
     effective = effective_date_sql()
-    base = WorkItem.status.in_(OPEN_STATUSES)
+    base = WorkItem.status.in_(OPEN_STATUSES) & top_level_work_item_filter()
     statement = (
         select(
             Topic,
@@ -922,7 +976,9 @@ async def list_context_content(
         )
         item_filter = WorkItem.id.in_(item_ids)
     if section in {"active", "decisions", "follow_ups", "waiting", "questions"}:
-        statement = select(WorkItem).where(WorkItem.user_id == user_id, item_filter)
+        statement = select(WorkItem).where(
+            WorkItem.user_id == user_id, top_level_work_item_filter(), item_filter
+        )
         if section == "active":
             statement = statement.where(
                 WorkItem.status.in_(OPEN_STATUSES),
@@ -1073,6 +1129,7 @@ async def list_agenda(
             select(WorkItem)
             .where(
                 WorkItem.user_id == user_id,
+                top_level_work_item_filter(),
                 WorkItem.status.in_(OPEN_STATUSES),
                 WorkItem.type.in_(
                     (WorkItemType.AGENDA_ITEM.value, WorkItemType.QUESTION.value)

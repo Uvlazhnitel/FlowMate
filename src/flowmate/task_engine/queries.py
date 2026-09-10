@@ -3,12 +3,17 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from flowmate.db.models import Person, Topic, WorkItem, WorkItemPerson
-from flowmate.task_engine.enums import WorkItemPriority, WorkItemStatus, WorkItemType
+from flowmate.db.models import Person, Topic, WorkItem, WorkItemPerson, WorkItemRelation
+from flowmate.task_engine.enums import (
+    WorkItemPriority,
+    WorkItemRelationType,
+    WorkItemStatus,
+    WorkItemType,
+)
 
 OPEN_STATUSES = tuple(
     status.value
@@ -32,6 +37,15 @@ SCHEDULED_LIST_TYPES = tuple(
         WorkItemType.QUESTION,
     )
 )
+
+
+def top_level_work_item_filter() -> ColumnElement[bool]:
+    """Exclude WorkItems represented only inside a parent card."""
+    return ~exists().where(
+        WorkItemRelation.target_work_item_id == WorkItem.id,
+        WorkItemRelation.user_id == WorkItem.user_id,
+        WorkItemRelation.relation_type == WorkItemRelationType.SUBTASK.value,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +109,7 @@ async def list_scheduled_items(
         select(WorkItem)
         .where(
             WorkItem.user_id == user_id,
+            top_level_work_item_filter(),
             WorkItem.status.in_(OPEN_STATUSES),
             WorkItem.type.in_(SCHEDULED_LIST_TYPES),
             effective_date >= start,
@@ -123,6 +138,7 @@ async def list_today_items(
         select(WorkItem)
         .where(
             WorkItem.user_id == user_id,
+            top_level_work_item_filter(),
             WorkItem.status.in_(OPEN_STATUSES),
             effective_date.is_not(None),
             effective_date < end,
@@ -150,6 +166,7 @@ async def list_recent_tasks(
         select(WorkItem)
         .where(
             WorkItem.user_id == user_id,
+            top_level_work_item_filter(),
             WorkItem.type == WorkItemType.TASK.value,
             WorkItem.status.in_(OPEN_STATUSES),
         )
@@ -172,6 +189,7 @@ async def list_follow_ups(
         select(WorkItem)
         .where(
             WorkItem.user_id == user_id,
+            top_level_work_item_filter(),
             WorkItem.type == WorkItemType.FOLLOW_UP.value,
             WorkItem.status.in_(OPEN_STATUSES),
         )
@@ -198,6 +216,7 @@ async def list_waiting_items(
         select(WorkItem)
         .where(
             WorkItem.user_id == user_id,
+            top_level_work_item_filter(),
             WorkItem.type == WorkItemType.WAITING.value,
             WorkItem.status.in_(OPEN_STATUSES),
         )
@@ -225,6 +244,7 @@ async def list_open_questions(
         select(WorkItem)
         .where(
             WorkItem.user_id == user_id,
+            top_level_work_item_filter(),
             WorkItem.type == WorkItemType.QUESTION.value,
             WorkItem.status.in_(OPEN_STATUSES),
         )
@@ -247,7 +267,9 @@ async def list_topic_counts(
     offset: int = 0,
 ) -> list[TopicCount]:
     validate_pagination(limit, offset)
-    count = func.count(WorkItem.id).filter(WorkItem.status.in_(OPEN_STATUSES))
+    count = func.count(WorkItem.id).filter(
+        WorkItem.status.in_(OPEN_STATUSES), top_level_work_item_filter()
+    )
     statement = (
         select(Topic, count)
         .outerjoin(
@@ -281,7 +303,7 @@ async def list_person_counts(
     current_time = now or datetime.now(UTC)
     if current_time.tzinfo is None or current_time.utcoffset() is None:
         raise ValueError("people directory clock must be timezone-aware")
-    base_filter = WorkItem.status.in_(OPEN_STATUSES)
+    base_filter = WorkItem.status.in_(OPEN_STATUSES) & top_level_work_item_filter()
     open_items = func.count(WorkItem.id).filter(base_filter)
     follow_ups = func.count(WorkItem.id).filter(
         base_filter, WorkItem.type == WorkItemType.FOLLOW_UP.value
@@ -292,7 +314,9 @@ async def list_person_counts(
     questions = func.count(WorkItem.id).filter(
         base_filter, WorkItem.type == WorkItemType.QUESTION.value
     )
-    last_work_activity = func.max(WorkItem.updated_at)
+    last_work_activity = func.max(WorkItem.updated_at).filter(
+        top_level_work_item_filter()
+    )
     last_activity = func.greatest(
         Person.updated_at,
         func.coalesce(last_work_activity, Person.updated_at),

@@ -12,6 +12,15 @@ export interface ReminderCard {
   revision: number;
 }
 
+export interface SubtaskData {
+  id: string;
+  title: string;
+  status: string;
+  completed_at: string | null;
+  revision: number;
+  workspace: "work" | "personal";
+}
+
 export type PlannerStatus =
   | "not_required"
   | "needs_transfer"
@@ -41,6 +50,7 @@ export interface WorkItemCardData {
   revision: number;
   reminder: ReminderCard | null;
   workspace: "work" | "personal";
+  subtasks?: SubtaskData[];
 }
 
 export interface PageResponse<T> {
@@ -231,6 +241,11 @@ export interface ActionResponse {
   decision_id?: string;
 }
 
+export interface SubtaskResponse extends ActionResponse {
+  work_item: WorkItemCardData;
+  subtask: SubtaskData;
+}
+
 export const operationsKeys = {
   all: ["operations"] as const,
   overview: (workspace: WorkspaceScope) => ["operations", "overview", workspace] as const,
@@ -320,6 +335,15 @@ export const getAgenda = (groupKind: string, offset: number) =>
 
 export const runWorkItemAction = (id: string, payload: ActionPayload) =>
   apiRequest<ActionResponse>(`/api/v1/work-items/${id}/actions`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const createSubtask = (
+  id: string,
+  payload: { title: string; client_action_id: string; expected_revision: number },
+) =>
+  apiRequest<SubtaskResponse>(`/api/v1/work-items/${id}/subtasks`, {
     method: "POST",
     body: JSON.stringify(payload),
   });

@@ -29,6 +29,7 @@ import {
   type DateTimePreferences,
 } from "../lib/dates";
 import { RescheduleDialog } from "./RescheduleDialog";
+import { SubtaskChecklist } from "./SubtaskChecklist";
 import { WorkspaceBadge } from "./WorkspaceBadge";
 
 const typeLabels: Record<string, string> = {
@@ -284,6 +285,19 @@ export function WorkItemCard({
   const interactionsDisabled = mutation.isPending || completing;
   const priorityLabel = priorityLabels[item.priority];
 
+  function runPrimaryAction() {
+    const openSubtasks = (item.subtasks ?? []).filter(
+      (subtask) => subtask.status !== "done" && subtask.status !== "cancelled",
+    ).length;
+    if (
+      openSubtasks > 0 &&
+      !window.confirm(`Завершить запись и открытые подпункты (${openSubtasks})?`)
+    ) {
+      return;
+    }
+    act(primaryAction);
+  }
+
   function workspaceAction() {
     return (
       <button
@@ -419,12 +433,13 @@ export function WorkItemCard({
           <span>{item.people.map((person) => person[1]).join(", ")}</span>
         )}
       </div>
+      <SubtaskChecklist item={item} compact={compact} />
       <div className="work-card__actions">
         <button
           className="card-action card-action--primary"
           type="button"
           disabled={interactionsDisabled}
-          onClick={() => act(primaryAction)}
+          onClick={runPrimaryAction}
         >
           <Check size={15} aria-hidden /> {primaryLabel}
         </button>

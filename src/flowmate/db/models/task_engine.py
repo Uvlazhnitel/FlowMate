@@ -318,6 +318,12 @@ class WorkItemRelation(Base):
         ),
         Index("ix_work_item_relations_user_source", "user_id", "source_work_item_id"),
         Index("ix_work_item_relations_user_target", "user_id", "target_work_item_id"),
+        Index(
+            "uq_work_item_relations_subtask_target",
+            "target_work_item_id",
+            unique=True,
+            postgresql_where=text("relation_type = 'subtask'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(

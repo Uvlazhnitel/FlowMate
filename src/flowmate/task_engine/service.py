@@ -30,6 +30,7 @@ from flowmate.task_engine.enums import (
     WorkItemType,
 )
 from flowmate.task_engine.planner import initial_planner_status
+from flowmate.task_engine.queries import top_level_work_item_filter
 
 
 def normalize_required_text(value: str, field_name: str) -> str:
@@ -291,7 +292,9 @@ async def list_work_items(
     status: WorkItemStatus | str | None = None,
     item_type: WorkItemType | str | None = None,
 ) -> list[WorkItem]:
-    statement = select(WorkItem).where(WorkItem.user_id == user_id)
+    statement = select(WorkItem).where(
+        WorkItem.user_id == user_id, top_level_work_item_filter()
+    )
     if status is not None:
         statement = statement.where(
             WorkItem.status == parse_work_item_status(status).value

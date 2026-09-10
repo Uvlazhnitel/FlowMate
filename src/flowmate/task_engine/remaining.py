@@ -36,7 +36,11 @@ from flowmate.task_engine.operational import (
     build_work_item_cards,
 )
 from flowmate.task_engine.planner import ELIGIBLE_PLANNER_TYPES
-from flowmate.task_engine.queries import OPEN_STATUSES, validate_pagination
+from flowmate.task_engine.queries import (
+    OPEN_STATUSES,
+    top_level_work_item_filter,
+    validate_pagination,
+)
 from flowmate.task_engine.service import (
     get_person,
     get_topic,
@@ -432,6 +436,7 @@ async def list_inbox(
                     select(WorkItem)
                     .where(
                         WorkItem.user_id == user_id,
+                        top_level_work_item_filter(),
                         WorkItem.status.in_(OPEN_STATUSES),
                     )
                     .order_by(WorkItem.updated_at.desc(), WorkItem.id)
@@ -676,6 +681,7 @@ async def list_planner_queue(
         raise ValueError("limit must not exceed 50")
     statement = select(WorkItem).where(
         WorkItem.user_id == user_id,
+        top_level_work_item_filter(),
         WorkItem.type.in_(ELIGIBLE_PLANNER_TYPES),
         WorkItem.planner_status.in_([status.value for status in statuses]),
     )

@@ -15,6 +15,7 @@ import { ApiError } from "../../api/client";
 import { remainingKeys } from "../../api/remaining";
 import { formatDateTime, type DateTimePreferences } from "../../lib/dates";
 import { RescheduleDialog } from "../../components/RescheduleDialog";
+import { SubtaskChecklist } from "../../components/SubtaskChecklist";
 import { WorkspaceBadge } from "../../components/WorkspaceBadge";
 
 const typeLabels: Record<string, string> = {
@@ -180,6 +181,19 @@ export function OverviewWorkItemRow({
           : "Не удалось перенести задачу. Попробуйте ещё раз."
       : null;
 
+  function runPrimaryAction() {
+    const openSubtasks = (item.subtasks ?? []).filter(
+      (subtask) => subtask.status !== "done" && subtask.status !== "cancelled",
+    ).length;
+    if (
+      openSubtasks > 0 &&
+      !window.confirm(`Завершить запись и открытые подпункты (${openSubtasks})?`)
+    ) {
+      return;
+    }
+    act(primaryAction);
+  }
+
   return (
     <article
       className={`overview-task-row ${dragging ? "overview-row--dragging" : ""}`}
@@ -214,12 +228,13 @@ export function OverviewWorkItemRow({
       <p className="overview-row__meta">
         {formatDateTime(item.effective_at, dateTimePreferences)}
       </p>
+      <SubtaskChecklist item={item} compact />
       <div className="overview-row__actions">
         <button
           className="overview-action overview-action--primary"
           type="button"
           disabled={mutation.isPending}
-          onClick={() => act(primaryAction)}
+          onClick={runPrimaryAction}
         >
           <Check size={14} aria-hidden /> {primaryLabel}
         </button>

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID
 
 from sqlalchemy import delete, func, select
@@ -69,6 +69,13 @@ def work_item_revision(value: datetime) -> int:
 class MutationResult:
     work_item: WorkItem
     event: WorkItemEvent
+    changed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SubtaskCreationResult:
+    parent: WorkItem
+    subtask: WorkItem
     changed: bool
 
 
@@ -209,6 +216,134 @@ async def sync_planner_status(
     return True
 
 
+async def _subtask_relation(
+    session: AsyncSession, user_id: UUID, work_item_id: UUID
+) -> WorkItemRelation | None:
+    return cast(
+        WorkItemRelation | None,
+        await session.scalar(
+            select(WorkItemRelation).where(
+                WorkItemRelation.user_id == user_id,
+                WorkItemRelation.target_work_item_id == work_item_id,
+                WorkItemRelation.relation_type == WorkItemRelationType.SUBTASK.value,
+            )
+        ),
+    )
+
+
+async def _lock_subtasks(
+    session: AsyncSession, user_id: UUID, parent_id: UUID
+) -> list[WorkItem]:
+    return list(
+        await session.scalars(
+            select(WorkItem)
+            .join(
+                WorkItemRelation,
+                WorkItemRelation.target_work_item_id == WorkItem.id,
+            )
+            .where(
+                WorkItemRelation.user_id == user_id,
+                WorkItemRelation.source_work_item_id == parent_id,
+                WorkItemRelation.relation_type == WorkItemRelationType.SUBTASK.value,
+                WorkItem.user_id == user_id,
+            )
+            .order_by(WorkItemRelation.created_at, WorkItemRelation.id)
+            .with_for_update()
+        )
+    )
+
+
+async def create_subtask(
+    session: AsyncSession,
+    user_id: UUID,
+    parent_id: UUID,
+    title: str,
+    *,
+    expected_revision: int,
+    now: datetime | None = None,
+) -> SubtaskCreationResult:
+    duplicate = await event_for_update(session, user_id, None)
+    if duplicate is not None:
+        subtask_id = duplicate.payload.get("subtask_id")
+        if not subtask_id:
+            raise InvalidWorkItemTransitionError("client action is already in use")
+        parent = await lock_work_item(session, user_id, duplicate.work_item_id)
+        subtask = await lock_work_item(session, user_id, UUID(str(subtask_id)))
+        return SubtaskCreationResult(parent, subtask, False)
+
+    parent = await lock_work_item(
+        session, user_id, parent_id, expected_revision=expected_revision
+    )
+    if parent.status not in OPEN_STATUSES:
+        raise InvalidWorkItemTransitionError(
+            "Подпункты можно добавлять только к открытой записи."
+        )
+    if await _subtask_relation(session, user_id, parent.id) is not None:
+        raise InvalidWorkItemTransitionError(
+            "Подпункт не может содержать другие подпункты."
+        )
+
+    created_at = now or management_now()
+    subtask = await create_work_item(
+        session,
+        user_id,
+        item_type=WorkItemType.TASK,
+        title=title,
+        status=WorkItemStatus.ACTIVE,
+        priority=WorkItemPriority.NORMAL,
+        topic_id=parent.topic_id,
+    )
+    await create_work_item_relation(
+        session,
+        user_id,
+        parent.id,
+        subtask.id,
+        WorkItemRelationType.SUBTASK,
+    )
+    parent.updated_at = created_at
+    await append_management_event(
+        session,
+        parent,
+        WorkItemEventType.LINKED,
+        None,
+        {"relation_type": "subtask", "subtask_id": str(subtask.id)},
+    )
+    return SubtaskCreationResult(parent, subtask, True)
+
+
+async def _complete_open_subtasks(
+    session: AsyncSession,
+    item: WorkItem,
+    *,
+    now: datetime,
+    reason: str,
+) -> list[UUID]:
+    completed_ids: list[UUID] = []
+    for subtask in await _lock_subtasks(session, item.user_id, item.id):
+        if subtask.status not in OPEN_STATUSES:
+            continue
+        previous = subtask.status
+        subtask.status = WorkItemStatus.DONE.value
+        subtask.completed_at = now
+        await append_management_event(
+            session,
+            subtask,
+            WorkItemEventType.COMPLETED,
+            None,
+            {
+                "from_status": previous,
+                "completed_at": now.isoformat(),
+                "parent_id": str(item.id),
+                "reason": reason,
+            },
+            bind_origin=False,
+        )
+        await cancel_work_item_reminders(session, subtask, now=now)
+        await sync_planner_status(session, subtask, reason="completed")
+        completed_ids.append(subtask.id)
+    return completed_ids
+
+
 async def change_planner_status(
     session: AsyncSession,
     user_id: UUID,
@@ -264,6 +399,11 @@ async def move_work_item_workspace(
     item = await lock_work_item(
         session, user_id, work_item_id, expected_revision=expected_revision
     )
+    if await _subtask_relation(session, user_id, item.id) is not None:
+        raise InvalidWorkItemTransitionError(
+            "Пространство подпункта меняется вместе с родительской задачей."  # noqa: RUF001
+        )
+    subtasks = await _lock_subtasks(session, user_id, item.id)
     target_workspace = normalize_workspace(target)
     previous_workspace = item.workspace
     if target_workspace == previous_workspace:
@@ -272,11 +412,12 @@ async def move_work_item_workspace(
         )
 
     current = now or management_now()
+    moving_ids = [item.id, *(subtask.id for subtask in subtasks)]
     active_session = await session.scalar(
         select(WorkItemActionSession)
         .where(
             WorkItemActionSession.user_id == user_id,
-            WorkItemActionSession.work_item_id == item.id,
+            WorkItemActionSession.work_item_id.in_(moving_ids),
             WorkItemActionSession.status == "open",
             WorkItemActionSession.expires_at > current,
         )
@@ -316,7 +457,7 @@ async def move_work_item_workspace(
             select(Reminder)
             .where(
                 Reminder.user_id == user_id,
-                Reminder.work_item_id == item.id,
+                Reminder.work_item_id.in_(moving_ids),
             )
             .execution_options(include_all_workspaces=True)
             .with_for_update()
@@ -324,8 +465,25 @@ async def move_work_item_workspace(
     )
     item.workspace = target_workspace
     item.topic_id = target_topic_id
+    for subtask in subtasks:
+        subtask.workspace = target_workspace
+        subtask.topic_id = target_topic_id
     for reminder in reminders:
         reminder.workspace = target_workspace
+
+    for subtask in subtasks:
+        await append_management_event(
+            session,
+            subtask,
+            WorkItemEventType.WORKSPACE_CHANGED,
+            None,
+            {
+                "previous": previous_workspace,
+                "new": target_workspace,
+                "parent_id": str(item.id),
+            },
+            bind_origin=False,
+        )
 
     event = await append_management_event(
         session,
@@ -368,6 +526,9 @@ async def complete_work_item(
         raise InvalidWorkItemTransitionError("only open work items can be completed")
     previous = item.status
     completed_at = now or management_now()
+    completed_subtask_ids = await _complete_open_subtasks(
+        session, item, now=completed_at, reason="parent_completed"
+    )
     item.status = WorkItemStatus.DONE.value
     item.completed_at = completed_at
     event = await append_management_event(
@@ -375,7 +536,11 @@ async def complete_work_item(
         item,
         WorkItemEventType.COMPLETED,
         telegram_update_id,
-        {"from_status": previous, "completed_at": completed_at.isoformat()},
+        {
+            "from_status": previous,
+            "completed_at": completed_at.isoformat(),
+            "completed_subtask_ids": [str(value) for value in completed_subtask_ids],
+        },
     )
     await cancel_work_item_reminders(session, item, now=completed_at)
     await sync_planner_status(session, item, reason="completed")
@@ -400,13 +565,33 @@ async def cancel_work_item(
         raise InvalidWorkItemTransitionError("only open work items can be cancelled")
     previous = item.status
     cancelled_at = management_now()
+    cancelled_subtask_ids: list[UUID] = []
+    for subtask in await _lock_subtasks(session, user_id, item.id):
+        if subtask.status not in OPEN_STATUSES:
+            continue
+        subtask_previous = subtask.status
+        subtask.status = WorkItemStatus.CANCELLED.value
+        await append_management_event(
+            session,
+            subtask,
+            WorkItemEventType.CANCELLED,
+            None,
+            {"from_status": subtask_previous, "parent_id": str(item.id)},
+            bind_origin=False,
+        )
+        await cancel_work_item_reminders(session, subtask, now=cancelled_at)
+        await sync_planner_status(session, subtask, reason="cancelled")
+        cancelled_subtask_ids.append(subtask.id)
     item.status = WorkItemStatus.CANCELLED.value
     event = await append_management_event(
         session,
         item,
         WorkItemEventType.CANCELLED,
         telegram_update_id,
-        {"from_status": previous},
+        {
+            "from_status": previous,
+            "cancelled_subtask_ids": [str(value) for value in cancelled_subtask_ids],
+        },
     )
     await cancel_work_item_reminders(session, item, now=cancelled_at)
     await sync_planner_status(session, item, reason="cancelled")
@@ -431,14 +616,67 @@ async def reopen_work_item(
         raise InvalidWorkItemTransitionError(
             "only completed work items can be reopened"
         )
-    item.status = WorkItemStatus.INBOX.value
+    parent_relation = await _subtask_relation(session, user_id, item.id)
+    item.status = (
+        WorkItemStatus.ACTIVE.value
+        if parent_relation is not None
+        else WorkItemStatus.INBOX.value
+    )
     item.completed_at = None
+    previous_completion = await session.scalar(
+        select(WorkItemEvent)
+        .where(
+            WorkItemEvent.user_id == user_id,
+            WorkItemEvent.work_item_id == item.id,
+            WorkItemEvent.event_type.in_(
+                (
+                    WorkItemEventType.COMPLETED.value,
+                    WorkItemEventType.WAITING_RECEIVED.value,
+                )
+            ),
+        )
+        .order_by(WorkItemEvent.created_at.desc(), WorkItemEvent.id.desc())
+        .limit(1)
+    )
+    reopened_subtask_ids: list[UUID] = []
+    if parent_relation is None and previous_completion is not None:
+        raw_ids = previous_completion.payload.get("completed_subtask_ids", [])
+        requested_ids = [UUID(str(value)) for value in raw_ids]
+        if requested_ids:
+            children = {
+                child.id: child
+                for child in await _lock_subtasks(session, user_id, item.id)
+            }
+            for child_id in requested_ids:
+                child = children.get(child_id)
+                if child is None or child.status != WorkItemStatus.DONE.value:
+                    continue
+                child.status = WorkItemStatus.ACTIVE.value
+                child.completed_at = None
+                await append_management_event(
+                    session,
+                    child,
+                    WorkItemEventType.REOPENED,
+                    None,
+                    {
+                        "from_status": "done",
+                        "to_status": "active",
+                        "parent_id": str(item.id),
+                    },
+                    bind_origin=False,
+                )
+                await sync_planner_status(session, child, reason="reopened")
+                reopened_subtask_ids.append(child.id)
     event = await append_management_event(
         session,
         item,
         WorkItemEventType.REOPENED,
         telegram_update_id,
-        {"from_status": WorkItemStatus.DONE.value, "to_status": "inbox"},
+        {
+            "from_status": WorkItemStatus.DONE.value,
+            "to_status": item.status,
+            "reopened_subtask_ids": [str(value) for value in reopened_subtask_ids],
+        },
     )
     await sync_planner_status(session, item, reason="reopened")
     return MutationResult(item, event, True)
@@ -600,6 +838,9 @@ async def mark_waiting_received(
         raise InvalidWorkItemTransitionError("only open waiting items can be received")
     previous = item.status
     received_at = now or management_now()
+    completed_subtask_ids = await _complete_open_subtasks(
+        session, item, now=received_at, reason="parent_completed"
+    )
     item.status = WorkItemStatus.DONE.value
     item.completed_at = received_at
     event = await append_management_event(
@@ -607,7 +848,11 @@ async def mark_waiting_received(
         item,
         WorkItemEventType.WAITING_RECEIVED,
         telegram_update_id,
-        {"from_status": previous, "received_at": received_at.isoformat()},
+        {
+            "from_status": previous,
+            "received_at": received_at.isoformat(),
+            "completed_subtask_ids": [str(value) for value in completed_subtask_ids],
+        },
     )
     await cancel_work_item_reminders(session, item, now=received_at)
     await sync_planner_status(session, item, reason="waiting_received")

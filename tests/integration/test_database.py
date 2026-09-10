@@ -366,7 +366,7 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
         "ck_users_telegram_user_id_positive"
     }
     assert columns["active_workspace"]["nullable"] is False
-    assert revision == "0027_work_item_workspace_move"
+    assert revision == "0028_work_item_subtasks"
 
 
 def test_pwa_auth_migration_from_0012(migrated_database: None) -> None:
@@ -600,6 +600,11 @@ async def test_task_engine_schema_has_core_constraints(
                 "work_item_relations"
             )
         )
+        relation_indexes = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_indexes(
+                "work_item_relations"
+            )
+        )
         event_columns = await connection.run_sync(
             lambda sync_connection: {
                 column["name"]: column
@@ -654,6 +659,9 @@ async def test_task_engine_schema_has_core_constraints(
     assert {constraint["name"] for constraint in relation_checks} >= {
         "ck_work_item_relations_not_self",
         "ck_work_item_relations_type",
+    }
+    assert {index["name"] for index in relation_indexes} >= {
+        "uq_work_item_relations_subtask_target"
     }
     assert event_columns["telegram_update_id"]["nullable"] is True
     assert {constraint["name"] for constraint in event_uniques} >= {

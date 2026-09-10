@@ -54,6 +54,7 @@ def test_task_engine_enum_contracts() -> None:
         "after_completion",
         "created_from",
         "waiting_for",
+        "subtask",
     }
     assert {value.value for value in WorkItemEventType} == {
         "created",
