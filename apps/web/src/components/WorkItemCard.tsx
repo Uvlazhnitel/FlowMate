@@ -441,6 +441,16 @@ export function WorkItemCard({
         </div>
       )}
       <div className="work-card__topline">
+        <button
+          className="completion-checkbox completion-checkbox--top"
+          type="button"
+          aria-label={primaryLabel}
+          title={primaryLabel}
+          disabled={interactionsDisabled}
+          onClick={runPrimaryAction}
+        >
+          <Check size={15} aria-hidden />
+        </button>
         <StatusBadge item={item} />
         <WorkspaceBadge workspace={item.workspace} />
         {priorityLabel && (
@@ -468,16 +478,6 @@ export function WorkItemCard({
       </div>
       <SubtaskChecklist item={item} compact={compact} />
       <div className="work-card__actions">
-        <button
-          className="completion-checkbox"
-          type="button"
-          aria-label={primaryLabel}
-          title={primaryLabel}
-          disabled={interactionsDisabled}
-          onClick={runPrimaryAction}
-        >
-          <Check size={17} aria-hidden />
-        </button>
         <details className="card-more" ref={moreMenu} open={moreOpen}>
           <summary
             className="card-action"

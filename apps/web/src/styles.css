@@ -1996,13 +1996,13 @@ h2 {
   margin-top: 17px;
 }
 .completion-checkbox {
-  width: 34px;
-  height: 34px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   display: inline-grid;
   place-items: center;
   border: 2px solid var(--forest);
-  border-radius: 50%;
+  border-radius: 7px;
   background: transparent;
   color: var(--forest);
   cursor: pointer;
@@ -2019,8 +2019,12 @@ h2 {
   opacity: 0.55;
 }
 .completion-checkbox--compact {
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
+}
+.completion-checkbox--top {
+  flex: 0 0 auto;
+  margin-right: 2px;
 }
 .card-action,
 .text-action {

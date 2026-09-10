@@ -220,6 +220,16 @@ export function OverviewWorkItemRow({
       onDragEnd={onDragEnd}
     >
       <div className="overview-row__badges">
+        <button
+          className="completion-checkbox completion-checkbox--top completion-checkbox--compact"
+          type="button"
+          aria-label={primaryLabel}
+          title={primaryLabel}
+          disabled={mutation.isPending}
+          onClick={runPrimaryAction}
+        >
+          <Check size={14} aria-hidden />
+        </button>
         <span
           className={
             item.overdue ? "overview-badge overview-badge--overdue" : "overview-badge"
@@ -248,16 +258,6 @@ export function OverviewWorkItemRow({
       </p>
       <SubtaskChecklist item={item} compact />
       <div className="overview-row__actions">
-        <button
-          className="completion-checkbox completion-checkbox--compact"
-          type="button"
-          aria-label={primaryLabel}
-          title={primaryLabel}
-          disabled={mutation.isPending}
-          onClick={runPrimaryAction}
-        >
-          <Check size={16} aria-hidden />
-        </button>
         <details className="card-more" ref={moreMenu} open={moreOpen}>
           <summary
             className="overview-action"
