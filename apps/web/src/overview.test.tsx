@@ -249,6 +249,58 @@ describe("Overview home", () => {
     });
   });
 
+  it("moves an overview row between workspaces without changing its bucket", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let workspace: WorkItemCardData["workspace"] = "personal";
+    let actionPayload: Record<string, unknown> = {};
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/actions")) {
+        actionPayload = requestBody(init);
+        workspace = "work";
+        return Promise.resolve(
+          jsonResponse({
+            changed: true,
+            work_item: { ...task, workspace: "work", revision: 18 },
+          }),
+        );
+      }
+      const response = overviewResponse();
+      response.today.items[0]!.item.workspace = workspace;
+      response.workspace_counts =
+        workspace === "work"
+          ? { all: 10, work: 2, personal: 8 }
+          : { all: 10, work: 1, personal: 9 };
+      return Promise.resolve(jsonResponse(response));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApplication("/overview");
+
+    const row = (await screen.findByRole("heading", { name: task.title })).closest(
+      "article",
+    ) as HTMLElement;
+    await user.click(within(row).getByRole("button", { name: "Ещё действия" }));
+    await user.click(within(row).getByRole("menuitem", { name: "В работу" }));
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(actionPayload).toMatchObject({
+      action: "move_workspace",
+      target: "work",
+      expected_revision: 17,
+    });
+    await waitFor(() => {
+      const refreshedRow = screen
+        .getByRole("heading", { name: task.title })
+        .closest("article") as HTMLElement;
+      expect(within(refreshedRow).getByText("Работа")).toBeVisible();
+    });
+    expect(screen.getByRole("button", { name: /^Все\s*10$/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^Работа\s*2$/ })).toBeVisible();
+  });
+
   it("shows honest empty columns and keeps their full-list links", async () => {
     const empty = overviewResponse();
     empty.today = { items: [], total: 0, has_more: false };

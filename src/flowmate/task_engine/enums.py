@@ -62,6 +62,7 @@ class WorkItemEventType(StrEnum):
     ARCHIVED = "archived"
     PLANNER_STATUS_CHANGED = "planner_status_changed"
     BUCKET_MOVED = "bucket_moved"
+    WORKSPACE_CHANGED = "workspace_changed"
 
 
 class WorkItemAction(StrEnum):

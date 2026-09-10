@@ -33,6 +33,7 @@ from flowmate.task_engine.management import (
     convert_work_item_to_task,
     edit_work_item,
     mark_waiting_received,
+    move_work_item_workspace,
     reopen_work_item,
     reschedule_work_item,
 )
@@ -123,6 +124,11 @@ class MoveBucketWorkItemAction(WorkItemActionBase):
     target: Literal["inbox", "today", "tomorrow"]
 
 
+class MoveWorkspaceWorkItemAction(WorkItemActionBase):
+    action: Literal["move_workspace"]
+    target: Literal["work", "personal"]
+
+
 class SnoozeWorkItemAction(WorkItemActionBase):
     action: Literal["snooze"]
     duration_minutes: int | None = Field(default=None, ge=1, le=10_080)
@@ -152,6 +158,7 @@ WorkItemActionRequest = Annotated[
     | PresetWorkItemAction
     | TextWorkItemAction
     | MoveBucketWorkItemAction
+    | MoveWorkspaceWorkItemAction
     | SnoozeWorkItemAction
     | EditWorkItemAction,
     Field(discriminator="action"),
@@ -566,6 +573,24 @@ async def _work_item_action_in_workspace(
                 ),
                 expected_revision=payload.expected_revision,
             )
+        elif payload.action == "move_workspace":
+            result = await move_work_item_workspace(
+                session,
+                user_id,
+                work_item_id,
+                payload.target,
+                expected_revision=payload.expected_revision,
+            )
+            await session.refresh(result.work_item)
+            with workspace_context(
+                session,
+                user_id=user_id,
+                workspace=result.work_item.workspace,
+            ):
+                cards = await build_work_item_cards(
+                    session, user_id, [result.work_item], now=_clock()
+                )
+            return {"changed": result.changed, "work_item": cards[0]}
         elif payload.action in {"add_note", "add_result"}:
             content_payload = cast(ContentWorkItemAction, payload)
             result, _ = await add_work_item_note(

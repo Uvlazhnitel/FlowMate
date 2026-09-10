@@ -3,12 +3,15 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from flowmate.db.models import (
     Note,
+    Reminder,
+    Topic,
     WorkItem,
+    WorkItemActionSession,
     WorkItemEvent,
     WorkItemPerson,
     WorkItemRelation,
@@ -44,6 +47,7 @@ from flowmate.task_engine.service import (
     parse_work_item_type,
     validate_aware_datetime,
 )
+from flowmate.workspaces import Workspace, normalize_workspace
 
 
 class InvalidWorkItemTransitionError(ValueError):
@@ -240,6 +244,95 @@ async def change_planner_status(
         WorkItemEventType.PLANNER_STATUS_CHANGED,
         None,
         {"previous": previous, "new": target.value},
+    )
+    return MutationResult(item, event, True)
+
+
+async def move_work_item_workspace(
+    session: AsyncSession,
+    user_id: UUID,
+    work_item_id: UUID,
+    target: Workspace | str,
+    *,
+    expected_revision: int,
+    now: datetime | None = None,
+) -> MutationResult:
+    duplicate = await existing_mutation(session, user_id, None)
+    if duplicate is not None:
+        return duplicate
+
+    item = await lock_work_item(
+        session, user_id, work_item_id, expected_revision=expected_revision
+    )
+    target_workspace = normalize_workspace(target)
+    previous_workspace = item.workspace
+    if target_workspace == previous_workspace:
+        raise InvalidWorkItemTransitionError(
+            "Задача уже находится в выбранном пространстве."
+        )
+
+    current = now or management_now()
+    active_session = await session.scalar(
+        select(WorkItemActionSession)
+        .where(
+            WorkItemActionSession.user_id == user_id,
+            WorkItemActionSession.work_item_id == item.id,
+            WorkItemActionSession.status == "open",
+            WorkItemActionSession.expires_at > current,
+        )
+        .execution_options(include_all_workspaces=True)
+        .with_for_update()
+    )
+    if active_session is not None:
+        raise InvalidWorkItemTransitionError(
+            "Сначала завершите текущее действие с задачей в Телеграме."  # noqa: RUF001
+        )
+
+    target_topic_id: UUID | None = None
+    if item.topic_id is not None:
+        source_topic = await session.scalar(
+            select(Topic)
+            .where(
+                Topic.id == item.topic_id,
+                Topic.user_id == user_id,
+                Topic.workspace == previous_workspace,
+            )
+            .execution_options(include_all_workspaces=True)
+        )
+        if source_topic is not None:
+            target_topic_id = await session.scalar(
+                select(Topic.id)
+                .where(
+                    Topic.user_id == user_id,
+                    Topic.workspace == target_workspace,
+                    func.lower(func.btrim(Topic.name))
+                    == func.lower(func.btrim(source_topic.name)),
+                )
+                .execution_options(include_all_workspaces=True)
+            )
+
+    reminders = list(
+        await session.scalars(
+            select(Reminder)
+            .where(
+                Reminder.user_id == user_id,
+                Reminder.work_item_id == item.id,
+            )
+            .execution_options(include_all_workspaces=True)
+            .with_for_update()
+        )
+    )
+    item.workspace = target_workspace
+    item.topic_id = target_topic_id
+    for reminder in reminders:
+        reminder.workspace = target_workspace
+
+    event = await append_management_event(
+        session,
+        item,
+        WorkItemEventType.WORKSPACE_CHANGED,
+        None,
+        {"previous": previous_workspace, "new": target_workspace},
     )
     return MutationResult(item, event, True)
 

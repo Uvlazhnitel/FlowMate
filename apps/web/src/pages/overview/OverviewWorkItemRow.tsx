@@ -1,4 +1,4 @@
-import { Check, Clock3, RotateCcw } from "lucide-react";
+import { ArrowLeftRight, Check, Clock3, MoreHorizontal, RotateCcw } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 
@@ -53,7 +53,9 @@ export function OverviewWorkItemRow({
   const [hidden, setHidden] = useState(false);
   const [undoItem, setUndoItem] = useState<WorkItemCardData | null>(null);
   const [undoError, setUndoError] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const moreMenu = useRef<HTMLDetailsElement | null>(null);
 
   async function refresh() {
     await Promise.all([
@@ -92,8 +94,13 @@ export function OverviewWorkItemRow({
       if (variables.action.startsWith("reschedule")) setRescheduleOpen(false);
       void refresh();
     },
-    onError: (error) => {
-      if (error instanceof ApiError && error.status === 409) void refresh();
+    onError: (error, variables) => {
+      if (
+        (error instanceof ApiError && error.status === 409) ||
+        variables.action === "move_workspace"
+      ) {
+        void refresh();
+      }
     },
   });
 
@@ -103,6 +110,20 @@ export function OverviewWorkItemRow({
 
   function submitReschedule(selection: RescheduleSelection) {
     mutation.mutate({ ...selection, expected_revision: item.revision });
+  }
+
+  function moveWorkspace() {
+    if (moreMenu.current) moreMenu.current.open = false;
+    setMoreOpen(false);
+    const target = item.workspace === "work" ? "personal" : "work";
+    const targetLabel = target === "work" ? "Работа" : "Личное";
+    if (
+      window.confirm(
+        `Переместить запись в «${targetLabel}»? Тема будет сопоставлена по имени или снята.`,
+      )
+    ) {
+      act("move_workspace", { target });
+    }
   }
 
   async function undo() {
@@ -143,11 +164,13 @@ export function OverviewWorkItemRow({
   const primaryLabel = item.type === "waiting" ? "Получено" : "Готово";
   const priorityLabel = priorityLabels[item.priority];
   const staleError =
-    mutation.error instanceof ApiError && mutation.error.status === 409
-      ? "Запись уже изменилась. Обзор обновлён."
-      : mutation.isError && !rescheduleOpen
-        ? "Не удалось выполнить действие."
-        : null;
+    mutation.variables?.action === "move_workspace" && mutation.error instanceof ApiError
+      ? mutation.error.message
+      : mutation.error instanceof ApiError && mutation.error.status === 409
+        ? "Запись уже изменилась. Обзор обновлён."
+        : mutation.isError && !rescheduleOpen
+          ? "Не удалось выполнить действие."
+          : null;
   const rescheduleError =
     rescheduleOpen && mutation.isError
       ? mutation.error instanceof ApiError && mutation.error.status === 409
@@ -163,7 +186,7 @@ export function OverviewWorkItemRow({
       aria-busy={mutation.isPending || moveDisabled}
       draggable={Boolean(onDragStart) && !moveDisabled}
       onDragStart={(event) => {
-        if ((event.target as Element).closest("button, input, select, textarea")) {
+        if ((event.target as Element).closest("button, summary, input, select, textarea")) {
           event.preventDefault();
           return;
         }
@@ -211,6 +234,36 @@ export function OverviewWorkItemRow({
         >
           <Clock3 size={14} aria-hidden /> Перенести
         </button>
+        <details className="card-more" ref={moreMenu} open={moreOpen}>
+          <summary
+            className="overview-action"
+            role="button"
+            aria-label="Ещё действия"
+            aria-expanded={moreOpen}
+            aria-disabled={mutation.isPending}
+            onClick={(event) => {
+              event.preventDefault();
+              if (mutation.isPending) return;
+              const nextOpen = !moreOpen;
+              if (moreMenu.current) moreMenu.current.open = nextOpen;
+              setMoreOpen(nextOpen);
+            }}
+          >
+            <MoreHorizontal size={14} aria-hidden /> Ещё
+          </summary>
+          <div className="card-more__menu" role="menu" hidden={!moreOpen}>
+            <button
+              className="overview-action"
+              type="button"
+              role="menuitem"
+              disabled={mutation.isPending}
+              onClick={moveWorkspace}
+            >
+              <ArrowLeftRight size={14} aria-hidden />
+              {item.workspace === "work" ? "В личное" : "В работу"}
+            </button>
+          </div>
+        </details>
       </div>
       {staleError && (
         <p className="inline-error" role="alert">

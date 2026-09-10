@@ -10,10 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from flowmate.api.app import create_app
 from flowmate.db.models import (
+    Note,
     NoteLink,
     Reminder,
     User,
     WorkItem,
+    WorkItemActionSession,
     WorkItemEvent,
     WorkItemRelation,
 )
@@ -34,6 +36,7 @@ from flowmate.task_engine.service import (
     create_work_item,
     link_person_to_work_item,
 )
+from flowmate.workspaces import workspace_context
 from tests.conftest import started_app
 from tests.integration.test_pwa_auth import (
     ORIGIN,
@@ -71,6 +74,291 @@ async def authenticated_client(
     csrf = client.cookies.get("flowmate_csrf")
     assert csrf is not None
     return csrf
+
+
+@pytest.mark.integration
+async def test_work_item_workspace_action_moves_scoped_dependencies(
+    database_engine: AsyncEngine,
+) -> None:
+    sender = CapturingLoginCodeSender()
+    app = create_app(
+        settings=auth_settings(app_timezone="UTC"),
+        engine=database_engine,
+        login_code_sender=sender,
+    )
+    scheduled_at = datetime.now(UTC) + timedelta(hours=2)
+    async with started_app(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            csrf = await authenticated_client(client, sender)
+            async with AsyncSession(database_engine) as session:
+                user = await session.scalar(
+                    select(User).where(User.telegram_user_id == TELEGRAM_USER_ID)
+                )
+                assert user is not None
+                with workspace_context(session, user_id=user.id, workspace="personal"):
+                    personal_topic = await create_topic(session, user.id, "Launch")
+                    source_note = Note(
+                        user_id=user.id,
+                        content="Private source context",
+                        source="manual",
+                    )
+                    session.add(source_note)
+                    await session.flush()
+                    item = await create_work_item(
+                        session,
+                        user.id,
+                        item_type="task",
+                        title="Move between workspaces",
+                        topic_id=personal_topic.id,
+                        due_at=scheduled_at,
+                        source_note_id=source_note.id,
+                    )
+                    item.status = "active"
+                    item.planner_status = "transferred"
+                    link = NoteLink(
+                        user_id=user.id,
+                        note_id=source_note.id,
+                        work_item_id=item.id,
+                    )
+                    pending = Reminder(
+                        user_id=user.id,
+                        work_item_id=item.id,
+                        type="custom",
+                        scheduled_at=scheduled_at,
+                        deduplication_key=f"workspace-pending:{item.id}",
+                    )
+                    sent = Reminder(
+                        user_id=user.id,
+                        work_item_id=item.id,
+                        type="custom",
+                        status="sent",
+                        scheduled_at=scheduled_at,
+                        sent_at=scheduled_at,
+                        deduplication_key=f"workspace-sent:{item.id}",
+                    )
+                    session.add_all([link, pending, sent])
+                with workspace_context(session, user_id=user.id, workspace="work"):
+                    work_topic = await create_topic(session, user.id, " launch ")
+                item_id = item.id
+                source_note_id = source_note.id
+                link_id = link.id
+                personal_topic_id = personal_topic.id
+                work_topic_id = work_topic.id
+                original_status = item.status
+                original_due_at = item.due_at
+                original_planner_status = item.planner_status
+                await session.commit()
+
+            overview = await client.get("/api/v1/overview?workspace=personal")
+            entry = next(
+                value
+                for value in overview.json()["today"]["items"]
+                if value["item"]["id"] == str(item_id)
+            )
+            action_id = str(uuid4())
+            payload = {
+                "action": "move_workspace",
+                "target": "work",
+                "client_action_id": action_id,
+                "expected_revision": entry["item"]["revision"],
+            }
+            moved = await client.post(
+                f"/api/v1/work-items/{item_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json=payload,
+            )
+            assert moved.status_code == 200, moved.text
+            moved_item = moved.json()["work_item"]
+            assert moved_item["workspace"] == "work"
+            assert moved_item["topic_id"] == str(work_topic_id)
+            assert moved_item["status"] == original_status
+            assert datetime.fromisoformat(moved_item["due_at"]) == original_due_at
+            assert moved_item["planner_status"] == original_planner_status
+            assert (await client.get("/api/v1/auth/me")).json()[
+                "active_workspace"
+            ] == "personal"
+
+            personal_view = await client.get("/api/v1/overview?workspace=personal")
+            work_view = await client.get("/api/v1/overview?workspace=work")
+            assert all(
+                value["item"]["id"] != str(item_id)
+                for value in personal_view.json()["today"]["items"]
+            )
+            assert any(
+                value["item"]["id"] == str(item_id)
+                for value in work_view.json()["today"]["items"]
+            )
+
+            duplicate = await client.post(
+                f"/api/v1/work-items/{item_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json=payload,
+            )
+            assert duplicate.status_code == 200
+            assert duplicate.json()["changed"] is False
+            assert duplicate.json()["work_item"]["workspace"] == "work"
+
+            async with AsyncSession(database_engine) as session:
+                stored_item = await session.scalar(
+                    select(WorkItem)
+                    .where(WorkItem.id == item_id)
+                    .execution_options(include_all_workspaces=True)
+                )
+                assert stored_item is not None
+                reminders = list(
+                    await session.scalars(
+                        select(Reminder)
+                        .where(Reminder.work_item_id == item_id)
+                        .execution_options(include_all_workspaces=True)
+                    )
+                )
+                note = await session.scalar(
+                    select(Note)
+                    .where(Note.id == source_note_id)
+                    .execution_options(include_all_workspaces=True)
+                )
+                stored_link = await session.get(NoteLink, link_id)
+                events = list(
+                    await session.scalars(
+                        select(WorkItemEvent).where(
+                            WorkItemEvent.work_item_id == item_id,
+                            WorkItemEvent.event_type == "workspace_changed",
+                        )
+                    )
+                )
+                assert stored_item.workspace == "work"
+                assert {reminder.workspace for reminder in reminders} == {"work"}
+                assert {reminder.status for reminder in reminders} == {
+                    "pending",
+                    "sent",
+                }
+                assert note is not None and note.workspace == "personal"
+                assert stored_link is not None and stored_link.note_id == source_note_id
+                assert len(events) == 1
+                assert events[0].payload == {"previous": "personal", "new": "work"}
+
+            returned = await client.post(
+                f"/api/v1/work-items/{item_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "move_workspace",
+                    "target": "personal",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": moved_item["revision"],
+                },
+            )
+            assert returned.status_code == 200, returned.text
+            assert returned.json()["work_item"]["workspace"] == "personal"
+            assert returned.json()["work_item"]["topic_id"] == str(personal_topic_id)
+
+
+@pytest.mark.integration
+async def test_work_item_workspace_action_rejects_conflicts_and_foreign_items(
+    database_engine: AsyncEngine,
+) -> None:
+    sender = CapturingLoginCodeSender()
+    app = create_app(
+        settings=auth_settings(app_timezone="UTC"),
+        engine=database_engine,
+        login_code_sender=sender,
+    )
+    async with started_app(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            csrf = await authenticated_client(client, sender)
+            async with AsyncSession(database_engine) as session:
+                user = await session.scalar(
+                    select(User).where(User.telegram_user_id == TELEGRAM_USER_ID)
+                )
+                assert user is not None
+                item = await create_work_item(
+                    session, user.id, item_type="question", title="Active Telegram edit"
+                )
+                action_session = WorkItemActionSession(
+                    user_id=user.id,
+                    work_item_id=item.id,
+                    action="add_note",
+                    expires_at=datetime.now(UTC) + timedelta(minutes=10),
+                )
+                session.add(action_session)
+                foreign_user = await create_telegram_user(
+                    session, TELEGRAM_USER_ID + 900
+                )
+                foreign_item = await create_work_item(
+                    session,
+                    foreign_user.id,
+                    item_type="task",
+                    title="Foreign workspace item",
+                )
+                item_id = item.id
+                action_session_id = action_session.id
+                foreign_id = foreign_item.id
+                await session.commit()
+
+            overview = await client.get("/api/v1/overview?workspace=personal")
+            entry = next(
+                value
+                for value in overview.json()["inbox"]["items"]
+                if value["id"] == str(item_id)
+            )
+            revision = entry["item"]["revision"]
+            conflict = await client.post(
+                f"/api/v1/work-items/{item_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "move_workspace",
+                    "target": "work",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": revision,
+                },
+            )
+            assert conflict.status_code == 409
+            assert "Телеграм" in conflict.text
+
+            async with AsyncSession(database_engine) as session:
+                stored_session = await session.get(
+                    WorkItemActionSession, action_session_id
+                )
+                assert stored_session is not None
+                stored_session.status = "cancelled"
+                await session.commit()
+
+            stale = await client.post(
+                f"/api/v1/work-items/{item_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "move_workspace",
+                    "target": "work",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": revision - 1,
+                },
+            )
+            assert stale.status_code == 409
+            unchanged = await client.post(
+                f"/api/v1/work-items/{item_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "move_workspace",
+                    "target": "personal",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": revision,
+                },
+            )
+            assert unchanged.status_code == 409
+            foreign = await client.post(
+                f"/api/v1/work-items/{foreign_id}/actions",
+                headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+                json={
+                    "action": "move_workspace",
+                    "target": "personal",
+                    "client_action_id": str(uuid4()),
+                    "expected_revision": 0,
+                },
+            )
+            assert foreign.status_code == 404
 
 
 @pytest.mark.integration

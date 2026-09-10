@@ -167,6 +167,7 @@ export type WorkItemAction =
   | "reschedule_preset"
   | "reschedule_text"
   | "move_bucket"
+  | "move_workspace"
   | "snooze"
   | "add_note"
   | "waiting_received"
@@ -220,7 +221,7 @@ export interface ActionPayload {
   topic_id?: string | null;
   person_ids?: string[];
   date_changed?: boolean;
-  target?: "inbox" | "today" | "tomorrow";
+  target?: "inbox" | "today" | "tomorrow" | "work" | "personal";
 }
 
 export interface ActionResponse {

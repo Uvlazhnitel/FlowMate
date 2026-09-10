@@ -147,6 +147,61 @@ describe("operational screens", () => {
     ).toBe(false);
   });
 
+  it("moves a work item to the opposite workspace from the actions menu", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let currentWorkspace: WorkItemCardData["workspace"] = "personal";
+    let actionPayload: Record<string, unknown> = {};
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input);
+      if (path.includes("/auth/me"))
+        return Promise.resolve(jsonResponse(authenticatedUser));
+      if (path.includes("/actions")) {
+        actionPayload = JSON.parse(requestBody(init)) as Record<string, unknown>;
+        currentWorkspace = "work";
+        return Promise.resolve(
+          jsonResponse({
+            changed: true,
+            work_item: { ...workItem, workspace: "work", revision: 2 },
+          }),
+        );
+      }
+      if (path.includes("/today/overview")) return Promise.resolve(overview());
+      if (path.includes("section=overdue"))
+        return Promise.resolve(page([{ ...workItem, workspace: currentWorkspace }]));
+      return Promise.resolve(page([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApplication("/today?section=overdue");
+
+    const card = (await screen.findByText("Подготовить запуск")).closest(".work-card");
+    const compactCard = within(card as HTMLElement);
+    await user.click(compactCard.getByRole("button", { name: "Ещё действия" }));
+    await user.click(compactCard.getByRole("menuitem", { name: "В работу" }));
+
+    expect(confirm).toHaveBeenCalledWith(
+      "Переместить запись в «Работа»? Тема будет сопоставлена по имени или снята.",
+    );
+    expect(actionPayload).toMatchObject({
+      action: "move_workspace",
+      target: "work",
+      expected_revision: 1,
+    });
+    expect(typeof actionPayload.client_action_id).toBe("string");
+    await waitFor(() => {
+      const refreshedCard = screen
+        .getByText("Подготовить запуск")
+        .closest(".work-card") as HTMLElement;
+      expect(within(refreshedCard).getByText("Работа")).toBeVisible();
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          requestPath(input).includes("/api/v1/workspace") && init?.method === "PUT",
+      ),
+    ).toBe(false);
+  });
+
   it("adds an eligible work item to Planner explicitly", async () => {
     let plannerStatus: WorkItemCardData["planner_status"] = workItem.planner_status;
     let actionPayload: Record<string, unknown> = {};

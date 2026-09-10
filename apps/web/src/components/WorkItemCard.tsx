@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowLeftRight,
   CalendarClock,
   Check,
   Clock3,
@@ -136,6 +137,9 @@ export function WorkItemCard({
       if (variables.action.startsWith("planner_")) {
         void queryClient.invalidateQueries({ queryKey: remainingKeys.all });
       }
+      if (variables.action === "move_workspace") {
+        void queryClient.invalidateQueries({ queryKey: remainingKeys.all });
+      }
       if (isRescheduleAction(variables.action) && response.work_item?.effective_at) {
         setRescheduleStatus(
           `✓ Перенесено на ${formatRescheduledDateTime(
@@ -166,6 +170,10 @@ export function WorkItemCard({
       ) {
         void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
       }
+      if (variables.action === "move_workspace") {
+        void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
+        void queryClient.invalidateQueries({ queryKey: remainingKeys.all });
+      }
     },
   });
 
@@ -182,6 +190,19 @@ export function WorkItemCard({
   function confirmAction(action: "cancel" | "convert_to_task", message: string) {
     closeMoreMenu();
     if (window.confirm(message)) act(action);
+  }
+
+  function moveWorkspace() {
+    closeMoreMenu();
+    const target = item.workspace === "work" ? "personal" : "work";
+    const targetLabel = target === "work" ? "Работа" : "Личное";
+    if (
+      window.confirm(
+        `Переместить запись в «${targetLabel}»? Тема будет сопоставлена по имени или снята.`,
+      )
+    ) {
+      act("move_workspace", { target });
+    }
   }
 
   function openReschedule() {
@@ -263,6 +284,21 @@ export function WorkItemCard({
   const interactionsDisabled = mutation.isPending || completing;
   const priorityLabel = priorityLabels[item.priority];
 
+  function workspaceAction() {
+    return (
+      <button
+        className="card-action"
+        type="button"
+        role="menuitem"
+        disabled={interactionsDisabled}
+        onClick={moveWorkspace}
+      >
+        <ArrowLeftRight size={15} aria-hidden />
+        {item.workspace === "work" ? "В личное" : "В работу"}
+      </button>
+    );
+  }
+
   function secondaryActions(inMenu: boolean) {
     return (
       <>
@@ -333,6 +369,7 @@ export function WorkItemCard({
             </button>
           </>
         )}
+        {inMenu && workspaceAction()}
         <button
           className="card-action card-action--danger"
           type="button"
@@ -422,7 +459,30 @@ export function WorkItemCard({
             </div>
           </details>
         ) : (
-          secondaryActions(false)
+          <>
+            {secondaryActions(false)}
+            <details className="card-more" ref={moreMenu} open={moreOpen}>
+              <summary
+                className="card-action"
+                role="button"
+                aria-label="Ещё действия"
+                aria-expanded={moreOpen}
+                aria-disabled={interactionsDisabled}
+                onClick={(event) => {
+                  event.preventDefault();
+                  if (interactionsDisabled) return;
+                  const nextOpen = !moreOpen;
+                  if (moreMenu.current) moreMenu.current.open = nextOpen;
+                  setMoreOpen(nextOpen);
+                }}
+              >
+                <MoreHorizontal size={16} aria-hidden /> Ещё
+              </summary>
+              <div className="card-more__menu" role="menu" hidden={!moreOpen}>
+                {workspaceAction()}
+              </div>
+            </details>
+          </>
         )}
       </div>
       {rescheduleStatus && (
@@ -432,7 +492,10 @@ export function WorkItemCard({
       )}
       {mutation.isError && !rescheduleOpen && (
         <p className="inline-error">
-          Не удалось выполнить действие. Обновите данные и повторите.
+          {mutation.variables?.action === "move_workspace" &&
+          mutation.error instanceof ApiError
+            ? mutation.error.message
+            : "Не удалось выполнить действие. Обновите данные и повторите."}
         </p>
       )}
       {rescheduleOpen && (

@@ -366,7 +366,7 @@ async def test_users_schema_matches_metadata(database_engine: AsyncEngine) -> No
         "ck_users_telegram_user_id_positive"
     }
     assert columns["active_workspace"]["nullable"] is False
-    assert revision == "0026_overview_drag_drop"
+    assert revision == "0027_work_item_workspace_move"
 
 
 def test_pwa_auth_migration_from_0012(migrated_database: None) -> None:
