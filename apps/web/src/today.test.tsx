@@ -103,6 +103,7 @@ describe("Today home", () => {
       return Promise.resolve(jsonResponse(page()));
     });
     vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
 
     renderApplication("/today");
 
@@ -124,8 +125,11 @@ describe("Today home", () => {
     expect(
       within(focusCard as HTMLElement).getByRole("button", { name: "Готово" }),
     ).toBeVisible();
+    await user.click(
+      within(focusCard as HTMLElement).getByRole("button", { name: "Ещё действия" }),
+    );
     expect(
-      within(focusCard as HTMLElement).getByRole("button", { name: "Перенести" }),
+      within(focusCard as HTMLElement).getByRole("menuitem", { name: "Перенести" }),
     ).toBeVisible();
     expect(
       within(focusCard as HTMLElement).getByRole("button", {
@@ -134,7 +138,7 @@ describe("Today home", () => {
     ).toBeVisible();
     expect(
       within(focusCard as HTMLElement).queryByRole("menuitem", { name: "Заметка" }),
-    ).not.toBeInTheDocument();
+    ).toBeVisible();
     expect(
       screen.getByRole("link", { name: "Показать все задачи на сегодня" }),
     ).toBeVisible();

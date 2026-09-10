@@ -331,6 +331,17 @@ export function WorkItemCard({
   function secondaryActions(inMenu: boolean) {
     return (
       <>
+        {inMenu && (
+          <button
+            className="card-action"
+            type="button"
+            role="menuitem"
+            disabled={interactionsDisabled}
+            onClick={openReschedule}
+          >
+            <Clock3 size={15} aria-hidden /> {agenda ? "Отложить" : "Перенести"}
+          </button>
+        )}
         <button
           className="card-action"
           type="button"
@@ -458,69 +469,36 @@ export function WorkItemCard({
       <SubtaskChecklist item={item} compact={compact} />
       <div className="work-card__actions">
         <button
-          className="card-action card-action--primary"
+          className="completion-checkbox"
           type="button"
+          aria-label={primaryLabel}
+          title={primaryLabel}
           disabled={interactionsDisabled}
           onClick={runPrimaryAction}
         >
-          <Check size={15} aria-hidden /> {primaryLabel}
+          <Check size={17} aria-hidden />
         </button>
-        <button
-          className="card-action"
-          type="button"
-          disabled={interactionsDisabled}
-          onClick={openReschedule}
-        >
-          <Clock3 size={15} aria-hidden /> {agenda ? "Отложить" : "Перенести"}
-        </button>
-        {compact ? (
-          <details className="card-more" ref={moreMenu} open={moreOpen}>
-            <summary
-              className="card-action"
-              role="button"
-              aria-label="Ещё действия"
-              aria-expanded={moreOpen}
-              aria-disabled={interactionsDisabled}
-              onClick={(event) => {
-                event.preventDefault();
-                if (interactionsDisabled) return;
-                const nextOpen = !moreOpen;
-                if (moreMenu.current) moreMenu.current.open = nextOpen;
-                setMoreOpen(nextOpen);
-              }}
-            >
-              <MoreHorizontal size={16} aria-hidden /> Ещё
-            </summary>
-            <div className="card-more__menu" role="menu" hidden={!moreOpen}>
-              {secondaryActions(true)}
-            </div>
-          </details>
-        ) : (
-          <>
-            {secondaryActions(false)}
-            <details className="card-more" ref={moreMenu} open={moreOpen}>
-              <summary
-                className="card-action"
-                role="button"
-                aria-label="Ещё действия"
-                aria-expanded={moreOpen}
-                aria-disabled={interactionsDisabled}
-                onClick={(event) => {
-                  event.preventDefault();
-                  if (interactionsDisabled) return;
-                  const nextOpen = !moreOpen;
-                  if (moreMenu.current) moreMenu.current.open = nextOpen;
-                  setMoreOpen(nextOpen);
-                }}
-              >
-                <MoreHorizontal size={16} aria-hidden /> Ещё
-              </summary>
-              <div className="card-more__menu" role="menu" hidden={!moreOpen}>
-                {workspaceAction()}
-              </div>
-            </details>
-          </>
-        )}
+        <details className="card-more" ref={moreMenu} open={moreOpen}>
+          <summary
+            className="card-action"
+            role="button"
+            aria-label="Ещё действия"
+            aria-expanded={moreOpen}
+            aria-disabled={interactionsDisabled}
+            onClick={(event) => {
+              event.preventDefault();
+              if (interactionsDisabled) return;
+              const nextOpen = !moreOpen;
+              if (moreMenu.current) moreMenu.current.open = nextOpen;
+              setMoreOpen(nextOpen);
+            }}
+          >
+            <MoreHorizontal size={16} aria-hidden /> Ещё
+          </summary>
+          <div className="card-more__menu" role="menu" hidden={!moreOpen}>
+            {secondaryActions(true)}
+          </div>
+        </details>
       </div>
       {rescheduleStatus && (
         <p className="reschedule-status" role="status">

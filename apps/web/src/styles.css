@@ -1995,6 +1995,33 @@ h2 {
   gap: 7px;
   margin-top: 17px;
 }
+.completion-checkbox {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border: 2px solid var(--forest);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--forest);
+  cursor: pointer;
+  transition: background 0.16s, color 0.16s, transform 0.16s;
+}
+.completion-checkbox:hover,
+.completion-checkbox:focus-visible {
+  background: var(--forest);
+  color: white;
+  transform: scale(1.04);
+}
+.completion-checkbox:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+.completion-checkbox--compact {
+  width: 30px;
+  height: 30px;
+}
 .card-action,
 .text-action {
   min-height: 34px;

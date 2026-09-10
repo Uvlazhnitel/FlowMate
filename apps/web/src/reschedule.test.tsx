@@ -84,7 +84,8 @@ describe("reschedule dialog", () => {
     const user = userEvent.setup();
     renderCard();
 
-    await user.click(screen.getByRole("button", { name: "Перенести" }));
+    await user.click(screen.getByRole("button", { name: "Ещё действия" }));
+    await user.click(screen.getByRole("menuitem", { name: "Перенести" }));
     expect(screen.getByText("Сейчас:")).toHaveTextContent("31.07.2026 09:00");
     await user.click(screen.getByRole("button", { name: "Через неделю" }));
 
@@ -121,7 +122,8 @@ describe("reschedule dialog", () => {
     const user = userEvent.setup();
     renderCard();
 
-    await user.click(screen.getByRole("button", { name: "Перенести" }));
+    await user.click(screen.getByRole("button", { name: "Ещё действия" }));
+    await user.click(screen.getByRole("menuitem", { name: "Перенести" }));
     const phrase = screen.getByLabelText("Или напишите обычными словами");
     await user.type(phrase, "в пятницу после обеда{Enter}");
 
@@ -154,7 +156,8 @@ describe("reschedule dialog", () => {
     const user = userEvent.setup();
     renderCard();
 
-    await user.click(screen.getByRole("button", { name: "Перенести" }));
+    await user.click(screen.getByRole("button", { name: "Ещё действия" }));
+    await user.click(screen.getByRole("menuitem", { name: "Перенести" }));
     await user.click(screen.getByRole("button", { name: "Выбрать точную дату и время" }));
     const date = screen.getByLabelText("Дата");
     const time = screen.getByLabelText("Время");
@@ -186,7 +189,8 @@ describe("reschedule dialog", () => {
     const user = userEvent.setup();
     renderCard();
 
-    await user.click(screen.getByRole("button", { name: "Перенести" }));
+    await user.click(screen.getByRole("button", { name: "Ещё действия" }));
+    await user.click(screen.getByRole("menuitem", { name: "Перенести" }));
     await user.click(screen.getByRole("button", { name: "Позже сегодня" }));
     expect(screen.getByRole("button", { name: "Закрыть" })).toBeDisabled();
     expect(screen.getByLabelText("Или напишите обычными словами")).toBeDisabled();
@@ -205,7 +209,8 @@ describe("reschedule dialog", () => {
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    await user.click(screen.getByRole("button", { name: "Перенести" }));
+    await user.click(screen.getByRole("button", { name: "Ещё действия" }));
+    await user.click(screen.getByRole("menuitem", { name: "Перенести" }));
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
@@ -231,7 +236,8 @@ describe("reschedule dialog", () => {
     const { queryClient } = renderCard();
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 
-    await user.click(screen.getByRole("button", { name: "Перенести" }));
+    await user.click(screen.getByRole("button", { name: "Ещё действия" }));
+    await user.click(screen.getByRole("menuitem", { name: "Перенести" }));
     await user.click(screen.getByRole("button", { name: "Завтра утром" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -263,8 +269,9 @@ describe("reschedule dialog", () => {
     expect(screen.getByText(item.title).closest(".work-card")).not.toHaveClass(
       "work-card--compact",
     );
-    expect(screen.getByRole("button", { name: "Результат" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Отложить" }));
+    await user.click(screen.getByRole("button", { name: "Ещё действия" }));
+    expect(screen.getByRole("menuitem", { name: "Результат" })).toBeVisible();
+    await user.click(screen.getByRole("menuitem", { name: "Отложить" }));
     await user.click(screen.getByRole("button", { name: "Следующий рабочий день" }));
 
     await waitFor(() =>

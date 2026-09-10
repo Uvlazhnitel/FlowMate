@@ -231,7 +231,8 @@ describe("Overview home", () => {
     const restoredRow = screen
       .getByRole("heading", { name: task.title })
       .closest("article") as HTMLElement;
-    await user.click(within(restoredRow).getByRole("button", { name: "Перенести" }));
+    await user.click(within(restoredRow).getByRole("button", { name: "Ещё действия" }));
+    await user.click(within(restoredRow).getByRole("menuitem", { name: "Перенести" }));
     await user.click(screen.getByRole("button", { name: "Завтра утром" }));
     await waitFor(() => {
       const rescheduleCall = fetchMock.mock.calls.find(

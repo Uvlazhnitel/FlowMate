@@ -249,23 +249,14 @@ export function OverviewWorkItemRow({
       <SubtaskChecklist item={item} compact />
       <div className="overview-row__actions">
         <button
-          className="overview-action overview-action--primary"
+          className="completion-checkbox completion-checkbox--compact"
           type="button"
+          aria-label={primaryLabel}
+          title={primaryLabel}
           disabled={mutation.isPending}
           onClick={runPrimaryAction}
         >
-          <Check size={14} aria-hidden /> {primaryLabel}
-        </button>
-        <button
-          className="overview-action"
-          type="button"
-          disabled={mutation.isPending}
-          onClick={() => {
-            mutation.reset();
-            setRescheduleOpen(true);
-          }}
-        >
-          <Clock3 size={14} aria-hidden /> Перенести
+          <Check size={16} aria-hidden />
         </button>
         <details className="card-more" ref={moreMenu} open={moreOpen}>
           <summary
@@ -285,6 +276,18 @@ export function OverviewWorkItemRow({
             <MoreHorizontal size={14} aria-hidden /> Ещё
           </summary>
           <div className="card-more__menu" role="menu" hidden={!moreOpen}>
+            <button
+              className="overview-action"
+              type="button"
+              role="menuitem"
+              disabled={mutation.isPending}
+              onClick={() => {
+                mutation.reset();
+                setRescheduleOpen(true);
+              }}
+            >
+              <Clock3 size={14} aria-hidden /> Перенести
+            </button>
             <button
               className="overview-action"
               type="button"
