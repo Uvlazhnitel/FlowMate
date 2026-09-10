@@ -367,8 +367,8 @@ async def list_inbox(
     workspace_scope: WorkspaceReadScope = "all",
 ) -> PageResult:
     validate_pagination(limit, offset)
-    if limit > 50:
-        raise ValueError("limit must not exceed 50")
+    if limit > 1000:
+        raise ValueError("limit must not exceed 1000")
     entries: list[tuple[datetime, str, dict[str, object]]] = []
     if kind in {None, "draft"}:
         drafts = list(
