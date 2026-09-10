@@ -44,11 +44,10 @@ export function InboxPage({
   const kind = params.get("kind") ?? "";
   const reason = params.get("reason") ?? "";
   const focus = params.get("focus") ?? "";
-  const page = Number(params.get("page") ?? 0);
   const [selected, setSelected] = useState<Record<string, InboxEntry>>({});
   const query = useQuery({
-    queryKey: [...remainingKeys.all, "inbox", kind, reason, page, scope],
-    queryFn: () => getInbox(kind, reason, page * 20, scope),
+    queryKey: [...remainingKeys.all, "inbox", kind, reason, scope],
+    queryFn: () => getInbox(kind, reason, 0, scope),
   });
   const options = useQuery({
     queryKey: [...remainingKeys.all, "inbox-options", scope],
@@ -246,13 +245,15 @@ export function InboxPage({
                   />
                   <span className="sr-only">Выбрать запись</span>
                 </label>
-                <div className="reason-row">
-                  {entry.reasons.map((value) => (
-                    <span className="reason-chip" key={value}>
-                      {reasonLabels[value] ?? value}
-                    </span>
-                  ))}
-                </div>
+                {entry.reasons.length > 0 && (
+                  <div className="reason-row">
+                    {entry.reasons.map((value) => (
+                      <span className="reason-chip" key={value}>
+                        {reasonLabels[value] ?? value}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {entry.kind === "draft" && (
                   <DraftInboxCard
                     entry={entry}
@@ -287,30 +288,6 @@ export function InboxPage({
           })}
         </div>
       )}
-      <div className="pager">
-        <button
-          className="button button--secondary"
-          disabled={page === 0}
-          onClick={() => {
-            const next = new URLSearchParams(params);
-            next.set("page", String(page - 1));
-            setParams(next);
-          }}
-        >
-          Назад
-        </button>
-        <button
-          className="button button--secondary"
-          disabled={!query.data.has_more}
-          onClick={() => {
-            const next = new URLSearchParams(params);
-            next.set("page", String(page + 1));
-            setParams(next);
-          }}
-        >
-          Дальше
-        </button>
-      </div>
       <div className="quick-create">
         <button className="text-action" onClick={() => void addTopic()}>
           <Plus size={15} /> Новая тема

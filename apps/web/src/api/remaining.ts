@@ -144,7 +144,7 @@ export const getInbox = (
       kind,
       reason,
       workspace: workspace === "all" ? undefined : workspace,
-      limit: 20,
+      limit: 1000,
       offset,
     }),
   );

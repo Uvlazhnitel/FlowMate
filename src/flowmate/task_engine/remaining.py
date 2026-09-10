@@ -446,7 +446,7 @@ async def list_inbox(
         cards = await build_work_item_cards(session, user_id, work_items, now=now)
         for card in cards:
             work_reasons = work_item_inbox_reasons(card)
-            if not work_reasons or (reason is not None and reason not in work_reasons):
+            if reason is not None and reason not in work_reasons:
                 continue
             payload = {
                 "kind": "work_item",
@@ -513,12 +513,15 @@ async def list_inbox(
         if workspace_scope == "all"
         else [entry for entry in entries if entry[2]["workspace"] == workspace_scope]
     )
-    page = scoped_entries[offset : offset + limit + 1]
+    if limit >= 1000:
+        page = scoped_entries[offset:]
+    else:
+        page = scoped_entries[offset : offset + limit + 1]
     return PageResult(
         items=[entry[2] for entry in page[:limit]],
         limit=limit,
         offset=offset,
-        has_more=len(page) > limit,
+        has_more=False if limit >= 1000 else len(page) > limit,
         total=len(scoped_entries),
         workspace_counts=counts,
         workspace_entity_keys=keys,

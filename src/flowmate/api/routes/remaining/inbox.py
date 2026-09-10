@@ -124,7 +124,7 @@ async def inbox(
     settings: Annotated[Settings, Depends(get_settings)],
     kind: Literal["draft", "work_item", "note"] | None = None,
     reason: str | None = None,
-    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 1000,
     offset: Annotated[int, Query(ge=0)] = 0,
     workspace: str | None = None,
 ) -> dict[str, object]:
