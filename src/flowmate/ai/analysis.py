@@ -71,6 +71,74 @@ DIRECT_CONTACT_FOLLOW_UP = re.compile(
     re.IGNORECASE,
 )
 
+TITLE_PREFIXES = re.compile(
+    r"^\s*(?:(?:напомни\s+мне|создай\s+задачу|нужно|надо)\s*[,;:—-]?\s*)+",
+    re.IGNORECASE,
+)
+WORKSPACE_WORDS = {"work": "работа", "personal": "личное"}
+
+
+def normalize_task_title(
+    item: DraftItem,
+    *,
+    workspace_candidate: str | None = None,
+    workspace_confidence: float = 0.0,
+    workspace_threshold: float = 0.8,
+) -> DraftItem:
+    """Apply only provenance-backed, lossless cleanup to an AI title."""
+    original = item.title.strip()
+    title = TITLE_PREFIXES.sub("", original).strip(" ,;:—-\t")
+    for candidate in (item.due_date_candidate, item.reminder_candidate):
+        if candidate is None or candidate.status is not TemporalStatus.RESOLVED:
+            continue
+        phrase = candidate.original_phrase.strip()
+        if phrase:
+            title = re.sub(re.escape(phrase), " ", title, count=1, flags=re.IGNORECASE)
+    if workspace_candidate and workspace_confidence >= workspace_threshold:
+        workspace_word = WORKSPACE_WORDS.get(workspace_candidate)
+        if workspace_word:
+            protected = r"(?!\s+package\b)" if workspace_word == "работа" else ""
+            title = re.sub(
+                rf"(?<!\w){re.escape(workspace_word)}{protected}(?!\w)",
+                " ",
+                title,
+                flags=re.IGNORECASE,
+            )
+    title = " ".join(title.split()).strip(" ,;:—-")
+    if not title:
+        return item
+    title = title[0].upper() + title[1:]
+    return item.model_copy(update={"title": title}) if title != original else item
+
+
+def normalize_draft_titles(
+    result: DraftParseResult,
+    *,
+    workspace_threshold: float = 0.8,
+) -> DraftParseResult:
+    items = [
+        normalize_task_title(
+            item,
+            workspace_candidate=result.workspace_candidate,
+            workspace_confidence=result.workspace_confidence,
+            workspace_threshold=workspace_threshold,
+        )
+        for item in result.draft_items
+    ]
+    consolidated = (
+        normalize_task_title(
+            result.consolidated_item,
+            workspace_candidate=result.workspace_candidate,
+            workspace_confidence=result.workspace_confidence,
+            workspace_threshold=workspace_threshold,
+        )
+        if result.consolidated_item is not None
+        else None
+    )
+    return result.model_copy(
+        update={"draft_items": items, "consolidated_item": consolidated}
+    )
+
 
 def normalize_text(value: str | None) -> str:
     return " ".join((value or "").split()).casefold()
@@ -455,6 +523,7 @@ def build_analysis_result(
     preserve_explicit_items: bool = False,
 ) -> DraftAnalysisResult:
     timezone = ZoneInfo(context.timezone)
+    result = normalize_draft_titles(result)
     items = (
         [
             materialize_external_conditions(normalize_due_date(item, timezone))

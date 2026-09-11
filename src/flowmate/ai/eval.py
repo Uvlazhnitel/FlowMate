@@ -9,6 +9,7 @@ from flowmate.ai.analysis import (
     apply_item_type_policy,
     apply_itemization_policy,
     build_analysis_result,
+    normalize_draft_titles,
     propagate_shared_leading_due_date,
 )
 from flowmate.ai.prompt import build_system_prompt, build_text_routing_prompt
@@ -19,6 +20,17 @@ from flowmate.ai.service import parse_exact_local_date
 
 def fixture_path() -> Path:
     return Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "ai_eval.json"
+
+
+def title_examples() -> tuple[tuple[str, str], ...]:
+    return (
+        (
+            "напомни мне завтра в 10 написать Роланду по поводу ГРМ работа",
+            "Написать Роланду по поводу ГРМ",
+        ),
+        ("в пятницу сделать фоллоу-ап по номинации", "Сделать фоллоу-ап по номинации"),
+        ("сегодня купить продукты личное", "Купить продукты"),
+    )
 
 
 def run_evaluation() -> tuple[int, int]:
@@ -65,6 +77,7 @@ def run_evaluation() -> tuple[int, int]:
             parsed,
             source_text=case["input"],
         )
+        parsed = normalize_draft_titles(parsed)
         actual_types = [item.type.value for item in parsed.draft_items]
         if actual_types != case["expected_types"]:
             failures.append(f"{case['id']}: types")
@@ -133,6 +146,55 @@ def run_evaluation() -> tuple[int, int]:
                 and analysis.items[0].item.description != case["expected_description"]
             ):
                 failures.append(f"{case['id']}: description")
+
+    for source, expected in title_examples():
+        temporal_phrase = (
+            "завтра в 10"
+            if "завтра" in source
+            else "сегодня"
+            if "сегодня" in source
+            else "в пятницу"
+        )
+        payload = {
+            "overall_intent": "task",
+            "draft_items": [
+                {
+                    "type": "task",
+                    "title": source,
+                    "description": None,
+                    "person_candidates": ["Роланд"] if "Роланд" in source else [],
+                    "topic_candidates": [],
+                    "due_date_candidate": {
+                        "original_phrase": temporal_phrase,
+                        "normalized_value": "2026-07-23T10:00:00+03:00",
+                        "status": "resolved",
+                        "explanation": None,
+                        "time_was_explicit": "в 10" in source,
+                    },
+                    "reminder_candidate": None,
+                    "notes": [],
+                    "missing_fields": [],
+                    "ambiguities": [],
+                    "dependencies": [],
+                    "confidence": 0.99,
+                }
+            ],
+            "itemization_decision": "single",
+            "itemization_basis": "single_goal",
+            "itemization_confidence": 0.99,
+            "consolidated_item": None,
+            "ambiguities": [],
+            "confidence": 0.99,
+            "workspace_candidate": "work" if "работа" in source else "personal",
+            "workspace_confidence": 0.99,
+        }
+        normalized = normalize_draft_titles(
+            DraftParseResult.model_validate_json(
+                json.dumps(payload, ensure_ascii=False)
+            )
+        )
+        if normalized.draft_items[0].title != expected:
+            failures.append(f"title example: {source}")
 
     timezone = ZoneInfo("Europe/Riga")
     context = DraftInputContext(

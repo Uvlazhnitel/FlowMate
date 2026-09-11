@@ -8,6 +8,7 @@ from flowmate.ai.analysis import (
     build_analysis_result,
     explicit_itemization_decision,
     explicit_task_segments,
+    normalize_task_title,
     propagate_shared_leading_due_date,
 )
 from flowmate.ai.schemas import (
@@ -54,6 +55,40 @@ def test_date_only_due_is_normalized_to_local_end_of_day() -> None:
         59,
         tzinfo=ZoneInfo("Europe/Riga"),
     )
+
+
+def test_normalize_task_title_removes_only_confirmed_metadata() -> None:
+    due = make_temporal_candidate(
+        original_phrase="завтра в 10",
+        normalized_value=datetime.fromisoformat("2026-07-21T10:00:00+03:00"),
+        time_was_explicit=True,
+    )
+    item = make_draft_item(
+        title="напомни мне завтра в 10 написать Роланду по поводу GRM работа",
+        due_date_candidate=due,
+    )
+    normalized = normalize_task_title(
+        item,
+        workspace_candidate="work",
+        workspace_confidence=0.99,
+    )
+    assert normalized.title == "Написать Роланду по поводу GRM"
+
+
+def test_normalize_task_title_keeps_unresolved_temporal_words_and_terms() -> None:
+    item = make_draft_item(
+        title="Нужно поменять work package после переноса VP3 на VP4 завтра",
+        due_date_candidate=make_temporal_candidate(
+            original_phrase="завтра",
+            status=TemporalStatus.AMBIGUOUS,
+            normalized_value=None,
+            explanation="неоднозначно",
+        ),
+    )
+    normalized = normalize_task_title(
+        item, workspace_candidate="work", workspace_confidence=0.99
+    )
+    assert normalized.title == "Поменять work package после переноса VP3 на VP4 завтра"
 
 
 def test_confidence_and_semantic_issues_determine_readiness() -> None:

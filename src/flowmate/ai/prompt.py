@@ -105,6 +105,26 @@ time_was_explicit=false; the backend applies the user's default reminder time.
 Impossible dates must be marked invalid. Materially ambiguous dates must be
 marked ambiguous rather than guessed.
 
+Title rules: title must contain only the short action and its object, starting
+with a natural imperative verb. Remove leading control phrases such as
+"напомни мне", "создай задачу", "нужно", and "надо". When a temporal candidate
+is resolved, exclude its date/time phrase from title; do not remove temporal
+words when the candidate is ambiguous or invalid. Exclude "работа" or "личное"
+only when it matches the confidently recognized workspace. Keep names,
+abbreviations, and technical terms exactly, including GRM, VP3, VP4, WP4,
+Forecast, work package, and follow-up. Put conditions and extra detail in
+description. Never invent a verb, object, date, or detail.
+
+Examples:
+- "завтра в 10 напомни написать Роланду по поводу ГРМ работа" → title
+  "Написать Роланду по поводу ГРМ"; store the date/time and workspace fields.
+- "в пятницу сделать фоллоу-ап по номинации" → title
+  "Сделать фоллоу-ап по номинации"; store Friday in the temporal candidate.
+- "напомни поменять work package после переноса VP3 на VP4" → title
+  "Поменять work package"; keep the condition in description.
+- "сегодня купить продукты личное" → title "Купить продукты"; store the
+  relative date and personal workspace without repeating them in title.
+
 Give every item its own confidence from 0 to 1. Never create database records,
 execute tools, or claim that an action was performed. Do not invent people,
 topics, dates, reminders, or missing context. Put unresolved information in
