@@ -150,7 +150,7 @@ afterEach(() => {
 });
 
 describe("Overview board", () => {
-  it("renders three columns, real counts, one workspace badge, and draggable tasks", async () => {
+  it("renders three columns, real counts, one workspace badge, and focusable tasks", async () => {
     setupFetch();
     renderApplication("/overview");
 
@@ -166,10 +166,11 @@ describe("Overview board", () => {
     expect(within(row).getAllByText("Личное")).toHaveLength(1);
     expect(within(row).queryByText("Запуск")).not.toBeInTheDocument();
     expect(within(row).queryByText("Срочно")).not.toBeInTheDocument();
-    expect(row).toHaveAttribute("draggable", "true");
+    expect(row).toHaveAttribute("tabindex", "0");
+    expect(row).not.toHaveAttribute("draggable");
   });
 
-  it("moves a task by dragging it to another column", async () => {
+  it("moves a task with the keyboard and confirms once", async () => {
     let actionBody: Record<string, unknown> = {};
     setupFetch(overviewResponse(), (body) => {
       actionBody = body;
@@ -180,29 +181,20 @@ describe("Overview board", () => {
     const row = (await screen.findByRole("heading", { name: task.title })).closest(
       "article",
     )!;
-    const tomorrow = screen
-      .getByRole("heading", { name: "Завтра", level: 2 })
-      .closest("section")!;
-    const dataTransfer = {
-      dropEffect: "none",
-      effectAllowed: "none",
-      setData: vi.fn(),
-    };
-
-    fireEvent.dragStart(row, { dataTransfer });
-    fireEvent.dragOver(tomorrow, { dataTransfer });
-    expect(tomorrow).toHaveClass("overview-column--drop-target");
-    fireEvent.drop(tomorrow, { dataTransfer });
+    fireEvent.keyDown(row, { key: " " });
+    await screen.findByText(/Режим перемещения/);
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    const movedRow = await screen.findByRole("heading", { name: task.title });
+    fireEvent.keyDown(movedRow.closest("article")!, { key: "Enter" });
 
     await waitFor(() =>
       expect(actionBody).toMatchObject({
-        action: "move_bucket",
+        action: "move_keyboard",
         target: "tomorrow",
         expected_revision: 17,
       }),
     );
-    expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", task.id);
-    expect(await screen.findByRole("status")).toHaveTextContent("Перемещено в «Завтра»");
+    expect(await screen.findByRole("status")).toHaveTextContent("Перемещение сохранено");
   });
 
   it("filters the view without changing the creation workspace", async () => {

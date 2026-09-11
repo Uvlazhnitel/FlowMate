@@ -221,6 +221,7 @@ class WorkItem(WorkspaceScoped, Base):
     inbox_triaged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    sort_rank: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     topic_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("topics.id", ondelete="SET NULL"),

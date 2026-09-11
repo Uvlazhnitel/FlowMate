@@ -19,6 +19,7 @@ export interface SubtaskData {
   completed_at: string | null;
   revision: number;
   workspace: "work" | "personal";
+  sort_rank?: number | null;
 }
 
 export type PlannerStatus =
@@ -180,6 +181,7 @@ export type WorkItemAction =
   | "reschedule_preset"
   | "reschedule_text"
   | "move_bucket"
+  | "move_keyboard"
   | "move_workspace"
   | "snooze"
   | "add_note"
@@ -236,6 +238,8 @@ export interface ActionPayload {
   person_ids?: string[];
   date_changed?: boolean;
   target?: "inbox" | "today" | "tomorrow" | "work" | "personal";
+  before_id?: string | null;
+  after_id?: string | null;
 }
 
 export interface ActionResponse {

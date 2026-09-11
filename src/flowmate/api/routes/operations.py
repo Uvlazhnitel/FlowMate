@@ -144,6 +144,13 @@ class MoveBucketWorkItemAction(WorkItemActionBase):
     target: Literal["inbox", "today", "tomorrow"]
 
 
+class MoveKeyboardWorkItemAction(WorkItemActionBase):
+    action: Literal["move_keyboard"]
+    target: Literal["inbox", "today", "tomorrow"]
+    before_id: UUID | None = None
+    after_id: UUID | None = None
+
+
 class MoveWorkspaceWorkItemAction(WorkItemActionBase):
     action: Literal["move_workspace"]
     target: Literal["work", "personal"]
@@ -190,6 +197,7 @@ WorkItemActionRequest = Annotated[
     | PresetWorkItemAction
     | TextWorkItemAction
     | MoveBucketWorkItemAction
+    | MoveKeyboardWorkItemAction
     | MoveWorkspaceWorkItemAction
     | SnoozeWorkItemAction
     | EditWorkItemAction
@@ -747,6 +755,24 @@ async def _work_item_action_in_workspace(
                     deadline_lead_minutes=settings.deadline_reminder_lead_minutes
                 ),
                 expected_revision=payload.expected_revision,
+            )
+        elif payload.action == "move_keyboard":
+            from flowmate.task_engine.ordering import move_work_item_keyboard
+
+            preferences = await _preferences(session, identity, settings)
+            result = await move_work_item_keyboard(
+                session,
+                user_id,
+                work_item_id,
+                payload.target,
+                before_id=payload.before_id,
+                after_id=payload.after_id,
+                preferences=preferences,
+                reminder_policy=ReminderPolicy(
+                    deadline_lead_minutes=settings.deadline_reminder_lead_minutes
+                ),
+                expected_revision=payload.expected_revision,
+                rescheduling_service=rescheduling_service,
             )
         elif payload.action == "move_workspace":
             result = await move_work_item_workspace(

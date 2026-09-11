@@ -486,6 +486,7 @@ async def list_overview_today_items(
                 select(WorkItem)
                 .where(*conditions, _workspace_condition(WorkItem, workspace_scope))
                 .order_by(
+                    WorkItem.sort_rank.nulls_last(),
                     category,
                     _priority_rank_sql(),
                     effective.asc().nulls_last(),
@@ -543,17 +544,24 @@ async def list_overview_tomorrow_items(
     keys: dict[str, set[tuple[str, UUID]]] = {"work": set(), "personal": set()}
     for item_id, workspace in key_rows:
         keys[workspace].add(("work_item", item_id))
-    page = await list_tomorrow_items(
-        session,
-        user_id,
-        now=now,
-        preferences=preferences,
-        limit=limit,
-        offset=0,
-        workspace_scope=workspace_scope,
+    items = list(
+        await session.scalars(
+            _all_workspaces(
+                select(WorkItem)
+                .where(*conditions, _workspace_condition(WorkItem, workspace_scope))
+                .order_by(
+                    WorkItem.sort_rank.nulls_last(),
+                    effective,
+                    _priority_rank_sql(),
+                    WorkItem.id,
+                )
+                .limit(limit)
+            )
+        )
     )
+    page_items = list(await build_work_item_cards(session, user_id, items, now=now))
     total = counts[workspace_scope]
-    return PageResult(page.items, limit, 0, total > limit, total, counts, keys)
+    return PageResult(page_items, limit, 0, total > limit, total, counts, keys)
 
 
 async def _today_summary(

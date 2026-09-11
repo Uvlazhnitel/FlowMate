@@ -463,7 +463,11 @@ async def list_inbox(
                         top_level_work_item_filter(),
                         WorkItem.status.in_(OPEN_STATUSES),
                     )
-                    .order_by(WorkItem.updated_at.desc(), WorkItem.id)
+                    .order_by(
+                        WorkItem.sort_rank.nulls_last(),
+                        WorkItem.updated_at.desc(),
+                        WorkItem.id,
+                    )
                 )
             )
         )

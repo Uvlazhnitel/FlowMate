@@ -581,34 +581,9 @@
   animation: overview-complete 240ms ease forwards;
 }
 
-.overview-task-row[draggable="true"] {
-  cursor: grab;
-  transition:
-    border-color 140ms ease,
-    box-shadow 140ms ease,
-    opacity 140ms ease,
-    transform 140ms ease;
-}
-
-.overview-task-row[draggable="true"]:active {
-  cursor: grabbing;
-}
-
-.overview-task-row--dragging {
-  opacity: 0.42;
-  transform: scale(0.985);
-}
-
-.overview-column--drop-target {
-  border-color: color-mix(in srgb, var(--overview-accent) 70%, white);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--overview-accent) 35%, transparent),
-    0 0 30px color-mix(in srgb, var(--overview-accent) 13%, transparent);
-}
-
-.overview-column--drop-target .overview-column__list {
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--overview-accent) 7%, transparent);
+.overview-task-row--moving {
+  outline: 2px solid var(--overview-accent);
+  outline-offset: 2px;
 }
 
 @keyframes overview-complete {
@@ -3549,13 +3524,6 @@ h2 {
   border: 1px solid var(--overview-border);
   border-radius: 10px;
   background: linear-gradient(100deg, var(--overview-card), rgba(255, 248, 242, 0.88));
-}
-
-.app-shell--overview .overview-column--drop-target {
-  border-color: color-mix(in srgb, var(--overview-accent) 70%, white);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--overview-accent) 35%, transparent),
-    0 0 30px color-mix(in srgb, var(--overview-accent) 13%, transparent);
 }
 
 .app-shell--overview .overview-inbox-row {
