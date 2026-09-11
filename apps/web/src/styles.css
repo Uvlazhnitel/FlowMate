@@ -484,6 +484,26 @@
   color: var(--overview-error);
 }
 
+.overview-subtasks-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: fit-content;
+  margin-top: 0.3rem;
+  padding: 0.15rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--overview-muted);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.overview-subtasks-toggle:hover,
+.overview-subtasks-toggle:focus-visible {
+  color: var(--overview-accent);
+}
+
 .overview-card-menu {
   position: relative;
 }

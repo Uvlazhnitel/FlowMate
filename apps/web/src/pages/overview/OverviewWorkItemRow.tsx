@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeftRight, Check, Clock3, MoreVertical } from "lucide-react";
+import { ArrowLeftRight, Check, ChevronDown, Clock3, MoreVertical } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { ApiError } from "../../api/client";
@@ -16,6 +16,7 @@ import { remainingKeys } from "../../api/remaining";
 import { InlineTitleEditor } from "../../components/InlineTitleEditor";
 import { RescheduleDialog } from "../../components/RescheduleDialog";
 import { WorkspaceBadge } from "../../components/WorkspaceBadge";
+import { SubtaskChecklist } from "../../components/SubtaskChecklist";
 import { formatDateTime, type DateTimePreferences } from "../../lib/dates";
 
 export type OverviewBucket = "today" | "tomorrow" | "inbox";
@@ -66,6 +67,7 @@ export function OverviewWorkItemRow({
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [subtasksOpen, setSubtasksOpen] = useState(false);
   const menuRoot = useRef<HTMLDivElement | null>(null);
   const menuTrigger = useRef<HTMLButtonElement | null>(null);
   const menuItems = useRef<Array<HTMLButtonElement | null>>([]);
@@ -266,6 +268,26 @@ export function OverviewWorkItemRow({
             </time>
           )}
         </div>
+        {!completed && (
+          <button
+            type="button"
+            className="overview-subtasks-toggle"
+            aria-expanded={subtasksOpen}
+            aria-controls={`overview-subtasks-${item.id}`}
+            onClick={() => setSubtasksOpen((open) => !open)}
+            disabled={pending}
+          >
+            <ChevronDown size={14} aria-hidden />
+            {item.subtasks?.length
+              ? `Подпункты · ${(item.subtasks ?? []).filter((subtask) => subtask.status === "done").length}/${item.subtasks.length}`
+              : "Добавить подпункт"}
+          </button>
+        )}
+        {!completed && subtasksOpen && (
+          <div id={`overview-subtasks-${item.id}`}>
+            <SubtaskChecklist item={item} compact />
+          </div>
+        )}
         {actionError && (
           <p className="inline-error" role="alert">
             {actionError}

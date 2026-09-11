@@ -223,6 +223,19 @@ describe("Overview board", () => {
     ).toBe(false);
   });
 
+  it("reveals the compact subtask composer inside an overview card", async () => {
+    setupFetch();
+    const user = userEvent.setup();
+    renderApplication("/overview");
+
+    const row = (await screen.findByRole("heading", { name: task.title })).closest(
+      "article",
+    )!;
+    await user.click(within(row).getAllByRole("button", { name: "Добавить подпункт" })[0]!);
+    await user.click(within(row).getAllByRole("button", { name: "Добавить подпункт" })[1]!);
+    expect(within(row).getByRole("textbox", { name: "Название подпункта" })).toBeVisible();
+  });
+
   it("debounces server search and supports Ctrl+K only on Windows", async () => {
     vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Win32");
     const fetchMock = setupFetch();
