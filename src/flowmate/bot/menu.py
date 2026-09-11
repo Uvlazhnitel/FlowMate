@@ -5,6 +5,7 @@ from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 
 logger = logging.getLogger(__name__)
 
+# Kept for compatibility with older callers; no longer shown in the menu.
 RECORD_BUTTON = "🎙 Записать"
 TODAY_BUTTON = "📅 Сегодня"
 TOMORROW_BUTTON = "📆 Завтра"
@@ -23,19 +24,16 @@ CANCEL_BUTTON = "❌ Отмена"
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=RECORD_BUTTON)],
             [KeyboardButton(text=TODAY_BUTTON), KeyboardButton(text=TOMORROW_BUTTON)],
-            [KeyboardButton(text=TASKS_BUTTON), KeyboardButton(text=FOLLOW_UPS_BUTTON)],
+            [KeyboardButton(text=TASKS_BUTTON), KeyboardButton(text=SEARCH_BUTTON)],
             [
-                KeyboardButton(text=WAITING_BUTTON),
-                KeyboardButton(text=QUESTIONS_BUTTON),
+                KeyboardButton(text=WORKSPACE_BUTTON),
+                KeyboardButton(text=SETTINGS_BUTTON),
             ],
-            [KeyboardButton(text=SEARCH_BUTTON), KeyboardButton(text=SETTINGS_BUTTON)],
-            [KeyboardButton(text=WORKSPACE_BUTTON), KeyboardButton(text=CANCEL_BUTTON)],
         ],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Отправьте текст или голосовое сообщение",
+        input_field_placeholder="Напишите задачу или отправьте голосовое сообщение",
     )
 
 
@@ -58,6 +56,6 @@ async def answer_with_main_menu(
 
 
 async def restore_main_menu(
-    message: Message, text: str = "Можно записать следующий пункт."
+    message: Message, text: str = "Можно отправить следующую задачу."
 ) -> bool:
     return await answer_with_main_menu(message, text)

@@ -95,7 +95,8 @@ async def start_command(
     await db_session.flush()
     await message.answer(
         "👋 <b>FlowMate готов к работе</b>\n\n"
-        "Нажмите «🎙 Записать» и отправьте задачу текстом или голосом.",
+        "Просто отправьте задачу текстом или голосом.\n\n"
+        "Например: «Завтра в 10 подготовить отчёт»",
         parse_mode="HTML",
         reply_markup=main_menu_keyboard(),
     )
@@ -104,8 +105,9 @@ async def start_command(
 async def help_command(message: Message) -> None:
     await message.answer(
         "ℹ️ <b>Как пользоваться FlowMate</b>\n\n"
-        "🎙 <b>Новая запись</b>\n"
-        "Нажмите «Записать» и отправьте текст или голосовое сообщение.\n\n"
+        "🎙 <b>Новая задача</b>\n"
+        "Просто отправьте текст или голосовое сообщение.\n"
+        "Например: «Завтра в 10 подготовить отчёт».\n\n"
         "📋 <b>Работа</b>\n"
         "/today — дела на сегодня\n"
         "/tomorrow — дела на завтра\n"
@@ -131,8 +133,7 @@ async def status_command(message: Message, db_engine: AsyncEngine) -> None:
 
 async def unsupported_message(message: Message) -> None:
     await message.answer(
-        "Отправьте текст или голосовое сообщение после кнопки «🎙 Записать».\n"
-        "Все возможности: /help"
+        "Отправьте задачу текстом или голосовым сообщением.\nВсе возможности: /help"
     )
 
 

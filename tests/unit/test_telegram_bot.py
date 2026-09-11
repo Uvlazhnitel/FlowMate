@@ -502,8 +502,9 @@ async def test_help_response() -> None:
 
     answer.assert_awaited_once_with(
         "ℹ️ <b>Как пользоваться FlowMate</b>\n\n"
-        "🎙 <b>Новая запись</b>\n"
-        "Нажмите «Записать» и отправьте текст или голосовое сообщение.\n\n"
+        "🎙 <b>Новая задача</b>\n"
+        "Просто отправьте текст или голосовое сообщение.\n"
+        "Например: «Завтра в 10 подготовить отчёт».\n\n"
         "📋 <b>Работа</b>\n"
         "/today — дела на сегодня\n"
         "/tomorrow — дела на завтра\n"
@@ -549,8 +550,7 @@ async def test_unsupported_message_response() -> None:
         await unsupported_message(make_message(123, text="hello"))
 
     answer.assert_awaited_once_with(
-        "Отправьте текст или голосовое сообщение после кнопки «🎙 Записать».\n"
-        "Все возможности: /help"
+        "Отправьте задачу текстом или голосовым сообщением.\nВсе возможности: /help"
     )
 
 

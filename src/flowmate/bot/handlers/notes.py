@@ -393,7 +393,7 @@ async def text_note(
         and message.from_user is not None
         and result.draft is not None
     ):
-        await message.answer(DRAFT_ANALYZING_MESSAGE)
+        processing_message = await message.answer(DRAFT_ANALYZING_MESSAGE)
         await analyze_note_content(
             message,
             content=parse_content,
@@ -415,6 +415,7 @@ async def text_note(
                 if active_capture is not None
                 else DRAFT_FAILED_MESSAGE
             ),
+            processing_message=processing_message,
         )
     elif draft_parsing_service is not None and routed is None:
         await message.answer(NOTE_SAVED_MESSAGE)

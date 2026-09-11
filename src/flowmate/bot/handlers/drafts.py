@@ -4,12 +4,14 @@ from datetime import datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import (
     CallbackQuery,
     ForceReply,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    ReplyKeyboardMarkup,
     Update,
 )
 from sqlalchemy.exc import SQLAlchemyError
@@ -21,7 +23,11 @@ from flowmate.ai.schemas import DraftAnalysisResult, DraftSource, TemporalStatus
 from flowmate.ai.service import DraftParsingService
 from flowmate.bot.callback_data import encode_revision
 from flowmate.bot.callback_feedback import CallbackFeedback
-from flowmate.bot.menu import answer_with_main_menu, restore_main_menu
+from flowmate.bot.handlers.work_items.cards import (
+    item_action_data,
+    work_item_callback_data,
+)
+from flowmate.bot.menu import main_menu_keyboard, restore_main_menu
 from flowmate.bot.presentation import (
     TelegramDisplayContext,
     format_datetime,
@@ -63,7 +69,7 @@ from flowmate.task_engine.enums import WorkItemType
 from flowmate.task_engine.management import work_item_revision
 from flowmate.workspaces import WORKSPACE_LABELS
 
-DRAFT_ANALYZING_MESSAGE = "⏳ Запись принята. Разбираю…"
+DRAFT_ANALYZING_MESSAGE = "⏳ Разбираю задачу…"
 DRAFT_FAILED_MESSAGE = "Не получилось разобрать запись. Она сохранена в Inbox."
 DRAFT_RETRY_MESSAGE = (
     "Не получилось разобрать запись сейчас. Она сохранена в Inbox; "
@@ -80,6 +86,31 @@ DRAFT_REPLY_REQUIRED_MESSAGE = "Ответьте через Reply на посл�
 DRAFT_CHANGE_QUESTION = "Что нужно изменить?"
 
 logger = logging.getLogger(__name__)
+
+
+async def update_or_answer(
+    message: Message,
+    text: str,
+    *,
+    processing_message: Message | None = None,
+    parse_mode: str | None = None,
+    reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None,
+) -> Message | None:
+    if processing_message is not None:
+        try:
+            await processing_message.edit_text(
+                text,
+                parse_mode=parse_mode,
+                reply_markup=(
+                    reply_markup
+                    if isinstance(reply_markup, InlineKeyboardMarkup)
+                    else None
+                ),
+            )
+            return processing_message
+        except TelegramAPIError:
+            logger.info("telegram_progress_edit_failed category=telegram")
+    return await message.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
 
 
 def fast_capture_summary(
@@ -314,6 +345,36 @@ def due_date_offer_keyboard(
     )
 
 
+def fast_capture_keyboard(result: DraftConversionResult) -> InlineKeyboardMarkup | None:
+    """Return single-item actions without implying which item to edit."""
+    if len(result.work_items) != 1:
+        return None
+    item = result.work_items[0]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="↩️ Отменить", callback_data=item_action_data("x", item)
+                ),
+                InlineKeyboardButton(
+                    text="✏️ Изменить", callback_data=item_action_data("e", item)
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📅 Перенести", callback_data=item_action_data("r", item)
+                ),
+                InlineKeyboardButton(
+                    text="Подробнее",
+                    callback_data=work_item_callback_data(
+                        "details", item.id, workspace=item.workspace
+                    ),
+                ),
+            ],
+        ]
+    )
+
+
 def ready_keyboard(draft_id: UUID) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -414,6 +475,7 @@ async def analyze_note_content(
     draft_conversion_service: DraftConversionService | None = None,
     notification_defaults: NotificationDefaults | None = None,
     failure_message: str = DRAFT_FAILED_MESSAGE,
+    processing_message: Message | None = None,
 ) -> None:
     preferences: EffectiveNotificationPreferences | None = None
     try:
@@ -498,12 +560,28 @@ async def analyze_note_content(
                 workspace=draft.workspace,
                 display=display,
             )
-            keyboard = due_date_offer_keyboard(conversion_result)
+            keyboard = fast_capture_keyboard(conversion_result)
+            due_keyboard = due_date_offer_keyboard(conversion_result)
+            if due_keyboard is not None:
+                if keyboard is None:
+                    keyboard = due_keyboard
+                else:
+                    keyboard.inline_keyboard = (
+                        due_keyboard.inline_keyboard + keyboard.inline_keyboard
+                    )
             if keyboard is None:
-                await answer_with_main_menu(message, summary, parse_mode="HTML")
-            else:
-                await message.answer(
+                await update_or_answer(
+                    message,
                     summary,
+                    processing_message=processing_message,
+                    parse_mode="HTML",
+                    reply_markup=main_menu_keyboard(),
+                )
+            else:
+                await update_or_answer(
+                    message,
+                    summary,
+                    processing_message=processing_message,
                     parse_mode="HTML",
                     reply_markup=keyboard,
                 )

@@ -6,16 +6,11 @@ from aiogram.types import Chat, Message, User
 
 from flowmate.bot.handlers.navigation.menu import menu_command
 from flowmate.bot.menu import (
-    CANCEL_BUTTON,
-    FOLLOW_UPS_BUTTON,
-    QUESTIONS_BUTTON,
-    RECORD_BUTTON,
     SEARCH_BUTTON,
     SETTINGS_BUTTON,
     TASKS_BUTTON,
     TODAY_BUTTON,
     TOMORROW_BUTTON,
-    WAITING_BUTTON,
     WORKSPACE_BUTTON,
     main_menu_keyboard,
 )
@@ -36,13 +31,14 @@ def test_main_menu_has_persistent_layout_and_workspace_button() -> None:
 
     assert keyboard.is_persistent is True
     assert [[button.text for button in row] for row in keyboard.keyboard] == [
-        [RECORD_BUTTON],
         [TODAY_BUTTON, TOMORROW_BUTTON],
-        [TASKS_BUTTON, FOLLOW_UPS_BUTTON],
-        [WAITING_BUTTON, QUESTIONS_BUTTON],
-        [SEARCH_BUTTON, SETTINGS_BUTTON],
-        [WORKSPACE_BUTTON, CANCEL_BUTTON],
+        [TASKS_BUTTON, SEARCH_BUTTON],
+        [WORKSPACE_BUTTON, SETTINGS_BUTTON],
     ]
+    assert (
+        keyboard.input_field_placeholder
+        == "Напишите задачу или отправьте голосовое сообщение"
+    )
 
 
 @pytest.mark.asyncio

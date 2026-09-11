@@ -26,6 +26,7 @@ from flowmate.task_engine.queries import (
 from flowmate.task_engine.search import (
     StaleContact,
 )
+from flowmate.workspaces import WORKSPACE_LABELS
 
 PAGE_SIZE = 5
 MAX_PAGE = 999
@@ -118,6 +119,10 @@ def format_work_item_entry(
         f"   {status_icon} {status_label} · "
         f"{format_item_date(item, timezone=timezone, now=now)}",
     ]
+    workspace_label = WORKSPACE_LABELS.get(item.workspace)
+    if workspace_label:
+        workspace_icon = "💼" if item.workspace == "work" else "🏠"
+        lines.append(f"   {workspace_icon} {workspace_label}")
     return "\n".join(lines)
 
 

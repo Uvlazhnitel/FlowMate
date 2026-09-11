@@ -56,7 +56,8 @@ async def test_repeated_start_updates_one_user(
     assert call is not None
     assert call.args == (
         "👋 <b>FlowMate готов к работе</b>\n\n"
-        "Нажмите «🎙 Записать» и отправьте задачу текстом или голосом.",
+        "Просто отправьте задачу текстом или голосом.\n\n"
+        "Например: «Завтра в 10 подготовить отчёт»",
     )
     assert call.kwargs["parse_mode"] == "HTML"
     assert call.kwargs["reply_markup"].is_persistent is True
