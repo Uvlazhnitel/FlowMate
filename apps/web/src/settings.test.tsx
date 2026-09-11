@@ -185,7 +185,7 @@ describe("Settings", () => {
     );
 
     await user.type(screen.getByLabelText("Название темы Migration"), " updated");
-    await user.click(screen.getAllByRole("link", { name: "Сегодня" })[0]!);
+    await user.click(screen.getAllByRole("link", { name: "Повестка" })[0]!);
     expect(confirm).toHaveBeenCalledWith(
       "Есть несохранённые изменения. Покинуть страницу?",
     );

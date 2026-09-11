@@ -530,11 +530,10 @@ describe("operational screens", () => {
       .find((navigation) => navigation.classList.contains("mobile-nav"));
     expect(mobileNavigation).toBeDefined();
     const mobile = within(mobileNavigation!);
-    for (const label of ["Обзор", "Сегодня", "Входящие", "Повестка"]) {
+    for (const label of ["Повестка", "Лента", "Темы", "Люди", "Очередь Planner"]) {
       expect(mobile.getByRole("link", { name: label })).toBeVisible();
     }
-    expect(mobile.getByRole("link", { name: "Люди" })).not.toBeVisible();
-    expect(mobile.getByText("Ещё")).toBeVisible();
+    expect(mobile.queryByText("Ещё")).not.toBeInTheDocument();
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         expect.stringContaining("offset=20"),

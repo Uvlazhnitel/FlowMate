@@ -3350,10 +3350,6 @@ h2 {
   padding-left: 24px;
   border-left: 1px solid var(--line);
 }
-.mobile-more {
-  display: none;
-}
-
 @media (max-width: 900px) {
   .operational-page {
     padding-top: 34px;
@@ -3373,41 +3369,6 @@ h2 {
   .mobile-nav > .nav-link {
     min-width: 0;
     flex: 1;
-  }
-  .mobile-more {
-    display: block;
-    flex: 1;
-    position: relative;
-    color: var(--muted);
-  }
-  .mobile-more summary {
-    min-height: 50px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    list-style: none;
-    font-size: 9px;
-  }
-  .mobile-more summary::-webkit-details-marker {
-    display: none;
-  }
-  .mobile-more > div {
-    position: absolute;
-    right: 0;
-    bottom: 58px;
-    width: 190px;
-    padding: 8px;
-    border-radius: 14px;
-    border: 1px solid var(--line);
-    background: var(--raised);
-    box-shadow: var(--shadow);
-  }
-  .mobile-more .nav-link {
-    min-height: 42px;
-    flex-direction: row;
-    font-size: 11px;
   }
 }
 @media (max-width: 640px) {

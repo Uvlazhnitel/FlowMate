@@ -126,7 +126,7 @@ describe("Planner and Timeline", () => {
     });
   });
 
-  it("applies timeline filters and exposes remaining screens in mobile overflow", async () => {
+  it("applies timeline filters and exposes the streamlined mobile navigation", async () => {
     const event = {
       id: "7a525364-5948-41f8-8976-4d0324115ea2",
       entity_kind: "work_item",
@@ -159,8 +159,6 @@ describe("Planner and Timeline", () => {
       return Promise.resolve(page([]));
     });
     vi.stubGlobal("fetch", fetchMock);
-    const user = userEvent.setup();
-
     renderApplication(
       `/timeline?from=2026-07-01&event_type=created&topic_id=${item.topic_id}`,
     );
@@ -176,8 +174,7 @@ describe("Planner and Timeline", () => {
       .getAllByRole("navigation", { name: "Основная навигация" })
       .find((navigation) => navigation.classList.contains("mobile-nav"));
     expect(mobileNavigation).toBeDefined();
-    await user.click(within(mobileNavigation!).getByText("Ещё"));
-    for (const label of ["Завтра", "Лента", "Темы", "Очередь Planner", "Настройки"]) {
+    for (const label of ["Повестка", "Лента", "Темы", "Люди", "Очередь Planner"]) {
       expect(within(mobileNavigation!).getByRole("link", { name: label })).toBeVisible();
     }
   });

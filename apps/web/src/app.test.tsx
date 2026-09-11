@@ -178,7 +178,7 @@ describe("protected application", () => {
     expect(screen.getAllByText("FlowMate")).toHaveLength(path === "/overview" ? 3 : 2);
   });
 
-  it("shows Overview first in desktop and mobile navigation", async () => {
+  it("shows only the five workspace sections in desktop and mobile navigation", async () => {
     stubEmptyApplication();
 
     renderApplication("/today");
@@ -191,7 +191,7 @@ describe("protected application", () => {
     const links = within(desktopNavigation!)
       .getAllByRole("link")
       .map((link) => link.textContent);
-    expect(links.slice(0, 4)).toEqual(["Обзор", "Сегодня", "Завтра", "Входящие"]);
+    expect(links).toEqual(["Повестка", "Лента", "Темы", "Люди", "Очередь Planner"]);
     const mobileNavigation = screen
       .getAllByRole("navigation", { name: "Основная навигация" })
       .find((navigation) => navigation.classList.contains("mobile-nav"));
@@ -199,9 +199,8 @@ describe("protected application", () => {
     expect(
       within(mobileNavigation!)
         .getAllByRole("link")
-        .slice(0, 4)
         .map((link) => link.textContent),
-    ).toEqual(["Обзор", "Сегодня", "Входящие", "Повестка"]);
+    ).toEqual(["Повестка", "Лента", "Темы", "Люди", "Очередь Planner"]);
   });
 
   it.each(["/", "/dashboard", "/missing"])(

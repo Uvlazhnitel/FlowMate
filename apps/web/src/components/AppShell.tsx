@@ -1,18 +1,6 @@
 import * as Avatar from "@radix-ui/react-avatar";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import {
-  CalendarDays,
-  CalendarRange,
-  CircleHelp,
-  Clock3,
-  Inbox,
-  ListChecks,
-  LayoutDashboard,
-  MoreHorizontal,
-  Settings,
-  Tags,
-  Users,
-} from "lucide-react";
+import { CircleHelp, Clock3, ListChecks, Tags, Users } from "lucide-react";
 import type { ComponentType } from "react";
 import { NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
 
@@ -30,19 +18,13 @@ interface NavigationItem {
 }
 
 const navigationItems: NavigationItem[] = [
-  { to: "/overview", label: "Обзор", icon: LayoutDashboard },
-  { to: "/today", label: "Сегодня", icon: CalendarDays },
-  { to: "/tomorrow", label: "Завтра", icon: CalendarRange },
-  { to: "/inbox", label: "Входящие", icon: Inbox },
   { to: "/agenda", label: "Повестка", icon: CircleHelp },
   { to: "/timeline", label: "Лента", icon: Clock3 },
   { to: "/topics", label: "Темы", icon: Tags },
   { to: "/people", label: "Люди", icon: Users },
   { to: "/planner-queue", label: "Очередь Planner", icon: ListChecks },
-  { to: "/settings", label: "Настройки", icon: Settings },
 ];
 
-const primaryMobilePaths = new Set(["/overview", "/today", "/inbox", "/agenda"]);
 const workspaceScopePaths = new Set(["/overview", "/today", "/tomorrow", "/inbox"]);
 
 function Navigation({
@@ -52,10 +34,7 @@ function Navigation({
   mobile?: boolean;
   workspaceScope?: WorkspaceScope;
 }) {
-  const visible = mobile
-    ? navigationItems.filter((item) => primaryMobilePaths.has(item.to))
-    : navigationItems;
-  const overflow = navigationItems.filter((item) => !primaryMobilePaths.has(item.to));
+  const visible = navigationItems;
   return (
     <nav className={mobile ? "mobile-nav" : "sidebar-nav"} aria-label="Основная навигация">
       {visible.map((item) => {
@@ -68,24 +47,6 @@ function Navigation({
           />
         );
       })}
-      {mobile && (
-        <details className="mobile-more">
-          <summary>
-            <MoreHorizontal size={19} aria-hidden />
-            <span>Ещё</span>
-          </summary>
-          <div>
-            {overflow.map((item) => (
-              <NavigationLink
-                key={item.to}
-                item={item}
-                mobile
-                workspaceScope={workspaceScope}
-              />
-            ))}
-          </div>
-        </details>
-      )}
     </nav>
   );
 }
