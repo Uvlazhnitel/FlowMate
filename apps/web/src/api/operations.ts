@@ -47,6 +47,8 @@ export interface WorkItemCardData {
   completed_at: string | null;
   updated_at: string;
   effective_at: string | null;
+  due_date_explicit?: boolean | null;
+  due_time_explicit?: boolean | null;
   overdue: boolean;
   revision: number;
   reminder: ReminderCard | null;

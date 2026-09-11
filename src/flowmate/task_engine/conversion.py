@@ -485,6 +485,18 @@ class DraftConversionService:
             status=status,
             topic_id=topic.id if topic is not None else None,
             due_at=due,
+            due_date_explicit=(
+                item.due_date_candidate.date_was_explicit
+                if item.due_date_candidate is not None
+                and item.due_date_candidate.status is TemporalStatus.RESOLVED
+                else None
+            ),
+            due_time_explicit=(
+                item.due_date_candidate.time_was_explicit
+                if item.due_date_candidate is not None
+                and item.due_date_candidate.status is TemporalStatus.RESOLVED
+                else None
+            ),
             next_follow_up_at=next_follow_up,
             waiting_since=now if status is WorkItemStatus.WAITING else None,
             completed_at=now if status is WorkItemStatus.DONE else None,

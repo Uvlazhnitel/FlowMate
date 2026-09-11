@@ -106,6 +106,7 @@ def parse_exact_local_date(
         status=TemporalStatus.RESOLVED,
         explanation=None,
         time_was_explicit=False,
+        date_was_explicit=True,
     )
 
 
@@ -141,6 +142,12 @@ def apply_exact_temporal_answer(
             time_was_explicit=bool(
                 re.search(r"\d{1,2}:\d{2}|через\s+", answer.casefold())
                 or "утром" in answer.casefold()
+            ),
+            date_was_explicit=not bool(
+                re.search(
+                    r"\b(?:сегодня|завтра|послезавтра|через\s+\d+\s+\w+)\b",
+                    answer.casefold(),
+                )
             ),
         )
         if parsed_datetime is not None

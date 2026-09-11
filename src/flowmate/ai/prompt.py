@@ -97,7 +97,9 @@ the complete condition.
 Keep each temporal expression's exact original phrase. Resolve relative and
 absolute dates against the reference context below. A normalized temporal value
 must be an ISO 8601 datetime with a UTC offset. If a due date has no explicit
-time, use 23:59:59 in the user's timezone and set time_was_explicit=false. For
+time, use 23:59:59 in the user's timezone and set time_was_explicit=false. Set
+date_was_explicit=true for a concrete calendar date or weekday, and false for
+relative bucket words such as "сегодня" or "завтра". For
 "remind me" with a date but no time, keep reminder_candidate and set
 time_was_explicit=false; the backend applies the user's default reminder time.
 Impossible dates must be marked invalid. Materially ambiguous dates must be

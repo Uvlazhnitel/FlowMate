@@ -17,7 +17,11 @@ from flowmate.ai.schemas import (
 from flowmate.ai.service import DraftParsingService
 from flowmate.db.drafts import create_parsing_draft, replace_draft_analysis
 from flowmate.db.models import DraftSession, Note, WorkItem
-from flowmate.drafts.capture import apply_default_reminder_time, fast_capture_is_ready
+from flowmate.drafts.capture import (
+    apply_default_due_time,
+    apply_default_reminder_time,
+    fast_capture_is_ready,
+)
 from flowmate.drafts.questions import next_clarification_question
 from flowmate.reminders.preferences import EffectiveNotificationPreferences
 from flowmate.reminders.sync import ReminderPolicy
@@ -123,6 +127,7 @@ class TextCaptureService:
                 active_workspace=workspace,
                 reference_datetime=note.created_at,
             )
+            analysis = apply_default_due_time(analysis)
             analysis = apply_default_reminder_time(
                 analysis,
                 default_time=preferences.default_reminder_time,

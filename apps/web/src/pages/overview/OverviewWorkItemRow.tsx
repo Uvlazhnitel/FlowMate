@@ -17,7 +17,7 @@ import { InlineTitleEditor } from "../../components/InlineTitleEditor";
 import { RescheduleDialog } from "../../components/RescheduleDialog";
 import { WorkspaceBadge } from "../../components/WorkspaceBadge";
 import { SubtaskChecklist } from "../../components/SubtaskChecklist";
-import { formatDateTime, type DateTimePreferences } from "../../lib/dates";
+import { formatOverviewDue, type DateTimePreferences } from "../../lib/dates";
 
 export type OverviewBucket = "today" | "tomorrow" | "inbox";
 
@@ -261,12 +261,26 @@ export function OverviewWorkItemRow({
         </h3>
         <div className="overview-task-row__footer">
           <WorkspaceBadge workspace={item.workspace} />
-          {item.effective_at && (
-            <time dateTime={item.effective_at} className={item.overdue ? "is-overdue" : ""}>
-              <Clock3 size={13} aria-hidden />
-              {formatDateTime(item.effective_at, dateTimePreferences)}
-            </time>
-          )}
+          {item.effective_at &&
+            formatOverviewDue(
+              item.effective_at,
+              dateTimePreferences,
+              item.due_date_explicit,
+              item.due_time_explicit,
+            ) && (
+              <time
+                dateTime={item.effective_at}
+                className={item.overdue ? "is-overdue" : ""}
+              >
+                <Clock3 size={13} aria-hidden />
+                {formatOverviewDue(
+                  item.effective_at,
+                  dateTimePreferences,
+                  item.due_date_explicit,
+                  item.due_time_explicit,
+                )}
+              </time>
+            )}
         </div>
         {!completed && (
           <button

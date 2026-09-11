@@ -222,6 +222,8 @@ class WorkItem(WorkspaceScoped, Base):
         DateTime(timezone=True), nullable=True
     )
     sort_rank: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    due_date_explicit: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    due_time_explicit: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     topic_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("topics.id", ondelete="SET NULL"),

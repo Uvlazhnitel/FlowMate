@@ -115,6 +115,7 @@ class TemporalCandidate(StrictDraftModel):
     status: TemporalStatus
     explanation: NonEmptyText | None
     time_was_explicit: bool
+    date_was_explicit: bool = False
 
     @model_validator(mode="after")
     def validate_resolution(self) -> Self:

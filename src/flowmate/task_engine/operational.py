@@ -111,6 +111,8 @@ class WorkItemCard:
     reminder: ReminderCard | None
     workspace: str
     subtasks: tuple[SubtaskCard, ...]
+    due_date_explicit: bool | None = None
+    due_time_explicit: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +333,8 @@ async def build_work_item_cards(
                 completed_at=item.completed_at,
                 updated_at=item.updated_at,
                 effective_at=date,
+                due_date_explicit=item.due_date_explicit,
+                due_time_explicit=item.due_time_explicit,
                 overdue=date is not None and date < now,
                 revision=work_item_revision(item.updated_at),
                 reminder=reminder_card,

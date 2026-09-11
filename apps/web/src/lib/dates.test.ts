@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { formatDateTime, formatRelative, formatRescheduledDateTime } from "./dates";
+import {
+  formatDateTime,
+  formatOverviewDue,
+  formatRelative,
+  formatRescheduledDateTime,
+} from "./dates";
 
 describe("date display preferences", () => {
   it("uses day-first dates and a 24-hour clock", () => {
@@ -44,5 +49,20 @@ describe("date display preferences", () => {
         timeDisplayFormat: "24h",
       }),
     ).toBe("пятницу, 7 августа, 15:00");
+  });
+
+  it("uses provenance to keep Overview due labels compact", () => {
+    const preferences = {
+      timezone: "UTC",
+      dateDisplayFormat: "day_month_year" as const,
+      timeDisplayFormat: "24h" as const,
+    };
+    expect(formatOverviewDue("2026-08-15T23:59:59Z", preferences, true, false)).toBe(
+      "15.08.2026",
+    );
+    expect(formatOverviewDue("2026-08-15T14:30:00Z", preferences, true, true)).toBe(
+      "15.08.2026 14:30",
+    );
+    expect(formatOverviewDue("2026-08-15T23:59:59Z", preferences, false, false)).toBe("");
   });
 });

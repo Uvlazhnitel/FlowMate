@@ -1,4 +1,4 @@
-from datetime import time
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from flowmate.ai.schemas import (
@@ -35,6 +35,30 @@ def apply_default_reminder_time(
         updated_candidate = candidate.model_copy(update={"normalized_value": resolved})
         updated_item = item.model_copy(update={"reminder_candidate": updated_candidate})
         assessments.append(assessment.model_copy(update={"item": updated_item}))
+        changed = True
+    return analysis.model_copy(update={"items": assessments}) if changed else analysis
+
+
+def apply_default_due_time(analysis: DraftAnalysisResult) -> DraftAnalysisResult:
+    """Normalize resolved due dates without an explicit time to local end-of-day."""
+    changed = False
+    assessments: list[DraftItemAssessment] = []
+    for assessment in analysis.items:
+        candidate = assessment.item.due_date_candidate
+        if (
+            candidate is None
+            or candidate.status is not TemporalStatus.RESOLVED
+            or candidate.normalized_value is None
+            or candidate.time_was_explicit
+        ):
+            assessments.append(assessment)
+            continue
+        timezone = ZoneInfo(analysis.context.timezone)
+        local_date = candidate.normalized_value.astimezone(timezone).date()
+        resolved = datetime.combine(local_date, time(23, 59, 59), tzinfo=timezone)
+        updated = candidate.model_copy(update={"normalized_value": resolved})
+        item = assessment.item.model_copy(update={"due_date_candidate": updated})
+        assessments.append(assessment.model_copy(update={"item": item}))
         changed = True
     return analysis.model_copy(update={"items": assessments}) if changed else analysis
 

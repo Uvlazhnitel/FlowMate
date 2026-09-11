@@ -28,6 +28,34 @@ export function formatDateTime(
   return `${date} ${time}`;
 }
 
+export function formatOverviewDue(
+  value: string | null,
+  preferences: DateTimePreferences,
+  explicitDate: boolean | null | undefined,
+  explicitTime: boolean | null | undefined,
+): string {
+  if (!value) return "";
+  // Historical rows have no provenance; retain the established full format.
+  if (explicitDate == null && explicitTime == null) {
+    return formatDateTime(value, preferences);
+  }
+  const instant = new Date(value);
+  const date = new Intl.DateTimeFormat(
+    preferences.dateDisplayFormat === "year_month_day" ? "sv-SE" : "ru-RU",
+    { timeZone: preferences.timezone, day: "2-digit", month: "2-digit", year: "numeric" },
+  ).format(instant);
+  const time = new Intl.DateTimeFormat("ru-RU", {
+    timeZone: preferences.timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: preferences.timeDisplayFormat === "12h",
+  }).format(instant);
+  if (explicitDate && explicitTime) return `${date} ${time}`;
+  if (explicitDate) return date;
+  if (explicitTime) return time;
+  return "";
+}
+
 export function formatRelative(value: string, preferences: DateTimePreferences): string {
   const formatted = formatDateTime(value, preferences);
   const delta = Date.now() - new Date(value).getTime();
